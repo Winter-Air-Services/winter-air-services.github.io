@@ -1,0 +1,1 @@
+maplibre-gl 5.24.0 (https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/)

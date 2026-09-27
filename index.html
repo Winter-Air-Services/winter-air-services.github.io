@@ -1,0 +1,3087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:,">
+<title>Winter Services — book an aircon job</title>
+<!--
+  One app, three kinds of people; the role on the account decides what each sees
+  (docs/scope.md). Signed out, it is the public booking page.
+
+  Signed out, the only calls it makes are the three a stranger is allowed: list_services(),
+  book_job() and check_booking(). Signed in, every call goes through a security definer
+  function that checks the ROLE (supabase/05–10). Hiding a screen here is a drawing rule,
+  never an access rule (docs/rules/access.md).
+
+  The key below is the PUBLISHABLE key and is meant to be public — this page is served as
+  plain text. The `secret` key must never appear here.
+-->
+<style>
+  /* Colours are tokens, SukiRun's structure (D:\Order Run\app_template.html) in Winter's own
+     blue — PQH's red is theirs. Dark mode follows the phone, and data-theme can force it. */
+  :root{
+    --bg:#F4F7FB; --surface:#FFFFFF; --surface-alt:#EAF1F8; --ink:#132033; --ink-soft:#5B6B82;
+    --border:#D9E2EE; --primary:#0D6FB8; --primary-ink:#FFFFFF; --primary-soft:#E3EFFA;
+    --bad:#C0392B; --bad-bg:#FDECEA; --good:#1D7A4C; --good-bg:#E6F5EC; --warn:#8A5A00; --warn-bg:#FFF4DC;
+    --st-new:#A5600F; --st-new-bg:#FBEDD9; --st-sched:#2A5FD6; --st-sched-bg:#E2EAFC;
+    --st-prog:#6D4FD1; --st-prog-bg:#EAE3FB; --st-done:#1D8A4B; --st-done-bg:#DDF2E4;
+    --st-off:#C0182B; --st-off-bg:#FBE0E3;
+    --radius-sm:10px; --radius-md:12px; --radius-lg:16px;
+    --shadow:0 1px 2px rgba(19,32,51,.06),0 4px 14px rgba(19,32,51,.04);
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0F1722; --surface:#172231; --surface-alt:#1E2B3D; --ink:#EAF1FA; --ink-soft:#A3B3C8;
+      --border:#2B3A50; --primary:#5AA9E6; --primary-ink:#081623; --primary-soft:#16324A;
+      --bad:#FF8A80; --bad-bg:#3E1C22; --good:#5CD68C; --good-bg:#173926; --warn:#F0A94E; --warn-bg:#3B2E1A;
+      --st-new:#F0A94E; --st-new-bg:#3B2E1A; --st-sched:#7FA2FF; --st-sched-bg:#212C4A;
+      --st-prog:#B79CFF; --st-prog-bg:#2C2448; --st-done:#5CD68C; --st-done-bg:#173926;
+      --st-off:#FF7A85; --st-off-bg:#3E1C22;
+      --shadow:0 1px 2px rgba(0,0,0,.3);
+      color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0F1722; --surface:#172231; --surface-alt:#1E2B3D; --ink:#EAF1FA; --ink-soft:#A3B3C8;
+    --border:#2B3A50; --primary:#5AA9E6; --primary-ink:#081623; --primary-soft:#16324A;
+    --bad:#FF8A80; --bad-bg:#3E1C22; --good:#5CD68C; --good-bg:#173926; --warn:#F0A94E; --warn-bg:#3B2E1A;
+    --st-new:#F0A94E; --st-new-bg:#3B2E1A; --st-sched:#7FA2FF; --st-sched-bg:#212C4A;
+    --st-prog:#B79CFF; --st-prog-bg:#2C2448; --st-done:#5CD68C; --st-done-bg:#173926;
+    --st-off:#FF7A85; --st-off-bg:#3E1C22;
+    --shadow:0 1px 2px rgba(0,0,0,.3);
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:660px;margin:0 auto;padding:0 16px 60px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:0 0 4px}
+  h3{font-size:17px;margin:0 0 2px}
+  a{color:var(--primary)}
+  .lede{color:var(--ink-soft);margin:0 0 20px}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+         padding:18px 16px;margin-bottom:16px;box-shadow:var(--shadow)}
+  label{display:block;font-weight:600;font-size:14px;margin:14px 0 5px}
+  label .opt{font-weight:400;color:var(--ink-soft)}
+  /* 16px, not inherited from the 14px label: below 16px an iPhone zooms on every tap. */
+  input,select,textarea{width:100%;padding:11px 12px;border:1.5px solid var(--border);
+         border-radius:var(--radius-sm);font-family:inherit;font-size:16px;font-weight:400;line-height:1.4;
+         background:var(--surface);color:var(--ink)}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--primary);outline-offset:1px;border-color:var(--primary)}
+  textarea{min-height:76px;resize:vertical}
+  .row{display:flex;gap:10px}
+  .row>*{flex:1;min-width:0}
+  .services{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:6px}
+  .services label,.tick{display:flex;align-items:flex-start;gap:10px;margin:0;font-weight:500;
+         border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;cursor:pointer;background:var(--surface)}
+  .services input,.tick input,.tickbox input{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--primary)}
+  .tick{margin-top:18px;font-size:14px;line-height:1.45}
+  /* "Floor-mounted" wraps at 375px (measured 2026-09-26): centre all four so the rows match. */
+  .services.types{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:1fr}
+  .services.types label{align-items:center;min-height:50px}
+  .services.types input{margin:0}
+  .count-row{margin-top:12px}
+  .stepper.count input{width:56px;text-align:center;padding:7px 4px;font-weight:700}
+  details{margin-top:14px;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:var(--surface)}
+  summary{font-weight:600;font-size:14px;cursor:pointer}
+  details > label:first-of-type{margin-top:10px}
+  /* `font: 600 16px/1 inherit` is invalid (inherit cannot sit in the shorthand), so the
+     browser dropped it and buttons fell back to 13.3px. Measured 2026-09-26. */
+  button{width:100%;margin-top:18px;padding:14px;border:0;border-radius:var(--radius-md);
+         background:var(--primary);color:var(--primary-ink);font-family:inherit;font-size:16px;
+         font-weight:600;line-height:1.2;cursor:pointer}
+  button:active{transform:scale(0.98)}
+  button:disabled{opacity:.5;cursor:wait}
+  /* SukiRun's three: primary (the main tap), secondary (everything else), danger (loses something). */
+  button.ghost,button.btn-secondary{background:var(--surface-alt);color:var(--ink);border:1px solid var(--border)}
+  button.danger{background:transparent;color:var(--bad);border:1.5px solid var(--bad)}
+  button.small{width:auto;min-height:44px;margin:12px 10px 0 0;padding:10px 16px;font-size:15px}
+  a.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;
+        background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);color:var(--ink);
+        font-weight:600;text-decoration:none;font-size:15px}
+  .btnrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .btnrow>button,.btnrow>a.btn{flex:1 1 130px;width:auto;margin:0;min-height:44px;padding:10px 12px;font-size:15px}
+  .msg{margin-top:14px;padding:12px 14px;border-radius:var(--radius-sm);display:none}
+  .msg.show{display:block}
+  .msg.ok{background:var(--good-bg);color:var(--good)}
+  .msg.err{background:var(--bad-bg);color:var(--bad)}
+  .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+  .hint{color:var(--ink-soft);font-size:13px;margin-top:4px}
+  .done{text-align:center;padding:28px 16px}
+  .done .big{font:700 40px/1.1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;
+         margin:10px 0 14px;word-break:break-all}
+  .done p{margin:6px 0}
+  [hidden]{display:none !important}
+
+  /* ---------- top bar (SukiRun's .topbar) ---------- */
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:14px 0 12px;position:sticky;top:0;background:var(--bg);z-index:20;
+    border-bottom:1px solid var(--border);margin-bottom:16px}
+  .topbar-left{display:flex;align-items:center;gap:10px;min-width:0}
+  .topbar-title{font-weight:800;font-size:clamp(15px,4.2vw,18px);letter-spacing:.02em;
+    text-transform:uppercase;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topbar-sub{font-size:12.5px;color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* The logo tile, not the wide logo: its navy "WINTER" vanishes on the dark theme. */
+  .brand-ico{flex:none;width:36px;height:36px;border-radius:9px}
+  .btn-back:not([hidden]) ~ .brand-ico{display:none}
+  .topbar-right{display:flex;align-items:center;gap:8px;flex:none}
+  .topbar-right button{width:auto;margin:0;min-height:40px;padding:8px 14px;font-size:15px}
+  /* Back reads as a button with a word on it — not everybody knows what a bare arrow does. */
+  .btn-back{display:inline-flex;align-items:center;gap:6px;flex:none;width:auto;margin:0;
+    background:var(--surface);color:var(--ink);border:1.5px solid var(--border);
+    border-radius:999px;padding:9px 14px 9px 11px;font-size:14px;font-weight:600;min-height:40px}
+  .pill-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;
+    background:var(--surface-alt);color:var(--ink-soft);padding:6px 12px;border-radius:999px;white-space:nowrap}
+  @media (max-width:480px){ .pill-name{display:none} }
+  .sync{font-size:12.5px;padding:5px 10px;border-radius:999px;background:var(--surface-alt);color:var(--ink-soft);white-space:nowrap}
+  .sync.wait{background:var(--warn-bg);color:var(--warn)}
+  .sync.bad{background:var(--bad-bg);color:var(--bad)}
+
+  /* ---------- the login door (SukiRun's .gate): one card in the middle, nothing else ---------- */
+  .gate{min-height:78vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:12px 0 40px}
+  .gate-mark{width:56px;height:56px;border-radius:50%;background:var(--primary);color:var(--primary-ink);
+    display:flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:10px}
+  .gate-badge{font-size:42px;line-height:1}
+  .gate h1{font-size:28px;margin:8px 0 6px}
+  .gate p{color:var(--ink-soft);margin:0 0 18px;font-size:14.5px;line-height:1.5;max-width:40ch}
+  .gate-card{width:100%;max-width:400px;text-align:left;background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--radius-lg);box-shadow:var(--shadow);padding:18px}
+  .gate-card label:first-child{margin-top:0}
+  .gate-card button{margin-top:12px}
+  .tickbox{display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:12px 14px;margin:0 0 4px;font-weight:400;
+    background:var(--surface-alt);border:1.5px solid var(--border);border-radius:var(--radius-md)}
+  .tickbox-main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .tickbox-title{font-size:14px;font-weight:600}
+  .tickbox-desc{font-size:12.5px;color:var(--ink-soft);line-height:1.4;margin-top:2px}
+  .waiting-title{font-weight:700;font-size:17px}
+  .waiting-body{font-size:14px;color:var(--ink-soft);line-height:1.5;margin:8px 0 6px}
+
+  /* ---------- the office ---------- */
+  /* Nav words shrink instead of wrapping (docs/rules/ui.md). */
+  .tabs{display:flex;gap:4px;background:var(--surface-alt);border-radius:var(--radius-md);padding:4px;margin-bottom:14px}
+  .tabs button{flex:1 1 0;min-width:0;margin:0;padding:10px 2px;min-height:44px;border-radius:9px;
+        background:transparent;color:var(--ink);font-size:clamp(13.5px,3.6vw,15px);white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis}
+  .tabs button[aria-selected=true]{background:var(--surface);color:var(--primary);box-shadow:var(--shadow)}
+  /* SukiRun's stat cards: the few numbers the office looks at first, each one a way in. */
+  .stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
+  @media (min-width:600px){ .stat-grid{grid-template-columns:repeat(4,1fr)} }
+  .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);
+    padding:10px 12px;box-shadow:var(--shadow);text-align:left;width:auto;margin:0;color:var(--ink);font-weight:400}
+  .stat-num{font-size:24px;font-weight:700;line-height:1.1}
+  .stat-label{font-size:12.5px;color:var(--ink-soft);margin-top:2px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:10px;box-shadow:var(--shadow)}
+  .card .meta{color:var(--ink-soft);font-size:14px}
+  .card p{margin:4px 0}
+  .pill{display:inline-block;font-size:13px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--surface-alt);color:var(--ink-soft)}
+  .pill.new,.pill.booked{background:var(--st-new-bg);color:var(--st-new)}
+  .pill.scheduled,.pill.accepted{background:var(--st-sched-bg);color:var(--st-sched)}
+  .pill.in_progress{background:var(--st-prog-bg);color:var(--st-prog)}
+  .pill.done{background:var(--st-done-bg);color:var(--st-done)}
+  .pill.rejected,.pill.cancelled,.pill.off{background:var(--st-off-bg);color:var(--st-off)}
+  .pill.unsent{background:var(--warn-bg);color:var(--warn)}
+  .pill.kind{background:var(--st-sched-bg);color:var(--st-sched)}
+  .notice{border-left:4px solid var(--warn);background:var(--warn-bg)}
+  .notice.bad{border-left-color:var(--bad);background:var(--bad-bg)}
+  .seg{display:flex;gap:6px;margin-bottom:10px}
+  .seg button{flex:1 1 0;min-width:0;width:auto;margin:0;min-height:44px;padding:8px 4px;font-size:clamp(13.5px,3.6vw,15px);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:var(--surface);color:var(--ink);border:1.5px solid var(--border)}
+  .seg button[aria-pressed=true]{border-color:var(--primary);color:var(--primary)}
+  .num{font-size:32px;font-weight:700;line-height:1.1}
+  .empty{color:var(--ink-soft);text-align:center;padding:18px 0}
+  .inline label{margin-top:10px}
+  .card.is-off{opacity:.7}
+
+  /* ================= 2026-09-26: SukiRun's compact office (docs/scope.md) =================
+     Small buttons, rows you tap, a screen on top with Back. Phone first. */
+  .b{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:auto;margin:0;
+     padding:8px 13px;min-height:36px;border-radius:var(--radius-sm);border:1.5px solid var(--border);
+     background:var(--surface-alt);color:var(--ink);font-family:inherit;font-size:13.5px;font-weight:600;
+     line-height:1.2;text-decoration:none;cursor:pointer;white-space:nowrap}
+  .b.primary{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
+  .b.danger{background:transparent;color:var(--bad);border-color:var(--bad)}
+  .b.wide{width:100%;min-height:44px;font-size:15px}
+  .b:disabled{cursor:default;opacity:.45}
+  .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .actions.fill .b{flex:1 1 auto;min-height:42px;font-size:14.5px}
+  .stack{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .stack.tight{margin-top:0}
+
+  .page-head{display:flex;align-items:center;gap:8px;margin:2px 0 12px}
+  .page-head h1{font-size:20px;margin:0;line-height:1.25}
+  .info-btn{display:inline-flex;align-items:center;justify-content:center;flex:none;width:22px;height:22px;min-height:0;
+    margin:0 0 0 2px;padding:0;border-radius:50%;border:1.5px solid var(--ink-soft);background:transparent;color:var(--ink-soft);
+    font:italic 700 12px/1 Georgia,serif;vertical-align:middle;cursor:pointer}
+  .info-btn:active{transform:none;background:var(--surface-alt)}
+  .sheet-info{flex:none}
+  .info-back{position:fixed;inset:0;z-index:90;background:rgba(8,14,22,.45);display:flex;align-items:center;justify-content:center;padding:24px}
+  .info-back[hidden]{display:none !important}
+  .info-card{width:100%;max-width:320px;background:var(--surface);border-radius:16px;padding:18px 18px 14px;
+    box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .info-title{font-weight:700;font-size:15.5px;margin-bottom:6px}
+  .info-text{margin:0 0 14px;font-size:14px;line-height:1.5;color:var(--ink);white-space:pre-line}
+  .info-ok{display:flex;justify-content:center}
+  .info-ok .b{min-width:96px}
+  .stat-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:12px}
+  .stat-strip.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .stat-strip .stat-card{padding:8px 9px;border-radius:var(--radius-sm);box-shadow:none;min-width:0}
+  button.stat-card{cursor:pointer}
+  .stat-strip .stat-num{font-size:19px}
+  .stat-strip .stat-label{font-size:11.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* Wraps, never scrolls: measured 2026-09-26, Jobs' six chips need 501px and a 375px phone
+     has 343 — a strip cut in half reads as broken (SukiRun says the same). */
+  .tabbar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .tabbar.tight{margin-bottom:8px}
+  .tab-btn{flex:none;width:auto;margin:0;padding:7px 10px;min-height:34px;border-radius:999px;border:1.5px solid var(--border);
+    background:var(--surface);color:var(--ink-soft);font-size:12.5px;font-weight:600;white-space:nowrap}
+  .tab-btn.active{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+  .segment{display:flex;gap:4px;padding:4px;background:var(--surface-alt);border-radius:999px;margin:6px 0 4px}
+  .segment button{flex:1 1 0;min-width:0;width:auto;margin:0;padding:8px 6px;min-height:36px;border-radius:999px;
+    background:transparent;color:var(--ink-soft);font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .segment button.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+
+  .list{display:flex;flex-direction:column;gap:8px}
+  .lrow{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--radius-md);padding:10px 12px;cursor:pointer;min-width:0}
+  .lrow:active{background:var(--surface-alt)}
+  .lrow.off{opacity:.55}
+  .lrow.flat{cursor:default}
+  .lrow.col{flex-direction:column;align-items:stretch;gap:8px;cursor:default}
+  .lrow-top{display:flex;align-items:center;gap:12px;cursor:pointer;min-width:0}
+  .lrow-main{flex:1;min-width:0}
+  .lrow-title{font-size:14.5px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lrow-sub{font-size:12.5px;color:var(--ink-soft);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lrow-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+  .lrow-time{font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
+  .lrow-price{font-size:12.5px;font-weight:700;white-space:nowrap}
+  .card.est{padding:6px 14px;margin:8px 0 0}
+  .loc-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  label.b{margin:0}
+  .house-photo{display:block;width:100%;height:180px;object-fit:cover;border-radius:var(--radius-sm);
+    background:var(--surface-alt);margin-bottom:6px}
+  .segment.mini{margin:0;flex:none}
+  /* flex:none + min-width: squeezed beside a two-line title, "Off" was cut to "O…"
+     at 375px (measured 2026-09-26). */
+  .segment.mini button{flex:none;min-width:46px;min-height:32px;padding:6px 12px;font-size:13px}
+  .price-est{margin-top:10px;padding:10px 12px;border-radius:var(--radius-sm);background:var(--primary-soft);color:var(--ink);font-size:15px}
+  .price-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .price-cell{margin:0;font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+  .peso-in{display:flex;align-items:center;border:1.5px solid var(--border);border-radius:var(--radius-sm);
+    background:var(--surface);margin-top:4px;padding-left:10px}
+  .peso-in i{font-style:normal;color:var(--ink-soft);font-size:15px}
+  .peso-in input{border:0;background:transparent;padding:10px 10px 10px 6px;outline-offset:0}
+
+  /* ---------- pick on map ---------- */
+  .map-sheet{position:fixed;inset:0;z-index:80;background:var(--bg);display:flex;flex-direction:column}
+  .map-sheet[hidden]{display:none !important}
+  .map-top{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--bg)}
+  .map-title{font-weight:700;font-size:16px}
+  .map-area{position:relative;flex:1;min-height:0}
+  /* width/height, not inset: MapLibre sets its own position:relative on this box. */
+  .map-canvas{width:100%;height:100%}
+  .map-pin{position:absolute;left:50%;top:50%;transform:translate(-50%,-100%);font-size:40px;line-height:1;
+    pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))}
+  .map-locate{position:absolute;right:14px;bottom:40px;width:46px;height:46px;min-height:0;margin:0;padding:0;border-radius:50%;
+    background:var(--surface);color:var(--ink);border:1px solid var(--border);font-size:20px;box-shadow:var(--shadow)}
+  .map-msg{position:absolute;left:16px;right:16px;top:12px;background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;box-shadow:var(--shadow)}
+  .map-bottom{padding:12px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--bg)}
+
+  /* ---------- the receipt: paper, black on white whatever the theme ---------- */
+  .receipt-wrap{background:#dfe4ea;border-radius:var(--radius-md);padding:10px;overflow:hidden}
+  .receipt{position:relative;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;
+    font-size:clamp(10.5px,2.9vw,13px);line-height:1.45;padding:6% 5%;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+  .rc-sample{position:absolute;top:38%;left:0;right:0;text-align:center;font-size:5em;font-weight:800;color:rgba(0,0,0,.06);
+    transform:rotate(-18deg);pointer-events:none}
+  .rc-head{display:flex;justify-content:space-between;gap:12px;border-bottom:2px solid #111;padding-bottom:10px}
+  .rc-logo{display:block;height:64px;width:auto;margin-bottom:6px}
+  .rc-title{font-size:1.25em;font-weight:800;letter-spacing:.06em}
+  .rc-right{text-align:right}
+  .rc-small{font-size:.9em;color:#444}
+  .rc-parties{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:12px 0;border-bottom:1px solid #bbb}
+  .rc-label{font-size:.78em;text-transform:uppercase;letter-spacing:.06em;color:#666;font-weight:700}
+  .rc-table{width:100%;border-collapse:collapse;margin-top:12px}
+  .rc-table th{text-align:left;font-size:.8em;text-transform:uppercase;letter-spacing:.05em;color:#555;border-bottom:1px solid #111;padding:6px 4px}
+  .rc-table td{padding:7px 4px;border-bottom:1px solid #e3e3e3}
+  .rc-table .rc-num{text-align:right}
+  .rc-table tfoot td{border-bottom:0}
+  .rc-total td{font-weight:800;font-size:1.15em;border-top:2px solid #111 !important}
+  .rc-notes{margin-top:12px;font-size:.92em}
+  .rc-sign{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:48px}
+  .rc-sign div{border-top:1px solid #111;padding-top:4px;font-size:.85em;color:#444;text-align:center}
+  .rc-foot{margin-top:26px;text-align:center;font-size:.85em;color:#555}
+  /* ---------- the aircon cart (15) ---------- */
+  .type-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:6px}
+  .type-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:auto;margin:0;min-height:52px;padding:10px;
+    background:var(--surface);color:var(--ink);border:1.5px solid var(--border);border-radius:var(--radius-md);font-size:15px;font-weight:600}
+  .type-btn:active{background:var(--primary-soft);border-color:var(--primary)}
+  .type-plus{font-size:18px;color:var(--primary);line-height:1}
+  /* Picture on top, name under: side by side, "Floor-mounted" folded in two on a 375px
+     phone (needed 167px, had 128 — measured 2026-09-27). */
+  .type-btn:has(.type-pic){flex-direction:column;gap:4px;padding:8px 6px}
+  .type-name{display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .type-pic{flex:none;width:40px;height:40px}
+  .cart-empty{text-align:center;color:var(--ink-soft);font-size:13.5px;padding:14px;border:1.5px dashed var(--border);border-radius:var(--radius-md);margin-top:8px}
+  .cart-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .cart-unit{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px}
+  .cart-unit-head{display:flex;align-items:center;gap:8px;min-width:0}
+  .cart-unit-name{flex:none;width:auto;margin:0;padding:0;background:none;border:0;color:var(--ink);font-size:14.5px;font-weight:700;text-align:left}
+  button.cart-unit-name{color:var(--primary)}
+  .cart-unit-meta{flex:1;min-width:0;font-size:12.5px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cart-unit-price{flex:none;font-weight:700;font-size:13.5px}
+  .cart-x{flex:none;width:32px;height:32px;min-height:0;margin:0;padding:0;border-radius:50%;background:var(--surface-alt);
+    color:var(--ink-soft);border:1px solid var(--border);font-size:14px}
+  .cart-svcs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .svc-chip{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;background:var(--primary-soft);color:var(--ink);
+    border-radius:999px;padding:4px 6px 4px 10px}
+  .svc-chip i{font-style:normal;color:var(--ink-soft);font-weight:600}
+  .svc-chip button{width:22px;height:22px;min-height:0;margin:0;padding:0;border-radius:50%;background:transparent;border:0;
+    color:var(--ink-soft);font-size:16px;line-height:1}
+  .svc-chip:not(:has(button)){padding-right:10px}
+  .cart-total{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;margin-top:2px;
+    border-top:1px dashed var(--border);font-size:15px}
+  .unit-back{position:fixed;inset:0;z-index:85;background:rgba(8,14,22,.5);display:flex;align-items:flex-end;justify-content:center}
+  .unit-back[hidden]{display:none !important}
+  .unit-card{width:100%;max-width:560px;max-height:88vh;overflow-y:auto;background:var(--bg);border-radius:18px 18px 0 0;
+    padding:14px 16px calc(16px + env(safe-area-inset-bottom))}
+  @media (min-width:700px){ .unit-back{align-items:center} .unit-card{border-radius:18px} }
+  .unit-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .unit-title{flex:1;font-size:17px;font-weight:800}
+  .unit-msg{color:var(--bad);font-size:13.5px;min-height:0;margin-top:6px}
+  /* Its two ends line up with the 660px form: full width they sat 1,119px apart on a
+     desktop (measured 2026-09-27). */
+  .cart-bar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;align-items:center;gap:10px;
+    padding:8px max(12px, calc(50vw - 318px)) calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);
+    box-shadow:0 -4px 16px rgba(0,0,0,.12)}
+  .cart-bar[hidden]{display:none !important}
+  .cart-open{display:flex;align-items:center;gap:10px;flex:1;min-width:0;width:auto;margin:0;padding:4px;background:transparent;
+    color:var(--ink);border:0;text-align:left}
+  .cart-badge{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;min-width:48px;height:44px;
+    border-radius:12px;background:var(--primary);color:var(--primary-ink);line-height:1}
+  .cart-badge b{font-size:17px}
+  .cart-badge small{font-size:8.5px;letter-spacing:.06em;margin-top:2px}
+  .cart-bar-text{display:flex;flex-direction:column;min-width:0}
+  .cart-bar-text b{font-size:15px}
+  .cart-bar-text small{font-size:11.5px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cart-bar > .b{flex:none;min-height:44px;font-size:14.5px}
+  body.has-bar .wrap{padding-bottom:96px}
+
+  /* ---------- Full status (15) ---------- */
+  .status-now{font-weight:700;font-size:15px;color:var(--st-new);margin:0 0 8px}
+  .status-now.good{color:var(--st-done)}
+  .status-now.bad{color:var(--bad)}
+  .steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin:0 0 12px}
+  .step{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .step-bar{height:5px;border-radius:3px;background:var(--border)}
+  .step.on .step-bar{background:var(--primary)}
+  .step-name{font-size:10.5px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .step.on .step-name{color:var(--ink);font-weight:600}
+  /* Suki's order screen, measured off sukirun.built.html 2026-09-27: 12.5px labels in
+     sentence case, 13.5px lines, a 17px Total. */
+  .st-label{font-size:12.5px;color:var(--ink-soft);font-weight:500;margin:14px 0 6px}
+  .card .st-label{margin-top:0}
+  .st-loc{font-size:13.5px;line-height:1.5;overflow-wrap:anywhere}
+  .st-loc .muted{font-size:inherit}
+  .st-sum{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-md);padding:14px 16px}
+  .st-row{display:flex;justify-content:space-between;gap:12px;font-size:13.5px;padding:4px 0}
+  .st-row>span:first-child{min-width:0;overflow-wrap:anywhere}
+  .st-row>span:last-child{flex:none}
+  .st-row .muted{font-size:12px}
+  .st-total{display:flex;justify-content:space-between;gap:12px;font-weight:700;font-size:17px;
+    margin-top:8px;padding-top:10px;border-top:1px dashed var(--border)}
+  .st-total .muted{align-self:center;font-size:12.5px;font-weight:400;text-align:right}
+  .st-copy{width:100%;margin:12px 0 0}
+  .tl-what b{font-weight:700}
+  .tl-row{display:flex;gap:10px;padding:8px 0;border-bottom:1px dashed var(--border)}
+  .tl-row:last-child{border-bottom:none}
+  .tl-icon{flex:none;width:22px;text-align:center;font-size:14px;line-height:1.5}
+  .tl-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .tl-what{font-size:13.5px;line-height:1.4;overflow-wrap:anywhere}
+  .tl-when{font-size:11.5px;color:var(--ink-soft)}
+  .tl-changes{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .tl-change{font-size:12px;color:var(--ink-soft);line-height:1.45;overflow-wrap:anywhere}
+  .tl-change s{opacity:.7}
+  .tl-change b{color:var(--ink)}
+
+  /* ---------- icons (Flaticon) ---------- */
+  .ico{width:20px;height:20px;vertical-align:middle;flex:none}
+  .nav-ico .ico{width:24px;height:24px;display:block}
+  .menu-ico .ico{width:22px;height:22px}
+  .fab .ico{width:22px;height:22px}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .ico.mono{filter:invert(1)} }
+  :root[data-theme="dark"] .ico.mono{filter:invert(1)}
+  .credit{text-align:center;font-size:11.5px;color:var(--ink-soft);margin-top:18px}
+  .credit a{color:var(--ink-soft)}
+
+  #printArea{display:none}
+  @media print{
+    @page{size:A4;margin:14mm}
+    body{background:#fff}
+    body > *:not(#printArea){display:none !important}
+    #printArea{display:block}
+    #printArea .receipt{box-shadow:none;padding:0;font-size:11pt}
+  }
+  .lrow-when{flex:none;width:50px;text-align:center;border-right:1px solid var(--border);padding-right:10px;line-height:1.2}
+  .lrow-when b{display:block;font-size:14px}
+  .lrow-when span{font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
+  .lrow .actions{margin-top:0}
+  .avatar{flex:none;width:36px;height:36px;border-radius:50%;background:var(--primary-soft);color:var(--primary);
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  .avatar.big{width:46px;height:46px;font-size:16px}
+  .pill{font-size:11.5px;padding:2px 8px;white-space:nowrap}
+  .pill.role-admin{background:var(--st-prog-bg);color:var(--st-prog)}
+  .pill.role-technician{background:var(--st-sched-bg);color:var(--st-sched)}
+  .pill.role-customer,.pill.role-disabled{background:var(--surface-alt);color:var(--ink-soft)}
+  .tag{font-size:10.5px;color:var(--st-sched);white-space:nowrap}
+  .tag.bad{color:var(--bad)}
+  .muted{color:var(--ink-soft);font-size:12.5px}
+  .empty-state{text-align:center;padding:32px 16px;color:var(--ink-soft);border:1.5px dashed var(--border);
+    border-radius:var(--radius-lg);font-size:14px}
+  .find{margin-bottom:8px}
+  .count{font-size:12px;color:var(--ink-soft);margin:0 0 8px}
+  .hint.lead{margin:0 0 12px}
+  .sec{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin:18px 0 8px;font-weight:700}
+  .fieldlabel{font-weight:600;font-size:14px;margin:14px 0 6px}
+  .inline-note{font-size:13px;background:var(--warn-bg);color:var(--warn);border-radius:var(--radius-sm);padding:8px 10px;
+    margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+
+  .kv{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid var(--border);font-size:14px;line-height:1.45}
+  .kv>span{flex:none;width:92px;color:var(--ink-soft);font-size:12.5px;padding-top:1px}
+  .kv>div{flex:1;min-width:0;overflow-wrap:anywhere}
+  .kv .b{min-height:30px;padding:4px 10px;font-size:12.5px;margin-left:6px}
+
+  .menu{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;margin-top:14px}
+  .menu-row{display:flex;align-items:center;gap:12px;width:100%;margin:0;padding:11px 14px;border:0;border-radius:0;
+    border-bottom:1px solid var(--border);background:transparent;color:var(--ink);text-align:left;font-weight:400;font-size:14px}
+  .menu-row:last-child{border-bottom:0}
+  .menu-row:active{background:var(--surface-alt);transform:none}
+  .menu-row.is-danger .menu-title{color:var(--bad)}
+  .menu-ico{flex:none;width:24px;text-align:center;font-size:16px}
+  .menu-main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .menu-title{font-size:14px;font-weight:600}
+  .menu-sub{font-size:12.5px;color:var(--ink-soft)}
+  .menu-chev{flex:none;color:var(--ink-soft);font-size:20px;line-height:1}
+
+  .role-choice{display:flex;align-items:center;gap:12px;width:100%;margin:0;text-align:left;padding:10px 14px;
+    background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-md);color:var(--ink);font-weight:400}
+  .role-choice.active{border-color:var(--primary);background:var(--primary-soft)}
+  .role-dot{flex:none;width:18px;height:18px;border-radius:50%;border:2px solid var(--border)}
+  .role-choice.active .role-dot{border-color:var(--primary);background:var(--primary);box-shadow:inset 0 0 0 3px var(--surface)}
+  .role-choice-main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .me-card{display:flex;align-items:center;gap:12px}
+  .row-between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .stepper{display:flex;align-items:center;gap:6px;flex:none}
+  .stepper b{min-width:44px;text-align:center;font-size:14px}
+  .stepper .b{width:36px;padding:0;font-size:18px}
+  .bar-row{display:flex;align-items:center;gap:8px;font-size:13.5px;margin:3px 0}
+  .bar-when{width:56px;flex:none;color:var(--ink-soft);font-size:12.5px}
+  .bar{height:12px;border-radius:4px;background:var(--primary)}
+
+  /* ---------- panels: a tap opens a screen on top, with Back (SukiRun's panelShell) ---------- */
+  body.locked{overflow:hidden}
+  .sheet{position:fixed;inset:0;background:var(--bg);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  .sheet-inner{max-width:660px;margin:0 auto;padding:0 16px 40px}
+  .sheet-top{margin-bottom:12px}
+  .sheet-title{text-transform:none;letter-spacing:0;font-size:16px}
+  .sheet.small{background:rgba(8,14,22,.5);display:flex;align-items:flex-end;justify-content:center;overflow:hidden}
+  .sheet.small .sheet-inner{width:100%;background:var(--bg);border-radius:18px 18px 0 0;max-height:88vh;overflow-y:auto;
+    padding-bottom:calc(20px + env(safe-area-inset-bottom));margin:0}
+  .sheet.small .sheet-top{position:static;border-radius:18px 18px 0 0}
+  @media (min-width:700px){ .sheet.small{align-items:center} .sheet.small .sheet-inner{border-radius:18px;max-width:480px} }
+
+  /* ---------- bottom navigation: an Android app's, six places ---------- */
+  .bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:center;gap:2px;
+    background:var(--surface);border-top:1px solid var(--border);padding:4px 4px calc(4px + env(safe-area-inset-bottom))}
+  .bottom-nav button{flex:1 1 0;max-width:108px;min-width:0;width:auto;margin:0;padding:6px 1px 5px;background:transparent;
+    color:var(--ink-soft);border-radius:10px;display:flex;flex-direction:column;align-items:center;gap:3px;font-weight:600}
+  .bottom-nav button[aria-current=true]{color:var(--primary);background:var(--primary-soft)}
+  .nav-ico{position:relative;font-size:18px;line-height:1}
+  .nav-word{font-size:11px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .nav-badge{position:absolute;top:-6px;left:14px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;
+    background:var(--bad);color:#fff;font-size:10.5px;line-height:17px;font-weight:700;font-style:normal}
+  body.has-nav .wrap{padding-bottom:110px}
+  .fab{position:fixed;right:max(16px, calc(50vw - 314px));bottom:calc(70px + env(safe-area-inset-bottom));z-index:31;
+    width:auto;margin:0;padding:11px 18px;border-radius:999px;font-size:14.5px;box-shadow:0 6px 18px rgba(13,111,184,.35)}
+  .topbar-right .icon-btn{width:40px;min-height:40px;height:40px;padding:0;font-size:18px;border-radius:50%;
+    display:inline-flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ─────────────────────────── top bar (SukiRun's) ─────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button type="button" class="btn-back" id="backBtn" hidden>&larr; <span id="backLabel">Back</span></button>
+      <img class="brand-ico" src="icons/logo-icon.png" alt="" aria-hidden="true">
+      <div style="min-width:0">
+        <div class="topbar-title">Winter Air Services</div>
+        <div class="topbar-sub" id="topSub">Book an aircon job</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="sync" id="syncBadge" hidden></span>
+      <span class="pill-name" id="who" hidden></span>
+      <button type="button" class="btn-secondary" id="accountBtn">Log in</button>
+    </div>
+  </header>
+
+  <!-- ─────────────────────────── the login door ─────────────────────────── -->
+  <!-- One card in the middle of an otherwise empty screen (SukiRun, renderGate). -->
+  <section class="gate" id="authForm" hidden>
+    <div class="gate-mark" aria-hidden="true">&#10052;</div>
+    <h1 id="authTitle">Log in</h1>
+    <p id="authHint">For the shop's staff, and for customers who registered.</p>
+    <form class="gate-card" id="authCard" novalidate>
+      <label class="tickbox" id="staffTick" hidden>
+        <input type="checkbox" name="staff">
+        <span class="tickbox-main">
+          <span class="tickbox-title">I work here</span>
+          <span class="tickbox-desc">Tick this if you are a technician or in the office — not a
+            customer booking a job. An admin gives you the rest.</span>
+        </span>
+      </label>
+      <label id="nameRow" hidden>Your name <input name="name" maxlength="60" autocomplete="name"></label>
+      <label>Email <input name="email" type="email" required autocomplete="username" inputmode="email" placeholder="you@example.com"></label>
+      <label>Password <input name="password" type="password" required minlength="8" autocomplete="current-password"></label>
+      <button type="submit" id="authSubmit">Log in</button>
+      <button type="button" class="btn-secondary" id="authSwitch">I don't have an account yet</button>
+      <div class="msg" id="authMsg" aria-live="polite"></div>
+      <p class="hint" id="authFoot">The first login needs internet — after that this phone works with no signal.</p>
+    </form>
+  </section>
+
+  <!-- ─────────────────────────── waiting for the office ─────────────────────────── -->
+  <!-- Somebody who said "I work here" has nothing they may do until an admin gives them a
+       role. Say that plainly, with the two things they can act on (SukiRun, renderWaitingForRole). -->
+  <section class="gate" id="waitView" hidden>
+    <div class="gate-card">
+      <div class="waiting-title">&#9203; Waiting for the office</div>
+      <div class="waiting-body">Your account is made. An admin has to make you a technician or
+        an admin before the work screens open. Ask them to open Team.</div>
+      <button type="button" id="waitAgain">Check again</button>
+      <button type="button" class="btn-secondary" id="waitCustomer">I'm a customer, actually</button>
+      <p class="hint">The app also checks by itself every half minute.</p>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────── switched off ─────────────────────────── -->
+  <section class="gate" id="offView" hidden>
+    <div class="gate-badge">&#128274;</div>
+    <h1>This account is switched off</h1>
+    <p>The office has switched this account off. Nothing is lost — ask them to switch it back on.</p>
+    <div class="gate-card"><button type="button" class="btn-secondary" id="offLogout" style="margin-top:0">Log out</button></div>
+  </section>
+
+  <!-- ─────────────────────────── notices: nothing is silent ─────────────────────────── -->
+  <div id="notices"></div>
+
+  <!-- ─────────────────────────── public: book + track ─────────────────────────── -->
+  <div id="publicView">
+    <h1>Book an aircon job</h1>
+    <p class="lede" id="lede">No account needed. We ring you back to agree a time.</p>
+
+    <section class="panel done" id="done" hidden aria-live="polite">
+      <p>Booked. Your reference code is</p>
+      <div class="big" id="doneRef"></div>
+      <p><b>Write it down, or take a screenshot.</b></p>
+      <p class="hint">You need it, with your number, to check on this booking below.
+        We will ring you to agree a time.</p>
+      <button type="button" class="ghost" id="again">Book another job</button>
+    </section>
+
+    <form class="panel" id="bookForm" autocomplete="on" novalidate>
+      <label>Your name <input name="full_name" required maxlength="120" autocomplete="name"></label>
+
+      <label>Contact number <input name="contact" required inputmode="tel" maxlength="30"
+        autocomplete="tel" placeholder="09XX XXX XXXX"></label>
+
+      <label>Address <input name="address" required maxlength="300"
+        placeholder="Street, barangay, city"></label>
+
+      <label>Landmark <span class="opt">— optional, but it is how we find you</span>
+        <input name="landmark" maxlength="200" placeholder="beside the chapel, blue gate…"></label>
+      <div class="hint">In Bacolod this matters more than the address. Please fill it in.</div>
+
+      <div class="loc-row">
+        <button type="button" class="b" id="locBtn">📍 Pin my location</button>
+        <button type="button" class="b" id="mapBtn">🗺️ Pick on map</button>
+      </div>
+      <div class="hint" id="locMsg">Optional. At the house? Tap Pin. Anywhere else? Pick it on the map.</div>
+      <input type="hidden" name="lat"><input type="hidden" name="lng">
+
+      <!-- The aircons (15): tap a type, a small window asks what that aircon needs, and it
+           joins the Service summary below — Suki's Store Visit. Type is required. -->
+      <label>Aircon type</label>
+      <div id="pubTypes"></div>
+      <div id="pubCart" aria-live="polite"></div>
+
+      <div class="row">
+        <label>Preferred date <input type="date" name="preferred_on" required></label>
+        <label>Morning or afternoon
+          <select name="slot" required>
+            <option value="am">Morning (AM)</option>
+            <option value="pm">Afternoon (PM)</option>
+          </select>
+        </label>
+      </div>
+
+      <label>Anything else <span class="opt">— optional</span>
+        <textarea name="notes" maxlength="1000"
+          placeholder="What is wrong, how long it has been like that…"></textarea></label>
+
+      <!-- The honeypot. Hidden from people, filled in by bots. See book_job(). -->
+      <div class="hp" aria-hidden="true">
+        <label>Website<input name="website" tabindex="-1" autocomplete="off"></label>
+      </div>
+
+      <!-- RA 10173. Wording shown to the owner and approved (TODO.md, D). -->
+      <label class="tick"><input type="checkbox" name="consent" id="consent">
+        <span id="privacyText"></span></label>
+
+      <button type="submit">Send the booking</button>
+      <div class="msg" id="bookMsg" aria-live="polite"></div>
+    </form>
+
+    <!-- A signed-in customer's own bookings (Phase 5). -->
+    <section class="panel" id="customerView" hidden>
+      <h2>My bookings</h2>
+      <div id="myBookings"></div>
+      <details id="claimBox">
+        <summary>Booked before you registered? Add those bookings</summary>
+        <p class="hint">Give one reference code and the number you booked with. Every booking
+          made with that number is added to your account.</p>
+        <form id="claimForm" novalidate>
+          <div class="row">
+            <label>Reference code <input name="code" maxlength="16" placeholder="WA-0000" autocapitalize="characters"></label>
+            <label>Contact number <input name="contact" inputmode="tel" maxlength="30"></label>
+          </div>
+          <button type="submit" class="ghost">Add my bookings</button>
+          <div class="msg" id="claimMsg" aria-live="polite"></div>
+        </form>
+      </details>
+    </section>
+
+    <form class="panel" id="trackForm" novalidate>
+      <h2>Track my booking</h2>
+      <p class="lede" style="margin-bottom:0">Your reference code and the number you booked with.</p>
+      <div class="row">
+        <label>Reference code <input name="code" required placeholder="WA-0000" maxlength="16"
+          autocapitalize="characters"></label>
+        <label>Contact number <input name="contact" required inputmode="tel" maxlength="30"></label>
+      </div>
+      <button type="submit" class="ghost">Check it</button>
+      <div class="msg" id="trackMsg" aria-live="polite"></div>
+      <p class="hint" id="registerNudge">Make an account to see all your bookings in one
+        place, even on a new phone. <a href="#" id="registerLink">Make an account</a></p>
+    </form>
+  </div>
+
+  <!-- ─────────────────────────── admin ─────────────────────────── -->
+  <div id="adminView" hidden><div id="adminBody"></div></div>
+
+  <!-- ─────────────────────────── technician ─────────────────────────── -->
+  <div id="techView" hidden><div id="techBody"></div></div>
+
+</div>
+
+<!-- Screens on top of the list, each with Back (drawPanels). -->
+<div id="panels"></div>
+<!-- The aircon window (15): "Window #2" — what it needs, brand and model. Small, not a screen. -->
+<div class="unit-back" id="unitSheet" hidden><div class="unit-card" role="dialog" aria-modal="true"></div></div>
+<!-- The page's cart (15): the bar at the bottom, and the summary it opens. -->
+<div class="cart-bar" id="pubBar" hidden>
+  <button type="button" class="cart-open" data-act="cartopen">
+    <span class="cart-badge"><b id="barCount">0</b><small id="barWord">AIRCONS</small></span>
+    <span class="cart-bar-text"><b id="barTotal"></b><small>Services · tap to review</small></span>
+  </button>
+  <button type="button" class="b primary" data-act="pubsend">Send the booking</button>
+</div>
+<div class="unit-back" id="cartSheet" hidden><div class="unit-card cart-card" role="dialog" aria-modal="true"></div></div>
+<!-- Pick on map: full screen, the map moves under a pin that stays in the middle. -->
+<div class="map-sheet" id="mapSheet" hidden>
+  <header class="map-top">
+    <button type="button" class="btn-back" id="mapBack">&larr; Back</button>
+    <div style="min-width:0"><div class="map-title">Pick the house</div>
+      <div class="topbar-sub">Move the map until the pin is on the roof</div></div>
+  </header>
+  <!-- The pin sits in the map's own box, so its tip IS the centre that gets saved
+       (measured 2026-09-26: placed on the sheet, the tip was 29px — ~17 m — off). -->
+  <div class="map-area">
+    <div class="map-canvas" id="mapCanvas"></div>
+    <div class="map-pin" aria-hidden="true">📍</div>
+    <button type="button" class="map-locate" id="mapLocate" aria-label="Where I am">🎯</button>
+    <div class="map-msg" id="mapMsg" hidden></div>
+  </div>
+  <div class="map-bottom"><button type="button" class="b primary wide" id="mapUse">Use this spot</button></div>
+</div>
+<!-- What the printer gets: one receipt, nothing else on the page. -->
+<div id="printArea"></div>
+<nav class="bottom-nav" id="bottomNav" hidden aria-label="Office"></nav>
+<button type="button" class="b primary fab" id="fab" data-act="newbook" hidden><img class="ico" src="icons/book.png" alt="" aria-hidden="true"> Book a job</button>
+<!-- ⓘ: a small box with OK, never a whole screen. -->
+<div class="info-back" id="infoBox" hidden>
+  <div class="info-card" role="alertdialog" aria-labelledby="infoTitle">
+    <div class="info-title" id="infoTitle"></div>
+    <p class="info-text" id="infoText"></p>
+    <div class="info-ok"><button type="button" class="b primary" id="infoOk" data-act="infook">OK</button></div>
+  </div>
+</div>
+
+<script>
+/* ================================================================ config
+   Filled in 2026-09-26. PUBLISHABLE key only — public by design. Never the secret key. */
+const SUPABASE_URL = 'https://zkfhvognsenwvcknnitp.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_Osqa5cuL0I_Qsw0pQmmLZQ_o8LkzYyQ';
+
+/* The shop's number — question B in TODO.md, answered 2026-09-26. Shown in the privacy
+   line, the "we're down" messages and a rejected booking. */
+const SHOP_NAME  = 'Winter Air Services';
+const SHOP_PHONE = '0909 958 0512';
+
+const REF_KEY = 'ws_last_ref';
+const ringUs = () => SHOP_PHONE ? 'ring us on ' + SHOP_PHONE : 'ring the shop';
+
+/* ================================================================ small helpers */
+const $  = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+/* Every value from the network goes into HTML through esc(). Nothing is trusted. */
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c =>
+  ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() :
+  ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+    (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
+const digits = s => String(s ?? '').replace(/\D/g, '');
+function lsGet(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }
+function lsSet(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+function lsDel(k){ try { localStorage.removeItem(k); } catch (e) {} }
+
+/* The shop's today, not the phone's: the database checks against Asia/Manila. */
+function manilaDate(plusDays){
+  const d = new Date(Date.now() + (plusDays || 0) * 864e5);
+  return d.toLocaleDateString('en-CA', {timeZone: 'Asia/Manila'});   // YYYY-MM-DD
+}
+const manilaDay = iso => iso ? new Date(iso).toLocaleDateString('en-CA', {timeZone: 'Asia/Manila'}) : null;
+const niceDate = ymd => ymd ? new Date(ymd + 'T00:00:00')
+  .toLocaleDateString('en-PH', {weekday: 'short', day: 'numeric', month: 'short'}) : '';
+const slotWord = s => s === 'am' ? 'morning' : s === 'pm' ? 'afternoon' : '';
+const STATUS_LABEL = {new: 'New', accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled',
+  booked: 'Not scheduled', scheduled: 'Scheduled', in_progress: 'In progress', done: 'Done'};
+
+/* ================================================================ talking to Supabase */
+/* Errors the database wrote for a person to read. */
+const HUMAN_CODES = ['22023', '53400', '42501', '55000'];
+class Unreachable extends Error {}                    // try again later
+class Refused extends Error {                         // the server said no
+  constructor(msg, human){ super(msg); this.human = human; }
+}
+
+let session = lsGet('ws_session', null);   // {access_token, refresh_token, expires_at, email, uid}
+
+async function authFetch(path, body, token){
+  let r;
+  try {
+    r = await fetch(SUPABASE_URL + '/auth/v1' + path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', apikey: SUPABASE_KEY,
+                ...(token ? {Authorization: 'Bearer ' + token} : {})},
+      body: JSON.stringify(body || {}),
+    });
+  } catch (e) { throw new Unreachable('offline'); }
+  const b = await r.json().catch(() => ({}));
+  if (r.status >= 500) throw new Unreachable('http ' + r.status);
+  if (!r.ok) throw new Refused(b.error_description || b.msg || b.message || 'That did not work.', true);
+  return b;
+}
+
+function keepSession(b){
+  session = {access_token: b.access_token, refresh_token: b.refresh_token,
+             expires_at: Date.now() + (b.expires_in || 3600) * 1000,
+             email: b.user && b.user.email, uid: b.user && b.user.id,
+             role: session && session.uid === (b.user && b.user.id) ? session.role : null};
+  lsSet('ws_session', session);
+}
+
+async function token(){
+  if (!session) return null;
+  if (Date.now() > session.expires_at - 60000){
+    try { keepSession(await authFetch('/token?grant_type=refresh_token', {refresh_token: session.refresh_token})); }
+    catch (e) {
+      if (e instanceof Refused){ signedOut('Your sign-in ran out. Please sign in again.'); return null; }
+      throw e;   // offline: keep the old token; the queue waits
+    }
+  }
+  return session.access_token;
+}
+
+async function rpc(fn, args, useSession = true){
+  const t = useSession ? await token() : null;
+  let r;
+  try {
+    r = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + fn, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', apikey: SUPABASE_KEY,
+                Authorization: 'Bearer ' + (t || SUPABASE_KEY)},
+      body: JSON.stringify(args || {}),
+    });
+  } catch (e) { throw new Unreachable('offline'); }
+  const body = await r.json().catch(() => null);
+  if (r.ok) return body;
+  if (r.status >= 500) throw new Unreachable('http ' + r.status);
+  const code = body && body.code;
+  throw new Refused((body && body.message) || 'Refused.', HUMAN_CODES.includes(code));
+}
+
+/* ================================================================ the local copy (docs/rules/sync.md)
+   Every signed-in screen reads THIS, never the server. Writes land here first and wait in
+   the queue; the network is an optimisation, never a precondition. */
+let db = null;       // {cursor, role, bookings:{}, customers:{}, jobs:{}, team:{}}
+let queue = [];      // [{op_id, fn, args, label, at, touches:[ids], state, error}]
+let notices = [];    // decisions that lost, and writes that were refused — shown until dismissed
+let online = navigator.onLine;
+let lastPullOk = null;
+
+const dbKey = () => 'ws_db_' + session.uid;
+const qKey  = () => 'ws_queue_' + session.uid;
+const nKey  = () => 'ws_notices_' + session.uid;
+function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}}; }
+/* docs/rules/sync.md: when what the server sends changes shape, bump this, so every phone
+   takes one full fresh copy instead of keeping rows that predate the change. 2026-09-26:
+   Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
+   for rows it already had. 3 (2026-09-26): no assignment — a technician's phone now holds
+   every scheduled job, jobs carry status_by, customers carry checkup_snooze. */
+const REPAIR_ID = 4;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+function loadLocal(){
+  db = lsGet(dbKey(), null) || emptyDb();
+  if (db.repair !== REPAIR_ID){ db.cursor = null; db.repair = REPAIR_ID; }
+  queue = lsGet(qKey(), []);
+  notices = lsGet(nKey(), []);
+}
+function saveLocal(){
+  if (!session) return;
+  const ok = lsSet(dbKey(), db) & lsSet(qKey(), queue) & lsSet(nKey(), notices);
+  if (!ok) notice('This phone would not save the app\'s data (storage full or blocked). Changes are kept only until the page closes.', true);
+}
+function notice(text, bad){
+  notices.push({id: uuid(), at: new Date().toISOString(), text, bad: !!bad});
+  if (session) lsSet(nKey(), notices);
+  render();
+}
+
+/* A write: apply it here, queue it, try to send. It always "succeeds" on the phone. */
+function write(fn, args, label, touches, applyLocal){
+  const op = {op_id: uuid(), fn, args: {...args}, label, at: new Date().toISOString(),
+              touches: touches || [], state: 'pending'};
+  op.args.p_op_id = op.op_id;
+  if ('p_decided_at' in op.args) op.args.p_decided_at = op.at;
+  try { applyLocal && applyLocal(db, op); } catch (e) { console.error(e); }
+  queue.push(op);
+  saveLocal();
+  render();
+  flush();
+  return op;
+}
+
+let flushing = false, flushAgain = false;
+async function flush(){
+  if (!session) return;
+  if (flushing){ flushAgain = true; return; }
+  flushing = true;
+  let lost = false;
+  try {
+    for (const op of queue.filter(o => o.state === 'pending')){
+      try {
+        const res = await rpc(op.fn, op.args);
+        if (res && res.ok === false){
+          lost = true;
+          notice(op.label + ' — ' + ((res.messages || []).join(' ') || res.message || 'not kept.'), false);
+        }
+        queue = queue.filter(o => o !== op);
+        if (op.cleanup_photo && !(res && res.ok === false)) deletePhotoFile(op.cleanup_photo);
+      } catch (e) {
+        if (e instanceof Unreachable){ online = false; break; }
+        op.state = 'failed';
+        // Staff and signed-in customers see the server's own words: "The server refused it"
+        // hid a missing-parameter bug on 2026-09-26. The public page never reaches here.
+        op.error = e.human ? e.message : 'The server refused it: ' + e.message;
+        lost = true;
+      }
+      saveLocal();
+    }
+    if (lost) db.cursor = null;   // our local guess was wrong somewhere: take a full fresh copy
+    await pull();
+  } finally {
+    flushing = false;
+    render();
+    if (flushAgain){ flushAgain = false; flush(); }
+  }
+}
+
+/* Pull what changed since the cursor. A row with unsent local changes is skipped WHOLE —
+   that is what keeps work done in a dead zone safe (sync.md). */
+async function pull(){
+  if (!session) return;
+  let res;
+  try { res = await rpc('pull', {p_since: db.cursor}); }
+  catch (e) {
+    if (e instanceof Unreachable){ online = false; render(); return; }
+    notice('Could not refresh: ' + e.message, true);
+    return;
+  }
+  online = true; lastPullOk = new Date();
+  const busy = new Set(queue.flatMap(o => o.touches));
+  if (db.cursor === null){           // a full copy: anything not in it is gone
+    for (const k of ['bookings', 'customers', 'jobs', 'team'])
+      for (const id of Object.keys(db[k])) if (!busy.has(id)) delete db[k][id];
+  }
+  for (const k of ['bookings', 'customers', 'jobs'])
+    for (const row of res[k] || []) if (!busy.has(row.id)) db[k][row.id] = row;
+  for (const row of res.team || []) db.team[row.id] = row;
+  for (const id of res.removed_jobs || []) if (!busy.has(id)) delete db.jobs[id];
+  for (const id of res.removed_bookings || []) if (!busy.has(id)) delete db.bookings[id];
+  db.cursor = res.cursor || db.cursor;
+  if (res.profile) db.profile = res.profile;   // name and the "I work here" claim
+  if (res.settings) db.settings = res.settings; // the shop's own settings (admin only)
+  if (res.services) db.services = res.services; // the price list, sent whole (admin only)
+  if (db.role !== res.role){ db.role = res.role; session.role = res.role; lsSet('ws_session', session); }
+  saveLocal();
+  render();
+}
+
+/* ================================================================ drawing
+   Changing the data is not changing the screen: every write ends in render(), the one
+   function that redraws the views (docs/rules/ui.md). */
+const ui = lsGet('ws_ui', {tab: 'inbox', inbox: 'new', day: 'today', techDay: 'today', search: '', teamSearch: ''});
+const saveUi = () => lsSet('ws_ui', ui);
+let authOpen = false, authMode = 'signin';
+
+const ROLE_WORD = {admin: 'Office', technician: 'Technician', customer: 'My account', disabled: 'Switched off'};
+
+function render(){
+  const role = session ? (db && db.role) || session.role : null;
+  const staff = role === 'admin' || role === 'technician';
+  const profile = (db && db.profile) || {};
+  // Said "I work here" and not given a role yet: a person waiting on a person, not a form.
+  const waiting = role === 'customer' && profile.signup_kind === 'employee';
+  const off = role === 'disabled';
+
+  $('#who').hidden = !session;
+  $('#who').textContent = session ? (profile.display_name || session.email || '') : '';
+  // Signed in, the top-right button is Settings (SukiRun's ⚙); Log out lives in there.
+  const acct = $('#accountBtn');
+  acct.textContent = session ? '⚙️' : 'Log in';
+  acct.classList.toggle('icon-btn', !!session);
+  acct.setAttribute('aria-label', session ? 'Settings' : 'Log in');
+  $('#topSub').textContent = authOpen ? (authMode === 'signin' ? 'Log in' : 'Make an account')
+    : session ? (waiting ? 'Waiting for the office' : ROLE_WORD[role] || 'Signing in…') : 'Book an aircon job';
+  $('#backBtn').hidden = !authOpen;
+  $('#backLabel').textContent = 'Back';
+  acct.hidden = authOpen;   // already at the door; the button would lead to itself
+
+  const badge = $('#syncBadge');
+  const unsent = queue.filter(o => o.state === 'pending').length;
+  const failed = queue.filter(o => o.state === 'failed').length;
+  // Quiet when all is well: the badge shows only when something waits or failed.
+  badge.hidden = !session || (!unsent && !failed && online);
+  badge.className = 'sync' + (failed ? ' bad' : unsent ? ' wait' : '');
+  badge.textContent = failed ? failed + ' not sent'
+    : unsent ? unsent + ' waiting' + (online ? '' : ' · offline')
+    : 'Offline';
+
+  const blocked = authOpen || waiting || off;
+  $('#authForm').hidden = !authOpen;
+  $('#waitView').hidden = authOpen || !waiting;
+  $('#offView').hidden = authOpen || !off;
+  $('#notices').hidden = authOpen || off;   // a switched-off account has nothing to act on
+  $('#publicView').hidden = blocked || staff;
+  $('#adminView').hidden = blocked || role !== 'admin';
+  $('#techView').hidden = blocked || role !== 'technician';
+  $('#customerView').hidden = role !== 'customer';
+  $('#registerNudge').hidden = !!session;
+  $('#lede').textContent = role === 'customer'
+    ? 'Book another job below. We ring you back to agree a time.'
+    : 'No account needed. We ring you back to agree a time.';
+  const nav = !blocked && role === 'admin' && !!db;
+  $('#bottomNav').hidden = !nav;
+  if (nav) drawNav();
+  document.body.classList.toggle('has-nav', nav);
+  $('#fab').hidden = !nav || !['inbox', 'jobs', 'people', 'checkups'].includes(ui.tab);
+
+  drawNotices();
+  if (session && db && !blocked){
+    if (role === 'admin') keepTyping($('#adminBody'), drawAdmin);
+    if (role === 'technician') keepTyping($('#techBody'), drawTech);
+    if (role === 'customer') keepTyping($('#myBookings'), drawMine);
+  }
+  drawPanels();
+  showPubBar();
+  if (session && db) hydratePhotos();
+}
+
+/* A redraw never touches a field somebody is typing into, and typed values survive
+   (docs/rules/ui.md). Inputs that must survive carry data-k. */
+const deferred = new Set();
+function keepTyping(box, draw){
+  const a = document.activeElement;
+  if (a && box.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)){ deferred.add(box); return; }
+  const kept = {};
+  $$('[data-k]', box).forEach(el => { kept[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value; });
+  const open = $$('details[data-k]', box).filter(d => d.open).map(d => d.dataset.k);
+  box.innerHTML = draw();
+  $$('[data-k]', box).forEach(el => {
+    if (!(el.dataset.k in kept)) return;
+    if (el.tagName === 'DETAILS') return;
+    if (el.type === 'checkbox') el.checked = kept[el.dataset.k]; else el.value = kept[el.dataset.k];
+  });
+  open.forEach(k => { const d = $(`details[data-k="${CSS.escape(k)}"]`, box); if (d) d.open = true; });
+}
+document.addEventListener('focusout', () => setTimeout(() => {
+  if (!deferred.size) return;
+  const a = document.activeElement;
+  for (const box of [...deferred]) if (!(a && box.contains(a))){ deferred.delete(box); render(); }
+}, 0));
+
+function drawNotices(){
+  const box = $('#notices');
+  const failed = queue.filter(o => o.state === 'failed');
+  box.innerHTML =
+    failed.map(o => `<div class="card notice bad"><p><b>Not sent:</b> ${esc(o.label)}</p>
+      <p class="meta">${esc(o.error)}</p>
+      <div class="actions"><button type="button" class="b" data-act="retry" data-id="${esc(o.op_id)}">Try again</button>
+      <button type="button" class="b danger" data-act="discard" data-id="${esc(o.op_id)}">Throw it away</button></div></div>`).join('') +
+    notices.map(n => `<div class="card notice ${n.bad ? 'bad' : ''}"><p>${esc(n.text)}</p>
+      <div class="actions"><button type="button" class="b" data-act="dismiss" data-id="${esc(n.id)}">OK</button></div></div>`).join('');
+}
+
+/* ---------------------------------------------------------------- the office and the technicians
+   SukiRun's shape (D:\Order Run\app_template.html), decided 2026-09-26 (docs/scope.md):
+   compact rows; a tap opens a screen ON TOP with Back. Never a dropdown that unrolls a whole
+   form inside the list, never a giant button. Phone first — this becomes an Android app. */
+
+/* The owner's price list (12): one price per service per aircon type. Admins only — a
+   technician and a customer never receive a price. */
+const UNIT_TYPES = ['Window', 'Split', 'Floor-mounted', 'Cassette'];
+const TYPE_PIC = {Window: 'ac-window', Split: 'ac-split', 'Floor-mounted': 'ac-floor', Cassette: 'ac-cassette'};
+const svcRows = () => (db && db.services) || [];
+const svcLabel = k => { const r = svcRows().find(x => x.key === k); return r ? r.label : (serviceLabels[k] || k); };
+const activeServiceKeys = () => svcRows().length ? svcRows().filter(x => x.active).map(x => x.key) : Object.keys(serviceLabels);
+function priceFor(services, type, count){
+  if (!type || !services || !services.length) return null;
+  let sum = 0;
+  for (const k of new Set(services)){
+    const r = svcRows().find(x => x.key === k), p = r && r.prices ? r.prices[type] : null;
+    if (p == null) return null;
+    sum += Number(p);
+  }
+  return Math.round(sum * (Number(count) || 1) * 100) / 100;
+}
+const priceWords = (services, type, count) => {
+  const p = priceFor(services, type, count);
+  return p != null ? peso(p) : !type ? 'Needs the aircon type' : 'A service has no ' + type + ' price yet';
+};
+const peso0 = n => '₱' + Number(n).toLocaleString('en-PH', {maximumFractionDigits: 2});
+const svcList = arr => (arr || []).map(svcLabel).join(', ');
+const unsentFor = id => queue.some(o => o.touches.includes(id));
+const unsentPill = id => unsentFor(id) ? ' <span class="pill unsent">not sent</span>' : '';
+const custOf = id => db.customers[id];
+const jobCust = j => j.customer || custOf(j.customer_id) || {};
+const jobsOf = cid => Object.values(db.jobs).filter(j => j.customer_id === cid);
+const personName = uid => { const t = db.team[uid]; return t ? (t.display_name || (t.email || '').split('@')[0]) : null; };
+/* No assignment: a job is the shop's. What is kept is who pressed the last status. */
+const whoPressed = j => !j.status_by ? null : j.status_by === session.uid ? 'you'
+  : (j.status_by_name || personName(j.status_by) || 'someone');
+const shortDate = ymd => ymd ? new Date(ymd + 'T00:00:00').toLocaleDateString('en-PH', {day: 'numeric', month: 'short'}) : '';
+const peso = n => '₱' + Number(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const aircon = x => [x.unit_type ? x.unit_type + (x.unit_count > 1 ? ' × ' + x.unit_count : '') : '',
+                     x.unit_brand, x.unit_model].filter(Boolean).join(' · ');
+/* − 1 + : how many aircons, 1 to 20 (14). */
+const countStepper = n => `<div class="stepper count">
+    <button type="button" class="b" data-act="pcount" data-v="-1" aria-label="One less" ${n <= 1 ? 'disabled' : ''}>−</button>
+    <b>${n}</b>
+    <button type="button" class="b" data-act="pcount" data-v="1" aria-label="One more" ${n >= 20 ? 'disabled' : ''}>+</button></div>`;
+const place = c => [c.address, c.landmark].filter(Boolean).join(' — ');
+const initials = s => String(s || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
+const pill = (cls, text) => `<span class="pill ${esc(cls)}">${esc(text)}</span>`;
+const statusPill = s => pill(s, STATUS_LABEL[s] || s);
+const ROLE_NAME = {admin: 'Admin', technician: 'Technician', customer: 'Customer', disabled: 'Switched off'};
+const rolePill = r => pill('role-' + r, ROLE_NAME[r] || r);
+/* A label and a value, one line each. Empty values draw nothing. */
+const kv = (k, v) => v ? `<div class="kv"><span>${esc(k)}</span><div>${v}</div></div>` : '';
+const empty = t => `<div class="empty-state">${esc(t)}</div>`;
+/* SukiRun's tab strip: small pills with a count, the chosen one filled in. */
+const chips = (act, items, current) => `<div class="tabbar">${items.map(([k, t, n]) =>
+  `<button type="button" class="tab-btn${current === k ? ' active' : ''}" data-act="${act}" data-v="${esc(k)}">${esc(t)}${n ? ' (' + n + ')' : ''}</button>`).join('')}</div>`;
+function callBtn(n){ return digits(n).length >= 7 ? `<a class="b" href="tel:${esc(digits(n))}">📞 Call</a>` : ''; }
+function mapBtn(c){
+  if (!c || !(c.address || c.lat != null) || c.address === '(removed)') return '';
+  const q = c.lat != null && c.lng != null ? c.lat + ',' + c.lng
+          : [c.address, c.landmark, 'Bacolod'].filter(Boolean).join(', ');
+  return `<a class="b" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}">🗺️ Map</a>`;
+}
+function menuRow(kind, id, icon, title, sub, cls){
+  return `<button type="button" class="menu-row ${cls || ''}" data-act="open" data-kind="${kind}" data-id="${esc(id || '')}">
+    <span class="menu-ico">${icon}</span><span class="menu-main"><span class="menu-title">${esc(title)}</span>${sub ? `<span class="menu-sub">${esc(sub)}</span>` : ''}</span><span class="menu-chev">›</span></button>`;
+}
+
+/* Calendar days as plain YYYY-MM-DD in UTC arithmetic — local midnight slips a day in
+   Bacolod (UTC+8), measured 2026-09-26. */
+const addDays = (ymd, n) => { const d = new Date(ymd + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+function addMonths(ymd, n){
+  const d = new Date(ymd + 'T00:00:00Z'), day = d.getUTCDate();
+  d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, last));
+  return d.toISOString().slice(0, 10);
+}
+function daysAgo(ymd){
+  const n = Math.round((new Date(manilaDate(0) + 'T00:00:00Z') - new Date(ymd + 'T00:00:00Z')) / 864e5);
+  return n < 1 ? 'today' : n < 45 ? n + ' day' + (n === 1 ? '' : 's') + ' ago' : Math.round(n / 30.4) + ' months ago';
+}
+const timeAgo = iso => {
+  if (!iso) return 'never';
+  const m = (Date.now() - new Date(iso)) / 60000;
+  return m < 2 ? 'just now' : m < 60 ? Math.round(m) + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago'
+    : m < 2880 ? 'yesterday' : new Date(iso).toLocaleDateString('en-PH', {day: 'numeric', month: 'short'});
+};
+const byTime = (a, b) => ((a.scheduled_on || '9999') + (a.slot || 'z')).localeCompare((b.scheduled_on || '9999') + (b.slot || 'z'));
+const byDoneDesc = (a, b) => (a.done_at || '') < (b.done_at || '') ? 1 : -1;
+
+/* ---------------------------------------------------------------- ⓘ: the explanations
+   Decided 2026-09-26: explanations do not sit on the screen taking room. A small ⓘ opens
+   them in a little box with OK — not a whole screen. */
+const INFO = {
+  inbox: ['Inbox', 'Bookings customers made on the page. Accept one to make them a customer, then make the job. A call you take yourself goes through “+ Book a job” instead.'],
+  jobs: ['Jobs', 'The schedule. Every technician sees every job that has a day — there is no assigning. The job remembers who pressed Start and Done.'],
+  people: ['Customers', 'Everyone the shop has worked for. Tap one for their history, or to book them again.'],
+  checkups: ['Check-ups', () => { const m = checkupMonths(), w = m + ' month' + (m === 1 ? '' : 's');
+    return 'Customers whose last finished job was ' + w + ' ago or more, with nothing booked. Ring them. “Not now” hides them for another ' + w + '. Change the gap in ⚙️ Settings.'; }],
+  team: ['Users', 'Anyone can make an account, and starts as a customer. Tap a person to make them a technician or an admin. “Says they work here” means they ticked that box when they signed up — it gives them nothing on its own.'],
+  admin: ['Admin', 'Only admins see this tab. The price list and the services the booking page offers, the receipt, and the three numbers the app was built to answer.'],
+  showprices: ['Show prices', 'Off: customers never see a price; you tell them on the call.\n\nOn: once a customer picks the aircon type and the services, the booking page shows the total from this list. If a service has no price for their aircon type, it says you will tell them on the call.'],
+  service: ['A service', 'A price for each aircon type. Leave a type empty if the shop does not do it for that type — a booking with that type then shows no price until you set one. Customers never see prices.'],
+  editbooking: ['After the call', 'Change what they need and which aircon they have. The price shows as soon as every service has a price for that aircon type. It is frozen onto the job when you make it.'],
+  receipt: ['Receipt', 'A sample layout for now — say what to change. Amounts come from the price list; if the job’s price was changed by hand, the difference shows as an adjustment.'],
+  tech: ['Jobs', 'Every job on the schedule. Anyone can take it — the job remembers who pressed Start and Done. Ring the office to change a day or cancel.'],
+  schedule: ['Schedule', 'Every technician sees the job as soon as it has a day.'],
+  book: ['Book a job', 'For a call you took yourself. It goes straight on the job list — there is no booking to accept.'],
+  cancel: ['Cancel', 'Every technician stops seeing it as work. Undo on the job puts it back.'],
+  roles: ['What they can do', 'Technician — sees every job on the schedule, marks jobs started and done.\n\nAdmin — everything: bookings, jobs, customers, team and settings.\n\nCustomer — books on the page and sees their own bookings. Nothing else.'],
+  gap: ['Check-up gap', 'Counted from a customer’s last finished job. Every admin phone uses the same number.'],
+  reset: ['Take the office’s copy', 'Throws away everything on this phone that has not been sent, and takes the office’s copy again. Nothing else ever overwrites what you did here.'],
+};
+const infoBtn = k => `<button type="button" class="info-btn" data-act="info" data-v="${k}" aria-label="What is this?">i</button>`;
+function showInfo(k){
+  const it = INFO[k]; if (!it) return;
+  $('#infoTitle').textContent = it[0];
+  $('#infoText').textContent = typeof it[1] === 'function' ? it[1]() : it[1];
+  $('#infoBox').hidden = false;
+  $('#infoOk').focus();
+}
+const hideInfo = () => { $('#infoBox').hidden = true; };
+
+/* ---------------------------------------------------------------- the aircons: a cart (15)
+   Decided 2026-09-27 (docs/scope.md), Suki's Store Visit: tap an aircon type, a small window
+   asks what that aircon needs, and it joins a list — "Window #1 — Repair, Installation".
+   The SAME cart on the public page and in the office's Book a job and Edit: one set of
+   functions, two places the list lives — 'pub' on the page, 'panel' on the open screen. */
+let pubUnits = [];
+let unitEd = null;   // the aircon being added or changed: {cart, index, unit}
+const ico = (name, cls) => `<img class="ico${cls ? ' ' + cls : ''}" src="icons/${name}.png" alt="" aria-hidden="true">`;
+/* A row made before the list existed still has one: n copies of its one aircon. */
+function unitsOf(x){
+  if (x && Array.isArray(x.units) && x.units.length) return x.units;
+  if (!x || !(x.services || []).length) return [];
+  const out = [];
+  for (let i = 0; i < Math.max(1, x.unit_count || 1); i++)
+    out.push({type: x.unit_type && x.unit_type !== 'Mixed' ? x.unit_type : null, services: [...x.services],
+              brand: x.unit_brand || null, model: x.unit_model || null});
+  return out;
+}
+/* "Window #1", "Window #2", "Split #1". */
+function unitNames(units){
+  const seen = {};
+  return units.map(u => { const t = u.type || 'Aircon'; seen[t] = (seen[t] || 0) + 1; return t + ' #' + seen[t]; });
+}
+const unitsLine = units => {
+  const n = {};
+  units.forEach(u => { const t = u.type || 'Aircon'; n[t] = (n[t] || 0) + 1; });
+  return Object.entries(n).map(([t, k]) => t + (k > 1 ? ' ×' + k : '')).join(' · ');
+};
+const unionServices = units => [...new Set(units.flatMap(u => u.services))];
+/* A price lookup, (service, type) → number or null. The page has one only while the owner
+   shows prices; the office always has its list; a technician has none. */
+const officePrice = (k, t) => { const r = svcRows().find(x => x.key === k); return r && r.prices && r.prices[t] != null ? Number(r.prices[t]) : null; };
+const pagePrice = () => Object.values(pubPrices).some(Boolean)
+  ? (k, t) => (pubPrices[k] && pubPrices[k][t] != null ? Number(pubPrices[k][t]) : null) : null;
+function unitPrice(u, pf){
+  if (!pf || !u.type) return null;
+  let sum = 0;
+  for (const k of u.services){ const p = pf(k, u.type); if (p == null) return null; sum += p; }
+  return sum;
+}
+/* A half-known total is never shown as if it were the total. */
+function unitsPrice(units, pf){
+  if (!pf || !units.length) return null;
+  let sum = 0;
+  for (const u of units){ const p = unitPrice(u, pf); if (p == null) return null; sum += p; }
+  return Math.round(sum * 100) / 100;
+}
+function cartUnits(cart){
+  if (cart === 'pub') return pubUnits;
+  const p = topPanel();
+  return p ? (p.units || (p.units = [])) : [];
+}
+const cartPrice = cart => cart === 'pub' ? pagePrice() : officePrice;
+const cartKeys = cart => cart === 'pub' ? Object.keys(serviceLabels) : activeServiceKeys();
+function afterCart(cart){ if (cart === 'pub') drawPubCart(); else render(); if (!$('#cartSheet').hidden) drawCartSheet(); }
+
+/* The four types, two by two. */
+function typeGrid(cart){
+  return `<div class="type-grid">${UNIT_TYPES.map(t =>
+    `<button type="button" class="type-btn" data-act="unitnew" data-cart="${cart}" data-v="${t}"><img class="type-pic" src="icons/${TYPE_PIC[t]}.png" alt="" aria-hidden="true"><span class="type-name"><span class="type-plus" aria-hidden="true">+</span>${t}</span></button>`).join('')}</div>`;
+}
+/* The list: each aircon, its services (× takes one off), its price when prices may show. */
+function cartHtml(cart, units, opts){
+  opts = opts || {};
+  const editable = !!opts.editable, pf = 'pf' in opts ? opts.pf : cartPrice(cart);
+  if (!units.length) return editable ? '<div class="cart-empty">No aircon yet — tap its type above.</div>' : '';
+  const names = unitNames(units), total = unitsPrice(units, pf);
+  return `<div class="cart-list">${units.map((u, i) => {
+      const up = unitPrice(u, pf), meta = [u.brand, u.model].filter(Boolean).join(' · ');
+      return `<div class="cart-unit">
+        <div class="cart-unit-head">
+          ${editable ? `<button type="button" class="cart-unit-name" data-act="unitedit" data-cart="${cart}" data-i="${i}">${esc(names[i])} <span aria-hidden="true">›</span></button>`
+                     : `<span class="cart-unit-name">${esc(names[i])}</span>`}
+          <span class="cart-unit-meta">${esc(meta)}</span>
+          ${pf ? `<span class="cart-unit-price">${up != null ? esc(peso0(up)) : '₱ ?'}</span>` : ''}
+          ${editable ? `<button type="button" class="cart-x" data-act="unitdel" data-cart="${cart}" data-i="${i}" aria-label="Remove ${esc(names[i])}">🗑</button>` : ''}
+        </div>
+        <div class="cart-svcs">${u.services.map(k => {
+          const p = pf && u.type ? pf(k, u.type) : null;
+          return `<span class="svc-chip">${esc(svcLabel(k))}${p != null ? ` <i>${esc(peso0(p))}</i>` : ''}${editable
+            ? `<button type="button" data-act="unitsvcx" data-cart="${cart}" data-i="${i}" data-v="${esc(k)}" aria-label="Take off ${esc(svcLabel(k))}">×</button>` : ''}</span>`; }).join('')}</div>
+      </div>`; }).join('')}
+    ${pf ? `<div class="cart-total"><span>Total</span><b>${total != null ? esc(peso(total)) : esc(opts.missing || 'We will tell you on the call')}</b></div>` : ''}
+  </div>`;
+}
+/* The small window: "Window #2" — what it needs, brand and model if they know them. */
+function drawUnitSheet(){
+  const box = $('#unitSheet');
+  if (!unitEd){ box.hidden = true; lockBody(); return; }
+  const u = unitEd.unit, units = cartUnits(unitEd.cart), pf = cartPrice(unitEd.cart);
+  const name = unitEd.index >= 0 ? unitNames(units)[unitEd.index] : u.type + ' #' + (units.filter(x => x.type === u.type).length + 1);
+  const keys = cartKeys(unitEd.cart);
+  box.hidden = false;
+  $('.unit-card', box).innerHTML = `
+    <div class="unit-head"><div class="unit-title">${esc(name)}</div>
+      <button type="button" class="cart-x" data-act="unitclose" aria-label="Close">✕</button></div>
+    <div class="fieldlabel">What services?</div>
+    <div class="tabbar tight">${keys.map(k => {
+      const p = pf ? pf(k, u.type) : null;
+      return `<button type="button" class="tab-btn${u.services.includes(k) ? ' active' : ''}" data-act="unitsvc" data-v="${esc(k)}">${esc(svcLabel(k))}${p != null ? ' · ' + esc(peso0(p)) : ''}</button>`; }).join('')
+      || '<p class="hint">The service list has not loaded — this needs signal.</p>'}</div>
+    <div class="row">
+      <label>Brand <span class="opt">— optional</span><input data-ued="brand" maxlength="60" value="${esc(u.brand || '')}" placeholder="Carrier, Koppel…" autocomplete="off"></label>
+      <label>Model <span class="opt">— optional</span><input data-ued="model" maxlength="60" value="${esc(u.model || '')}" autocomplete="off"></label>
+    </div>
+    <div class="unit-msg" id="unitMsg" aria-live="polite"></div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="unitdone">Finish</button></div>`;
+  lockBody();
+}
+/* The page's summary, the bar, and the sheet the bar opens. */
+function drawPubCart(){
+  const has = pubUnits.length > 0, pf = pagePrice();
+  $('#pubTypes').innerHTML = typeGrid('pub');
+  $('#pubCart').innerHTML = has ? `<div class="fieldlabel">Service summary</div>${cartHtml('pub', pubUnits, {editable: true})}` : '';
+  $('#barCount').textContent = pubUnits.length;
+  $('#barWord').textContent = pubUnits.length === 1 ? 'AIRCON' : 'AIRCONS';
+  const total = unitsPrice(pubUnits, pf);
+  $('#barTotal').textContent = pf ? (total != null ? peso(total) : 'Price on the call') : pubUnits.length + ' aircon' + (pubUnits.length === 1 ? '' : 's');
+  showPubBar();
+}
+function showPubBar(){
+  const on = pubUnits.length > 0 && !$('#publicView').hidden && !$('#bookForm').hidden && !authOpen;
+  $('#pubBar').hidden = !on;
+  document.body.classList.toggle('has-bar', on);
+}
+function drawCartSheet(){
+  const box = $('#cartSheet');
+  box.hidden = false;
+  $('.unit-card', box).innerHTML = `
+    <div class="unit-head"><div class="unit-title">🛒 Service summary</div>
+      <span class="muted">${pubUnits.length} aircon${pubUnits.length === 1 ? '' : 's'}</span>
+      <button type="button" class="cart-x" data-act="cartclose" aria-label="Close">✕</button></div>
+    ${pubUnits.length ? cartHtml('pub', pubUnits, {editable: true}) : '<div class="cart-empty">No aircon yet — tap its type on the form.</div>'}
+    <div class="stack">
+      <button type="button" class="b primary wide" data-act="pubsend" ${pubUnits.length ? '' : 'disabled'}>Send the booking</button>
+      <button type="button" class="b wide" data-act="cartclose">Keep adding</button>
+    </div>`;
+  lockBody();
+}
+function lockBody(){
+  const open = (typeof stack !== 'undefined' && stack.length > 0) || !$('#unitSheet').hidden || !$('#cartSheet').hidden || !$('#mapSheet').hidden;
+  document.body.classList.toggle('locked', open);
+}
+
+/* ---------------------------------------------------------------- Full status (15)
+   Suki's Full status, everywhere: where it is, what is on it, and every step with who and
+   when. Read live from the server (full_status), so it needs signal — and says so. */
+const STEP_NAMES = ['Booked', 'Accepted', 'Scheduled', 'In progress', 'Done'];
+function stepAt(d){
+  const b = d.booking, j = d.job;
+  if (j){ return j.status === 'done' ? 4 : j.status === 'in_progress' ? 3 : j.scheduled_on ? 2 : 1; }
+  return b && b.status === 'accepted' ? 1 : 0;
+}
+function headline(d){
+  const b = d.booking, j = d.job;
+  if (j && j.status === 'cancelled') return ['bad', 'Cancelled' + (j.cancel_reason ? ' — ' + j.cancel_reason : '')];
+  if (!j && b && b.status === 'rejected') return ['bad', 'Rejected' + (b.reject_reason ? ' — ' + b.reject_reason : '')];
+  if (!j && b && b.status === 'cancelled') return ['bad', 'Cancelled'];
+  if (j && j.status === 'done') return ['good', 'Done' + (j.done_at ? ' — ' + new Date(j.done_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short'}) : '')];
+  if (j && j.status === 'in_progress') return ['', 'The technician is on it'];
+  if (j && j.scheduled_on) return ['', 'Scheduled for ' + niceDate(j.scheduled_on) + ', ' + slotWord(j.slot)];
+  if (b && b.status === 'accepted') return ['', 'Accepted — the office will set the day'];
+  return ['', 'Waiting for the office to ring'];
+}
+/* "Waiting for the office to ring" and the five bars. Picture only — nothing to tap. */
+function stepsHtml(d){
+  const [tone, head] = headline(d), at = stepAt(d);
+  return `<div class="status-now ${tone}">${esc(head)}</div>
+    ${tone === 'bad' ? '' : `<div class="steps">${STEP_NAMES.map((n, i) => `<span class="step${i <= at ? ' on' : ''}"><span class="step-bar"></span><span class="step-name">${n}</span></span>`).join('')}</div>`}`;
+}
+function unitDiff(before, after){
+  const a = before || [], z = after || [], na = unitNames(a), nz = unitNames(z), out = [];
+  const words = u => (u.services || []).map(svcLabel).join(', ');
+  for (let i = 0; i < Math.max(a.length, z.length); i++){
+    if (!a[i]) out.push(['+ ' + nz[i], '', words(z[i])]);
+    else if (!z[i]) out.push(['− ' + na[i], words(a[i]), '']);
+    else if (JSON.stringify(a[i]) !== JSON.stringify(z[i])) out.push([nz[i], na[i] !== nz[i] ? na[i] + ': ' + words(a[i]) : words(a[i]), words(z[i])]);
+  }
+  return out;
+}
+/* [icon, what, changes, who] — who is drawn bold after the words, as on Suki's screen. */
+function eventRow(e){
+  const by = e.by || '', ch = e.changes || {}, before = ch.before || {}, after = ch.after || {};
+  const lab = s => STATUS_LABEL[s] || s || '—';
+  switch (e.kind){
+    case 'booked':    return ['📝', by ? 'Booked' : 'Booked on the page', null, by];
+    case 'seen':      return ['👀', 'Seen by the office', null, by !== 'the office' ? by : ''];
+    case 'accepted':  return ['✅', 'Accepted', null, by];
+    case 'rejected':  return ['⛔', 'Rejected', null, by];
+    case 'cancelled': return ['🚫', 'Cancelled', null, by];
+    case 'claimed':   return ['🔗', 'Added to the customer’s account'];
+    case 'edited':    return ['✏️', 'Edited', unitDiff(ch.before, ch.after), by];
+    case 'job_created': return ['🛠️', 'Job made', null, by];
+    case 'job_schedule': return ['📅', 'Scheduled', [['Day',
+      before.scheduled_on ? niceDate(before.scheduled_on) + ' ' + String(before.slot || '').toUpperCase() : '',
+      after.scheduled_on ? niceDate(after.scheduled_on) + ' ' + String(after.slot || '').toUpperCase() : '']], by];
+    case 'job_status': {
+      const to = after.status;
+      const icon = {in_progress: '▶️', done: '🏁', cancelled: '🚫'}[to] || '•';
+      const what = {in_progress: 'Started', done: 'Marked done', cancelled: 'Job cancelled'}[to] || 'Now ' + lab(to);
+      return [icon, what, [['Status', lab(before.status), lab(to)]], by];
+    }
+    case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
+    case 'job_price': return ['₱', 'Price', [['Price', before.price != null ? peso(before.price) : 'not set', after.price != null ? peso(after.price) : 'not set']], by];
+  }
+  return ['•', e.kind, null, by];
+}
+function timelineHtml(events){
+  if (!events.length) return '<div class="cart-empty">Nothing has happened to it yet.</div>';
+  const stamp = iso => new Date(iso).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+  return `<div class="tl">${events.map(e => { const [icon, what, changes, who] = eventRow(e);
+    return `<div class="tl-row"><span class="tl-icon">${icon}</span><span class="tl-body">
+      <span class="tl-what">${esc(what)}${who ? ` · <b>${esc(who)}</b>` : ''}</span><span class="tl-when">${esc(stamp(e.at))}</span>
+      ${(changes || []).length ? `<span class="tl-changes">${changes.map(([w, from, to]) =>
+        `<span class="tl-change">${esc(w)}${from ? `: <s>${esc(from)}</s>` : ''}${to ? ` → <b>${esc(to)}</b>` : ''}</span>`).join('')}</span>` : ''}
+    </span></div>`; }).join('')}</div>`;
+}
+function panelStatus(p){
+  if (!p.data && !p.loading && !p.error){
+    p.loading = true;
+    rpc('full_status', p.kind === 'jobstatus' ? {p_job: p.id} : {p_booking: p.id})
+      .then(d => { p.data = d; }).catch(e => { p.error = e instanceof Unreachable ? 'Full status needs signal. Try again when you are online.' : e.message; })
+      .finally(() => { p.loading = false; render(); });
+  }
+  if (p.loading && !p.data) return {title: 'Full status', body: '<div class="cart-empty">Loading…</div>'};
+  if (p.error) return {title: 'Full status', body: empty(p.error)};
+  const d = p.data, b = d.booking, j = d.job, who = d.customer || b || {};
+  const units = (j && j.units && j.units.length ? j.units : b && b.units) || [];
+  const pf = d.role === 'admin' ? officePrice : d.role === 'customer' && d.show_price ? pagePrice() : null;
+  const [tone, head] = headline(d), stopped = tone === 'bad';
+  // The job's own price is the one agreed; without it, the list's prices add up per aircon.
+  const total = j && j.price != null && d.show_price ? Number(j.price) : null;
+  const rowPf = total != null ? null : pf, names = unitNames(units);
+  const sum = total != null ? total : unitsPrice(units, rowPf);
+  const wanted = b ? niceDate(b.preferred_on) + ', ' + slotWord(b.slot) : '';
+  const notes = (j && j.notes) || (b && b.notes) || '';
+  const rows = units.map((u, i) => {
+    const up = unitPrice(u, rowPf), meta = [u.brand, u.model].filter(Boolean).join(' ');
+    return `<div class="st-row"><span>${esc(names[i])}${meta ? ` <span class="muted">${esc(meta)}</span>` : ''}
+      <br><span class="muted">${esc(u.services.map(svcLabel).join(', '))}</span></span>
+      <span>${rowPf ? esc(up != null ? peso(up) : '₱ ?') : ''}</span></div>`; }).join('');
+  p.copy = [(b ? b.ref + ' — ' : '') + head, [who.full_name, who.contact].filter(Boolean).join(' · '),
+    who.address, who.landmark ? 'Landmark: ' + who.landmark : '', wanted ? 'Wanted: ' + wanted : '',
+    ...units.map((u, i) => names[i] + ': ' + u.services.map(svcLabel).join(', ')),
+    sum != null ? 'Total: ' + peso(sum) : '', notes ? 'Notes: ' + notes : ''].filter(Boolean).join('\n');
+  return {title: who.full_name || 'Full status', sub: (b ? b.ref + ' · ' : '') + head, body: `
+    ${stepsHtml(d)}
+    <div class="card">
+      <div class="st-label">🏠 The customer</div>
+      <div class="st-loc"><b>${esc(who.full_name || '')}</b>
+        ${who.contact ? `<br>${esc(who.contact)}` : ''}
+        ${who.address ? `<br>${esc(who.address)}` : ''}
+        ${who.landmark ? `<br><span class="muted">Landmark: ${esc(who.landmark)}</span>` : ''}
+        ${wanted ? `<br><span class="muted">Wanted: ${esc(wanted)}</span>` : ''}</div>
+      ${d.role !== 'customer' ? `<div class="actions">${callBtn(who.contact)}${mapBtn(who)}</div>` : ''}
+    </div>
+    <div class="st-label">🛒 What was booked</div>
+    <div class="st-sum">
+      ${rows || '<div class="st-row"><span class="muted">No aircons on this one.</span></div>'}
+      ${total != null || rowPf ? `<div class="st-total"><span>Total</span>${sum != null ? `<span>${esc(peso(sum))}</span>`
+        : '<span class="muted">Not every service has a price yet</span>'}</div>` : ''}
+    </div>
+    ${notes ? `<div class="st-label">📝 Notes</div><p class="hint" style="font-size:13.5px;margin:0">${esc(notes)}</p>` : ''}
+    <div class="st-label">🕒 What has happened to it</div>
+    ${timelineHtml(d.events || [])}
+    <button type="button" class="b st-copy" data-act="copystatus">📋 Copy summary</button>
+    ${d.role === 'customer' && !stopped ? `<p class="hint">Something on it wrong? Ring the shop${SHOP_PHONE ? ' — ' + esc(SHOP_PHONE) : ''}.</p>` : ''}`};
+}
+
+/* ---------------------------------------------------------------- the check-up call list
+   Decided 2026-09-26: a customer is due N months after their last Done job; N is the
+   owner's, in Settings. Somebody with work already booked is not due — the call would be
+   about a job they already have. "Not now" hides them until checkup_snooze. */
+const checkupMonths = () => Math.min(24, Math.max(1, parseInt(((db && db.settings) || {}).checkup_months, 10) || 1));
+function checkupOf(c){
+  const js = jobsOf(c.id);
+  const last = js.filter(j => j.status === 'done' && j.done_at).sort(byDoneDesc)[0];
+  if (!last) return null;
+  return {last, due: addMonths(manilaDay(last.done_at), checkupMonths()),
+          busy: js.some(j => ['booked', 'scheduled', 'in_progress'].includes(j.status))};
+}
+function checkups(){
+  const today = manilaDate(0), out = [];
+  for (const c of Object.values(db.customers)){
+    if (c.full_name === '(removed)') continue;
+    const k = checkupOf(c);
+    if (!k || k.busy || k.due > today) continue;
+    if (c.checkup_snooze && c.checkup_snooze > today) continue;
+    out.push({c, ...k});
+  }
+  return out.sort((a, b) => a.due.localeCompare(b.due));
+}
+
+/* ---------------------------------------------------------------- admin */
+const newBookings = () => Object.values(db.bookings).filter(b => b.status === 'new');
+
+/* SukiRun's stat strip: four numbers, each one a way in. One row, even on a phone. */
+function drawStats(){
+  const jobs = Object.values(db.jobs), today = manilaDate(0);
+  const stats = [
+    [newBookings().length, 'New', 'inbox', 'new'],
+    [jobs.filter(j => j.scheduled_on === today && j.status !== 'cancelled').length, 'Today', 'jobs', 'today'],
+    [jobs.filter(j => !j.scheduled_on && !['done', 'cancelled'].includes(j.status)).length, 'No date', 'jobs', 'unplanned'],
+    [checkups().length, 'Check-ups', 'checkups', ''],
+  ];
+  return `<div class="stat-strip">${stats.map(([n, label, tab, v]) =>
+    `<button type="button" class="stat-card" data-act="gostat" data-tab="${tab}" data-v="${v}">
+       <div class="stat-num">${n}</div><div class="stat-label">${esc(label)}</div></button>`).join('')}</div>`;
+}
+
+/* Guile's Flaticon icons (2026-09-27). The coloured ones stay coloured in dark mode — made
+   one colour they turn into blobs (measured); the one-colour customer icon turns white. */
+const ADMIN_TABS = [['inbox', 'inbox', 'Inbox'], ['jobs', 'jobs', 'Jobs'], ['people', 'customers', 'Customers'],
+                    ['checkups', 'checkups', 'Check-ups'], ['team', 'users', 'Users'], ['admin', 'admin', 'Admin']];
+const ADMIN_HEAD = {inbox: 'Inbox', jobs: 'Jobs', people: 'Customers', checkups: 'Check-ups', team: 'Users', admin: 'Admin'};
+const pageHead = (title, k) => `<div class="page-head"><h1>${esc(title)}</h1>${infoBtn(k)}</div>`;
+function drawNav(){
+  const n = {inbox: newBookings().length, checkups: checkups().length};
+  $('#bottomNav').innerHTML = ADMIN_TABS.map(([k, icon, label]) =>
+    `<button type="button" data-act="tab" data-v="${k}" aria-current="${ui.tab === k}">
+       <span class="nav-ico">${ico(k === 'inbox' && n.inbox ? 'inbox-new' : icon, icon === 'customers' ? 'mono' : '')}${n[k] ? `<span class="nav-badge">${n[k]}</span>` : ''}</span><span class="nav-word">${label}</span></button>`).join('');
+}
+function drawAdmin(){
+  if (ui.tab === 'numbers') ui.tab = 'admin';
+  if (!ADMIN_HEAD[ui.tab]) ui.tab = 'inbox';
+  const body = {inbox: drawInbox, jobs: drawJobs, people: drawPeople, checkups: drawCheckups, team: drawTeam, admin: drawAdminTab}[ui.tab]();
+  return pageHead(ADMIN_HEAD[ui.tab], ui.tab) +
+    (['inbox', 'jobs'].includes(ui.tab) ? drawStats() : '') + body;
+}
+
+/* ---------------------------------------------------------------- inbox */
+function drawInbox(){
+  const all = Object.values(db.bookings);
+  const jobbed = new Set(Object.values(db.jobs).map(j => j.booking_id).filter(Boolean));
+  const lists = {
+    new: all.filter(b => b.status === 'new'),
+    accepted: all.filter(b => b.status === 'accepted' && !jobbed.has(b.id)),
+    closed: all.filter(b => ['rejected', 'cancelled'].includes(b.status)),
+  };
+  const v = lists[ui.inbox] ? ui.inbox : 'new';
+  const rows = lists[v].sort((a, b) => a.created_at < b.created_at ? 1 : -1);
+  return chips('inbox', [['new', 'New', lists.new.length], ['accepted', 'Needs a job', lists.accepted.length],
+                         ['closed', 'Rejected / cancelled']], v) +
+    (rows.length ? `<div class="list">${rows.map(bookingRow).join('')}</div>`
+                 : empty(v === 'new' ? 'No new bookings.' : 'Nothing here.'));
+}
+function bookingRow(b){
+  return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="booking" data-id="${esc(b.id)}" data-stamp="${esc(b.updated_at || '')}">
+    <div class="avatar">${esc(initials(b.full_name))}</div>
+    <div class="lrow-main">
+      <div class="lrow-title">${esc(b.full_name)}${unsentPill(b.id)}</div>
+      <div class="lrow-sub">${esc(unitsLine(unitsOf(b)))} — ${esc(svcList(b.services))}</div>
+      <div class="lrow-sub">Wants ${esc(shortDate(b.preferred_on))} ${esc((b.slot || '').toUpperCase())} · ${esc(b.address)}</div>
+    </div>
+    <div class="lrow-side">${pill(b.status, b.ref)}<span class="lrow-price">${esc(unitsPrice(unitsOf(b), officePrice) != null ? peso0(unitsPrice(unitsOf(b), officePrice)) : '₱ ?')}</span>
+      <span class="lrow-time">${esc(timeAgo(b.created_at))}</span></div>
+  </div>`;
+}
+function panelBooking(p){
+  const b = db.bookings[p.id];
+  if (!b) return {title: 'Booking', body: empty('This booking is no longer on this phone.')};
+  const same = b.contact && b.status === 'new'
+    ? Object.values(db.customers).filter(c => digits(c.contact) === digits(b.contact)) : [];
+  const job = Object.values(db.jobs).find(j => j.booking_id === b.id);
+  let acts = '';
+  if (b.status === 'new'){
+    acts = `<button type="button" class="b primary wide" data-act="accept" data-id="${esc(b.id)}">Accept — new customer</button>
+      ${same.map(c => `<button type="button" class="b wide" data-act="accept" data-id="${esc(b.id)}" data-link="${esc(c.id)}">Accept — same as ${esc(c.full_name)}</button>`).join('')}
+      <button type="button" class="b danger wide" data-act="open" data-kind="reject" data-id="${esc(b.id)}">Reject…</button>`;
+  } else if (b.status === 'accepted' && !job){
+    acts = `<button type="button" class="b primary wide" data-act="makejob" data-id="${esc(b.id)}">Make the job</button>`;
+  } else if (job){
+    acts = `<button type="button" class="b wide" data-act="open" data-kind="job" data-id="${esc(job.id)}">Open the job ›</button>`;
+  }
+  return {title: b.full_name, sub: b.ref + ' · booked ' + timeAgo(b.created_at), body: `
+    ${stepsHtml({booking: b, job})}
+    <div class="card" data-row="${esc(b.id)}" data-stamp="${esc(b.updated_at || '')}">
+      ${kv('Status', statusPill(b.status) + unsentPill(b.id))}
+      ${kv('Wants', esc(niceDate(b.preferred_on) + ', ' + slotWord(b.slot)))}
+      ${kv('Number', esc(b.contact))}
+      ${kv('Address', esc(b.address))}
+      ${kv('Landmark', esc(b.landmark || ''))}
+      ${kv('Notes', b.notes ? esc(b.notes) : '')}
+      ${kv('Why rejected', esc(b.reject_reason || ''))}
+      <div class="actions">${callBtn(b.contact)}${mapBtn(b)}</div>
+    </div>
+    <div class="sec">🛒 Aircons</div>
+    ${cartHtml('view', unitsOf(b), {pf: officePrice, missing: 'Not every service has a price yet'})}
+    <div class="menu">
+      ${['new', 'accepted'].includes(b.status) && !job ? menuRow('editbooking', b.id, '✏️', 'Aircons and services', 'Change them after the call') : ''}
+      ${menuRow('bookingstatus', b.id, ico('status'), 'Full status', 'Every step — who and when')}
+    </div>
+    ${same.length ? `<p class="hint">Same number as ${same.map(c => esc(c.full_name) + ' (' + esc(c.address) + ')').join('; ')} — accept as the same customer so their history stays in one place.</p>` : ''}
+    <div class="stack">${acts}</div>`};
+}
+function panelEditBooking(p){
+  const b = db.bookings[p.id];
+  if (!b) return {title: 'Edit', body: empty('This booking is no longer on this phone.')};
+  if (!p.units) p.units = unitsOf(b).map(u => ({...u, services: [...u.services]}));
+  return {title: 'Aircons and services', sub: b.full_name + ' · ' + b.ref, info: 'editbooking', body: `
+    <div class="fieldlabel">Add an aircon</div>
+    ${typeGrid('panel')}
+    <div class="fieldlabel">Service summary</div>
+    ${cartHtml('panel', p.units, {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}
+    <div class="stack"><button type="button" class="b primary wide" data-act="editbooking" data-id="${esc(b.id)}">Save</button></div>`};
+}
+function panelReject(p){
+  const b = db.bookings[p.id];
+  if (!b) return {title: 'Reject', body: empty('This booking is no longer on this phone.')};
+  return {title: 'Reject ' + b.ref, sub: b.full_name, body: `
+    <label>Why <span class="opt">— optional, for the office</span>
+      <input data-pf="why" maxlength="300" value="${esc(p.why || '')}"></label>
+    <div class="stack"><button type="button" class="b danger wide" data-act="reject" data-id="${esc(b.id)}">Reject this booking</button></div>`};
+}
+
+/* ---------------------------------------------------------------- jobs */
+function jobDayFilter(j, day){
+  const today = manilaDate(0);
+  if (day === 'today') return j.scheduled_on === today && j.status !== 'cancelled';
+  if (day === 'tomorrow') return j.scheduled_on === manilaDate(1) && j.status !== 'cancelled';
+  if (day === 'unplanned') return !j.scheduled_on && !['done', 'cancelled'].includes(j.status);
+  if (day === 'done') return j.status === 'done';
+  if (day === 'cancelled') return j.status === 'cancelled';
+  return j.scheduled_on >= today && !['done', 'cancelled'].includes(j.status);   // upcoming
+}
+function jobList(day){
+  const rows = Object.values(db.jobs).filter(j => jobDayFilter(j, day));
+  return ['done', 'cancelled'].includes(day) ? rows.sort(byDoneDesc).slice(0, 60) : rows.sort(byTime);
+}
+function drawJobs(){
+  const days = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
+                ['done', 'Done'], ['cancelled', 'Cancelled']];
+  if (!days.some(d => d[0] === ui.day)) ui.day = 'today';
+  const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
+  const rows = jobList(ui.day);
+  return chips('day', days.map(([k, t]) => [k, t, n(k)]), ui.day) +
+    (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
+}
+function jobRow(j){
+  const c = jobCust(j);
+  return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+    <div class="lrow-when">${j.scheduled_on
+      ? `<b>${esc((j.slot || '').toUpperCase())}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
+      : '<b>—</b><span>no date</span>'}</div>
+    <div class="lrow-main">
+      <div class="lrow-title">${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
+      <div class="lrow-sub">${esc(svcList(j.services))}</div>
+      <div class="lrow-sub">${esc(place(c))}</div>
+    </div>
+    <div class="lrow-side">${statusPill(j.status)}</div>
+  </div>`;
+}
+function panelJob(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Job', body: empty('This job is no longer on this phone.')};
+  const tech = db.role === 'technician';
+  const c = jobCust(j), open = !['done', 'cancelled'].includes(j.status);
+  const acts = [];
+  if (['booked', 'scheduled'].includes(j.status) && (!tech || j.scheduled_on))
+    acts.push(`<button type="button" class="b primary" data-act="status" data-to="in_progress" data-id="${esc(j.id)}">▶ Start the job</button>`);
+  if (open && (!tech || j.scheduled_on))
+    acts.push(`<button type="button" class="b primary" data-act="status" data-to="done" data-id="${esc(j.id)}">✓ Mark done</button>`);
+  const canUndo = tech ? ['in_progress', 'done'].includes(j.status) : ['in_progress', 'done', 'cancelled'].includes(j.status);
+  if (canUndo) acts.push(`<button type="button" class="b" data-act="undo" data-id="${esc(j.id)}">↶ Undo last step</button>`);
+  const by = whoPressed(j);
+  const cid = j.customer_id, photo = c.photo_path;
+  const menu = tech ? '' : `<div class="menu">
+      ${open ? menuRow('schedule', j.id, '📅', j.scheduled_on ? 'Change the time' : 'Schedule it',
+                       j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet') : ''}
+      ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
+      ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'Customer’s history', c.full_name) : ''}
+      ${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print on A4')}
+      ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
+    </div>`;
+  return {title: c.full_name || 'Job', sub: svcList(j.services), body: `
+    <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+      ${photo ? housePhoto(photo) : ''}
+      ${kv('Status', statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
+      ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
+      ${kv('Number', esc(c.contact || ''))}
+      ${kv('Address', esc(c.address || ''))}
+      ${kv('Landmark', esc(c.landmark || ''))}
+      ${kv('Notes', j.notes ? esc(j.notes) : '')}
+      ${tech ? '' : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
+      ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
+      ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
+      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}</div>
+    </div>
+    ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
+    <div class="sec">🛒 Aircons</div>
+    ${cartHtml('view', unitsOf(j), {pf: tech ? null : officePrice, missing: 'Not every service has a price yet'})}
+    <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'Every step — who and when')}</div>
+    ${menu}`};
+}
+function panelSchedule(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Schedule', body: empty('This job is no longer on this phone.')};
+  const d = p.date != null ? p.date : (j.scheduled_on || '');
+  const s = p.slot || j.slot || 'am';
+  const today = manilaDate(0), quick = [0, 1, 2, 3].map(n => addDays(today, n));
+  const word = j.scheduled_on ? 'Change the time' : 'Schedule it';
+  return {title: word, sub: jobCust(j).full_name, body: `
+    <div class="fieldlabel">Day</div>
+    <div class="tabbar tight">${quick.map((q, i) => `<button type="button" class="tab-btn${d === q ? ' active' : ''}" data-act="pset" data-f="date" data-v="${q}">${
+      i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : esc(niceDate(q))}</button>`).join('')}</div>
+    <input type="date" data-pf="date" value="${esc(d)}" min="${today}" aria-label="Another day">
+    <div class="fieldlabel">Time</div>
+    <div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
+      `<button type="button" class="${s === k ? 'active' : ''}" data-act="pset" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="schedule" data-id="${esc(j.id)}">${word}</button></div>`, info: 'schedule'};
+}
+function panelPrice(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Price', body: empty('This job is no longer on this phone.')};
+  return {title: j.price != null ? 'Change the price' : 'Set the price', sub: jobCust(j).full_name, body: `
+    <label>Price agreed with the customer, in pesos
+      <input data-pf="price" inputmode="decimal" placeholder="1500" value="${esc(p.price != null ? p.price : (j.price != null ? j.price : ''))}"></label>
+    <div class="stack"><button type="button" class="b primary wide" data-act="price" data-id="${esc(j.id)}">Save the price</button></div>`};
+}
+function panelCancel(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Cancel', body: empty('This job is no longer on this phone.')};
+  return {title: 'Cancel the job', sub: jobCust(j).full_name, body: `
+    <label>Why <input data-pf="why" maxlength="300" value="${esc(p.why || '')}" placeholder="Customer cancelled, no parts…"></label>
+    <div class="stack"><button type="button" class="b danger wide" data-act="cancel" data-id="${esc(j.id)}">Cancel this job</button></div>`, info: 'cancel'};
+}
+
+/* ---------------------------------------------------------------- customers */
+function custList(){
+  const q = (ui.search || '').toLowerCase().trim();
+  return Object.values(db.customers)
+    .filter(c => !q || (c.full_name + ' ' + c.contact + ' ' + c.address).toLowerCase().includes(q)
+                    || (digits(q) && digits(c.contact).includes(digits(q))))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+function custListHtml(){
+  const list = custList();
+  return `<p class="count">${list.length} customer${list.length === 1 ? '' : 's'}</p>` +
+    (list.length ? `<div class="list">${list.map(custRow).join('')}</div>` : empty('Nobody matches that.'));
+}
+function drawPeople(){
+  return `<input type="search" class="find" id="custSearch" placeholder="🔎 Name, number or address" value="${esc(ui.search || '')}" autocomplete="off">
+    <div id="custList">${custListHtml()}</div>
+    <div class="menu">${menuRow('tidy', '', '🧹', 'Tidy up old bookings', 'Delete old rejected and cancelled ones')}</div>`;
+}
+function custRow(c){
+  const n = jobsOf(c.id).length;
+  return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="customer" data-id="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
+    <div class="avatar">${esc(initials(c.full_name))}</div>
+    <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}${unsentPill(c.id)}</div>
+      <div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
+    <div class="lrow-side"><span class="lrow-time">${n} job${n === 1 ? '' : 's'}</span></div>
+  </div>`;
+}
+function panelCustomer(p){
+  const c = db.customers[p.id];
+  if (!c) return {title: 'Customer', body: empty('This customer is no longer on this phone.')};
+  const jobs = jobsOf(c.id).sort(byTime).reverse();
+  const bookings = Object.values(db.bookings).filter(b => b.customer_id === c.id).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
+  const k = checkupOf(c), today = manilaDate(0);
+  const snoozed = c.checkup_snooze && c.checkup_snooze > today;
+  const cu = !k ? 'After their first finished job'
+    : k.busy ? 'Not while a job is booked'
+    : snoozed ? 'Not now — until ' + niceDate(c.checkup_snooze)
+    : k.due <= today ? 'Due since ' + niceDate(k.due) : 'Due ' + niceDate(k.due);
+  const removed = c.full_name === '(removed)';
+  return {title: c.full_name, sub: c.contact, body: `
+    <div class="card" data-row="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
+      ${c.photo_path ? housePhoto(c.photo_path) : ''}
+      ${kv('Number', esc(c.contact))}
+      ${kv('Address', esc(c.address))}
+      ${kv('Landmark', esc(c.landmark || ''))}
+      ${kv('Check-up', esc(cu) + (snoozed ? ` <button type="button" class="b" data-act="putback" data-id="${esc(c.id)}">Put back</button>` : ''))}
+      ${kv('Customer since', esc(c.created_at ? new Date(c.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : ''))}
+      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${removed ? '' : photoBtn(c.id, c.photo_path)}</div>
+    </div>
+    ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>`}
+    <div class="sec">Jobs</div>
+    ${jobs.length ? `<div class="list">${jobs.map(jobRow).join('')}</div>` : empty('No jobs yet.')}
+    <div class="sec">Bookings from the page</div>
+    ${bookings.length ? `<div class="list">${bookings.map(b => `<div class="lrow flat">
+        <div class="lrow-main"><div class="lrow-title">${esc(svcList(b.services))}</div>
+          <div class="lrow-sub">${esc(new Date(b.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}))}</div></div>
+        <div class="lrow-side">${pill(b.status, b.ref)}</div></div>`).join('')}</div>` : empty('None.')}
+    ${removed ? '' : `<div class="menu">${menuRow('forget', c.id, '🗑️', 'Remove this customer’s details', 'When they ask. Cannot be undone.', 'is-danger')}</div>`}`};
+}
+function panelForget(p){
+  const c = db.customers[p.id];
+  if (!c) return {title: 'Remove details', body: empty('This customer is no longer on this phone.')};
+  return {title: 'Remove details', sub: c.full_name, body: `
+    <p class="hint" style="font-size:14px">Name, number, address, landmark, pin and notes are wiped from
+      the customer, their bookings and their jobs. The jobs stay, with no name, so the numbers
+      still count them. <b>This cannot be undone.</b></p>
+    <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, remove ${esc(c.full_name)}’s details</label>
+    <div class="stack"><button type="button" class="b danger wide" data-act="forget" data-id="${esc(c.id)}">Remove the details</button></div>`};
+}
+function panelTidy(p){
+  return {title: 'Tidy up old bookings', body: `
+    <p class="hint" style="font-size:14px">Deletes rejected and cancelled bookings older than the number
+      of days you choose. Accepted bookings stay — they are customers' history.</p>
+    <label>Older than (days) <input data-pf="days" inputmode="numeric" value="${esc(p.days != null ? p.days : '365')}"></label>
+    <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, delete them</label>
+    <div class="stack"><button type="button" class="b danger wide" data-act="tidy">Delete old rejected and cancelled bookings</button></div>`};
+}
+
+/* ---------------------------------------------------------------- check-ups */
+function drawCheckups(){
+  const list = checkups(), today = manilaDate(0);
+  const hidden = Object.values(db.customers).filter(c => c.checkup_snooze && c.checkup_snooze > today).length;
+  return (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.')) +
+    (hidden ? `<p class="count" style="margin-top:10px">${hidden} put off with “Not now”.</p>` : '');
+}
+function checkupRow({c, last}){
+  const doneDay = manilaDay(last.done_at);
+  return `<div class="lrow col" data-row="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
+    <div class="lrow-top" role="button" tabindex="0" data-act="open" data-kind="customer" data-id="${esc(c.id)}">
+      <div class="avatar">${esc(initials(c.full_name))}</div>
+      <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}${unsentPill(c.id)}</div>
+        <div class="lrow-sub">Last job ${esc(shortDate(doneDay))} · ${esc(daysAgo(doneDay))}</div>
+        <div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
+    </div>
+    <div class="actions">${callBtn(c.contact)}
+      <button type="button" class="b primary" data-act="book" data-id="${esc(c.id)}" data-svc="checkup">Book it</button>
+      <button type="button" class="b" data-act="later" data-id="${esc(c.id)}">Not now</button></div>
+  </div>`;
+}
+
+/* ---------------------------------------------------------------- the owner books a call */
+function openBook(customerId, services){
+  // Booking a customer on file again starts from the aircons on their last job — the same
+  // units, with the service asked for (a check-up) when there is one. Every line can go.
+  let units = [];
+  if (customerId){
+    const last = jobsOf(customerId).sort(byTime).pop();
+    if (last) units = unitsOf(last).filter(u => u.type)
+      .map(u => ({type: u.type, services: services && services.length ? [...services] : [...u.services], brand: u.brand || null, model: u.model || null}));
+  }
+  openPanel({kind: 'book', mode: customerId ? 'existing' : 'new', customer_id: customerId || '', q: '',
+    full_name: '', contact: '', address: '', landmark: '', units, notes: '', date: '', slot: 'am'});
+}
+function bookMatches(p){
+  const q = (p.q || '').toLowerCase().trim();
+  const list = Object.values(db.customers).filter(c => c.full_name !== '(removed)')
+    .filter(c => !q || c.full_name.toLowerCase().includes(q) || (digits(q) && digits(c.contact).includes(digits(q))))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name)).slice(0, 8);
+  return list.map(c => `<div class="lrow" role="button" tabindex="0" data-act="pset" data-f="customer_id" data-v="${esc(c.id)}">
+      <div class="avatar">${esc(initials(c.full_name))}</div>
+      <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div></div>`).join('')
+    || empty(q ? 'Nobody matches that.' : 'No customers yet.');
+}
+function bookSame(p){
+  if (digits(p.contact).length < 7) return '';
+  const same = Object.values(db.customers).filter(c => digits(c.contact) === digits(p.contact));
+  return same.map(c => `<div class="inline-note">Same number as <b>${esc(c.full_name)}</b> (${esc(c.address)}).
+    <button type="button" class="b" data-act="pickcust" data-v="${esc(c.id)}">Use them</button></div>`).join('');
+}
+function panelBook(p){
+  const c = p.mode === 'existing' && p.customer_id ? db.customers[p.customer_id] : null;
+  const today = manilaDate(0);
+  const who = p.mode === 'existing'
+    ? (c ? `<div class="lrow flat"><div class="avatar">${esc(initials(c.full_name))}</div>
+          <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
+          <button type="button" class="b" data-act="pset" data-f="customer_id" data-v="">Change</button></div>`
+         : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name or number" value="${esc(p.q)}" autocomplete="off">
+            <div class="list" id="bookMatches">${bookMatches(p)}</div>`)
+    : `<label>Name <input data-pf="full_name" maxlength="120" value="${esc(p.full_name)}" autocomplete="off"></label>
+       <label>Contact number <input data-pf="contact" inputmode="tel" maxlength="30" value="${esc(p.contact)}" placeholder="09XX XXX XXXX" autocomplete="off"></label>
+       <div id="bookSame">${bookSame(p)}</div>
+       <label>Address <input data-pf="address" maxlength="300" value="${esc(p.address)}" placeholder="Street, barangay, city" autocomplete="off"></label>
+       <label>Landmark <span class="opt">— how the technician finds it</span>
+         <input data-pf="landmark" maxlength="200" value="${esc(p.landmark)}" placeholder="beside the chapel, blue gate…" autocomplete="off"></label>`;
+  return {title: 'Book a job', sub: 'A call you took yourself', body: `
+    <div class="segment">${[['new', 'New customer'], ['existing', 'Customer files']].map(([k, t]) =>
+      `<button type="button" class="${p.mode === k ? 'active' : ''}" data-act="pset" data-f="mode" data-v="${k}">${t}</button>`).join('')}</div>
+    ${who}
+    <div class="fieldlabel">Aircon type</div>
+    ${typeGrid('panel')}
+    ${p.units.length ? '<div class="fieldlabel">Service summary</div>' : ''}
+    ${cartHtml('panel', p.units, {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}
+    <label>Notes <span class="opt">— optional</span><textarea data-pf="notes" maxlength="1000" placeholder="What is wrong, the price you agreed…">${esc(p.notes)}</textarea></label>
+    <div class="fieldlabel">When <span class="opt">— or leave it for later</span></div>
+    <div class="tabbar tight">${[['', 'Not yet'], [today, 'Today'], [addDays(today, 1), 'Tomorrow'], [addDays(today, 2), niceDate(addDays(today, 2))]].map(([v, t]) =>
+      `<button type="button" class="tab-btn${p.date === v ? ' active' : ''}" data-act="pset" data-f="date" data-v="${v}">${esc(t)}</button>`).join('')}</div>
+    <input type="date" data-pf="date" value="${esc(p.date)}" min="${today}" aria-label="Another day">
+    ${p.date ? `<div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
+      `<button type="button" class="${p.slot === k ? 'active' : ''}" data-act="pset" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>` : ''}
+    <div class="stack"><button type="button" class="b primary wide" data-act="savebook">Book it</button></div>`, info: 'book'};
+}
+
+/* ---------------------------------------------------------------- team (SukiRun's Admin → Team) */
+function teamList(){
+  const order = {admin: 1, technician: 2, customer: 3};
+  const q = (ui.teamSearch || '').toLowerCase().trim();
+  return Object.values(db.team)
+    .filter(t => !q || ((t.display_name || '') + ' ' + (t.email || '') + ' ' + t.role).toLowerCase().includes(q))
+    .sort((a, b) =>
+      // somebody waiting for a role goes to the top, so a new name is not a mystery
+      ((b.signup_kind === 'employee' && b.role === 'customer') - (a.signup_kind === 'employee' && a.role === 'customer'))
+      || (order[a.role] - order[b.role]) || (a.display_name || a.email || '').localeCompare(b.display_name || b.email || ''));
+}
+function teamListHtml(){
+  const rows = teamList();
+  return rows.length ? `<div class="list">${rows.map(teamRow).join('')}</div>` : empty('Nobody matches that.');
+}
+function drawTeam(){
+  const all = Object.values(db.team);
+  const n = r => all.filter(t => t.role === r).length;
+  return `<div class="stat-strip three">
+      <div class="stat-card"><div class="stat-num">${n('admin')}</div><div class="stat-label">Admins</div></div>
+      <div class="stat-card"><div class="stat-num">${n('technician')}</div><div class="stat-label">Technicians</div></div>
+      <div class="stat-card"><div class="stat-num">${n('customer')}</div><div class="stat-label">Customers</div></div>
+    </div>
+    ${all.length > 6 ? `<input type="search" class="find" id="teamSearch" placeholder="🔎 Search ${all.length} people" value="${esc(ui.teamSearch || '')}" autocomplete="off">` : ''}
+    <div id="teamList">${teamListHtml()}</div>`;
+}
+function teamRow(t){
+  const off = t.active === false, waits = t.signup_kind === 'employee' && t.role === 'customer';
+  return `<div class="lrow${off ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="member" data-id="${esc(t.id)}" data-stamp="${esc(t.updated_at || '')}">
+    <div class="avatar">${esc(initials(t.display_name || t.email))}</div>
+    <div class="lrow-main"><div class="lrow-title">${esc(t.display_name || (t.email || '').split('@')[0])}${unsentPill(t.id)}</div>
+      <div class="lrow-sub">${esc(t.email || '')}</div></div>
+    <div class="lrow-side">${rolePill(t.role)}
+      ${t.id === session.uid ? '<span class="lrow-time">you</span>' : ''}
+      ${waits ? '<span class="tag">says they work here</span>' : ''}
+      ${off ? '<span class="tag bad">switched off</span>' : ''}</div>
+  </div>`;
+}
+const ROLE_CHOICES = [
+  ['technician', 'Technician', 'Sees every job on the schedule. Marks jobs started and done.'],
+  ['admin', 'Admin', 'Everything: bookings, jobs, customers, team and settings.'],
+  ['customer', 'Customer', 'Books on the page and sees their own bookings. Nothing else.'],
+];
+function panelMember(p){
+  const t = db.team[p.id];
+  if (!t) return {title: 'Person', body: empty('This person is no longer on this phone.')};
+  const me = t.id === session.uid, off = t.active === false;
+  const role = p.role || t.role, name = p.name != null ? p.name : (t.display_name || '');
+  return {title: t.display_name || (t.email || '').split('@')[0], sub: t.email, body: `
+    <div class="card" data-row="${esc(t.id)}" data-stamp="${esc(t.updated_at || '')}">
+      ${kv('Role', rolePill(t.role) + unsentPill(t.id) + (off ? ' <span class="tag bad">switched off</span>' : ''))}
+      ${kv('Signed up as', t.signup_kind === 'employee' ? 'Says they work here' : 'Customer')}
+      ${kv('Joined', esc(t.created_at ? new Date(t.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : '—'))}
+      ${kv('Last seen', esc(timeAgo(t.last_sign_in_at)))}
+    </div>
+    ${me ? '<p class="hint">This is you. Another admin changes your role; nobody can switch themselves off.</p>' : `
+    <div class="fieldlabel">What they can do ${infoBtn('roles')}</div>
+    <div class="stack tight">${ROLE_CHOICES.map(([k, title]) =>
+      `<button type="button" class="role-choice${role === k ? ' active' : ''}" data-act="pset" data-f="role" data-v="${k}">
+         <span class="role-dot"></span><span class="role-choice-main"><span class="menu-title">${title}</span></span></button>`).join('')}</div>
+    <label>Name <input data-pf="name" maxlength="60" value="${esc(name)}"></label>
+    <div class="stack">
+      <button type="button" class="b primary wide" data-act="setrole" data-id="${esc(t.id)}">Save changes</button>
+      <button type="button" class="b ${off ? '' : 'danger'} wide" data-act="setactive" data-id="${esc(t.id)}" data-to="${off ? 'on' : 'off'}">${off ? 'Switch on' : 'Switch off'}</button>
+    </div>`}`};
+}
+
+/* ---------------------------------------------------------------- the Admin tab */
+function drawAdminTab(){
+  const secs = [['services', 'Services & prices'], ['receipt', 'Receipt'], ['numbers', 'Numbers']];
+  const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
+  return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
+    ({services: drawServices, receipt: drawReceiptSample, numbers: drawNumbers})[v]();
+}
+const TYPE_SHORT = {Window: 'Window', Split: 'Split', 'Floor-mounted': 'Floor', Cassette: 'Cassette'};
+function drawServices(){
+  const rows = svcRows(), on = !!((db.settings || {}).show_prices);
+  const sw = `<div class="card row-between">
+      <div class="menu-title">Show prices on the booking page ${infoBtn('showprices')}</div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
+        `<button type="button" class="${on === v ? 'active' : ''}" data-act="showprices" data-v="${v}">${t}</button>`).join('')}</div>
+    </div>`;
+  const line = (s, ts) => ts.map(t => TYPE_SHORT[t] + ' ' + (s.prices && s.prices[t] != null ? peso0(s.prices[t]) : '—')).join(' · ');
+  return sw + (rows.length ? `<div class="list">${rows.map(s => `<div class="lrow${s.active ? '' : ' off'}" role="button" tabindex="0" data-act="open" data-kind="service" data-id="${esc(s.key)}">
+      <div class="lrow-main"><div class="lrow-title">${esc(s.label)}${unsentPill('svc:' + s.key)}</div>
+        <div class="lrow-sub">${esc(line(s, ['Window', 'Split']))}</div>
+        <div class="lrow-sub">${esc(line(s, ['Floor-mounted', 'Cassette']))}</div></div>
+      <div class="lrow-side">${s.active ? pill('scheduled', 'On the page') : pill('off', 'Hidden')}</div></div>`).join('')}</div>`
+    : empty('The service list has not come down yet.')) +
+    `<div class="stack"><button type="button" class="b primary wide" data-act="open" data-kind="service" data-id="">+ Add a service</button></div>`;
+}
+function panelService(p){
+  const r = p.id ? svcRows().find(x => x.key === p.id) : null;
+  if (p.label == null){
+    p.label = r ? r.label : ''; p.active = r && !r.active ? '0' : '1';
+    UNIT_TYPES.forEach(t => { p['price_' + t] = r && r.prices && r.prices[t] != null ? String(r.prices[t]) : ''; });
+  }
+  return {title: r ? r.label : 'New service', sub: r ? 'Service' : 'Shows on the booking page', info: 'service', body: `
+    <label>Name <input data-pf="label" maxlength="60" value="${esc(p.label)}" placeholder="Freon recharge"></label>
+    <div class="fieldlabel">Price by aircon type</div>
+    <div class="price-grid">${UNIT_TYPES.map(t => `<label class="price-cell"><span>${t}</span>
+      <span class="peso-in"><i>₱</i><input data-pf="price_${t}" inputmode="decimal" value="${esc(p['price_' + t])}" placeholder="—"></span></label>`).join('')}</div>
+    <div class="fieldlabel">On the booking page</div>
+    <div class="segment">${[['1', 'Shown'], ['0', 'Hidden']].map(([k, t]) =>
+      `<button type="button" class="${p.active === k ? 'active' : ''}" data-act="pset" data-f="active" data-v="${k}">${t}</button>`).join('')}</div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="saveservice">Save</button></div>`};
+}
+
+/* ---------------------------------------------------------------- the receipt
+   A sample for Guile to mark up (2026-09-26): A4, from any printer's menu. The lines come
+   from the price list; the total is the job's own frozen price, and any difference between
+   the two is shown as an adjustment rather than hidden. */
+function receiptOf(j){
+  const c = jobCust(j), b = j.booking_id && db.bookings[j.booking_id];
+  const units = unitsOf(j), names = unitNames(units);
+  const lines = units.flatMap((u, i) => u.services.map(k => ({unit: names[i], label: svcLabel(k), type: u.type || '—',
+    amount: u.type ? officePrice(k, u.type) : null})));
+  const sum = lines.every(l => l.amount != null) ? lines.reduce((a, l) => a + l.amount, 0) : null;
+  const total = j.price != null ? Number(j.price) : sum;
+  return {no: b ? b.ref : 'J-' + String(j.id).slice(0, 6).toUpperCase(),
+    date: manilaDay(j.done_at) || manilaDate(0), customer: c, job: j, lines, total,
+    adjust: total != null && sum != null && Math.abs(total - sum) >= 0.01 ? Math.round((total - sum) * 100) / 100 : null};
+}
+function receiptSample(){
+  const ks = activeServiceKeys().slice(0, 2);
+  const lines = [['Split #1', ks.slice(0, 1)], ['Split #2', ks]].flatMap(([unit, keys]) =>
+    keys.map(k => ({unit, label: svcLabel(k), type: 'Split', amount: officePrice(k, 'Split') ?? 1000})));
+  const sum = lines.reduce((a, l) => a + l.amount, 0);
+  return {no: 'WA-0000', date: manilaDate(0), sample: true,
+    customer: {full_name: 'ZZ Sample Customer', address: 'ZZ Street 1, ZZ Barangay, Bacolod City', contact: '0999 000 0000', landmark: 'ZZ blue gate'},
+    job: {units: [{type: 'Split', services: ks.slice(0, 1), brand: 'ZZ Brand', model: 'ZZ-1'}, {type: 'Split', services: ks, brand: 'ZZ Brand', model: 'ZZ-2'}],
+          unit_type: 'Split', unit_count: 2, unit_brand: 'ZZ Brand', unit_model: 'ZZ-1', scheduled_on: manilaDate(0), slot: 'am', notes: 'Sample only.'},
+    lines, total: sum - 100, adjust: -100};
+}
+function receiptHtml(r){
+  const d = ymd => new Date(ymd + 'T00:00:00').toLocaleDateString('en-PH', {day: 'numeric', month: 'long', year: 'numeric'});
+  const money = n => n == null ? '—' : peso(n);
+  const j = r.job, c = r.customer;
+  return `<div class="receipt">
+    ${r.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
+    <div class="rc-head">
+      <div><img class="rc-logo" src="icons/logo-light.png" alt="${esc(SHOP_NAME)}">
+        <div class="rc-small">Aircon cleaning · repair · installation<br>Bacolod City · ${esc(SHOP_PHONE)}</div></div>
+      <div class="rc-right"><div class="rc-title">SERVICE RECEIPT</div>
+        <div class="rc-small">No. <b>${esc(r.no)}</b><br>Date: ${esc(d(r.date))}</div></div>
+    </div>
+    <div class="rc-parties">
+      <div><div class="rc-label">Customer</div><b>${esc(c.full_name || '')}</b><br>${esc(c.address || '')}${c.landmark ? '<br>' + esc(c.landmark) : ''}<br>${esc(c.contact || '')}</div>
+      <div><div class="rc-label">Aircons</div>${esc(unitsLine(unitsOf(j)) || '—')}
+        <div class="rc-label" style="margin-top:10px">Service date</div>${esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : '—')}</div>
+    </div>
+    <table class="rc-table">
+      <thead><tr><th style="width:7%">#</th><th style="width:26%">Aircon</th><th>Service</th><th class="rc-num" style="width:22%">Amount</th></tr></thead>
+      <tbody>${r.lines.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.unit || l.type)}</td><td>${esc(l.label)}</td><td class="rc-num">${esc(money(l.amount))}</td></tr>`).join('')}</tbody>
+      <tfoot>
+        ${r.adjust != null ? `<tr><td></td><td colspan="2" class="rc-num">Adjustment</td><td class="rc-num">${esc(money(r.adjust))}</td></tr>` : ''}
+        <tr class="rc-total"><td></td><td colspan="2" class="rc-num">TOTAL</td><td class="rc-num">${esc(money(r.total))}</td></tr>
+      </tfoot>
+    </table>
+    ${j.notes ? `<div class="rc-notes"><span class="rc-label">Notes</span> ${esc(j.notes)}</div>` : ''}
+    <div class="rc-sign"><div>Received by (customer)</div><div>Technician</div></div>
+    <div class="rc-foot">Thank you for choosing ${esc(SHOP_NAME)}.<br>This is not an official receipt.</div>
+  </div>`;
+}
+function drawReceiptSample(){
+  return `<div class="receipt-wrap">${receiptHtml(receiptSample())}</div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="print" data-id="">🖨️ Print the sample (A4)</button></div>`;
+}
+function panelReceipt(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Receipt', body: empty('This job is no longer on this phone.')};
+  return {title: 'Receipt', sub: jobCust(j).full_name, info: 'receipt', body: `
+    <div class="receipt-wrap">${receiptHtml(receiptOf(j))}</div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="print" data-id="${esc(j.id)}">🖨️ Print (A4)</button></div>`};
+}
+
+/* ---------------------------------------------------------------- house photos (12)
+   Taken by staff, never by a stranger (the trust boundary has no write for anon). One per
+   customer: a new one replaces the old, and the old file is deleted once the server has
+   the new path. The phone shrinks it to 1000 px before sending. Downloads go four at a
+   time and are asked for again when dropped (docs/rules/pictures.md). */
+const photoBusy = new Set();
+function housePhoto(path){ return `<img class="house-photo" data-house="${esc(path)}" alt="The house">`; }
+function photoBtn(cid, has){
+  return photoBusy.has(cid) ? `<span class="b" aria-busy="true">Sending photo…</span>`
+    : `<label class="b">📷 ${has ? 'New photo' : 'House photo'}<input type="file" accept="image/*" data-photo-for="${esc(cid)}" hidden></label>`;
+}
+function fitPhoto(file, maxSide){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob(b => b ? resolve(b) : reject(new Error('could not shrink the photo')), 'image/jpeg', 0.72);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('that file is not a picture')); };
+    img.src = url;
+  });
+}
+async function hashOf(blob){
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+  return [...h.slice(0, 16)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+async function storage(method, path, body){
+  const t = await token();
+  return fetch(SUPABASE_URL + '/storage/v1/object/' + (method === 'GET' ? 'authenticated/' : '') + 'house-photos/' + path, {
+    method, headers: {apikey: SUPABASE_KEY, Authorization: 'Bearer ' + t, ...(body ? {'Content-Type': 'image/jpeg'} : {})}, body});
+}
+const photoUrls = {}, photoWant = new Set(), photoQueue = [];
+let photoActive = 0;
+async function keepPhoto(path, blob){
+  try { const c = await caches.open('ws-photos'); await c.put('photo/' + path, new Response(blob, {headers: {'Content-Type': 'image/jpeg'}})); } catch (e) {}
+  if (!photoUrls[path]) photoUrls[path] = URL.createObjectURL(blob);
+}
+function hydratePhotos(){
+  $$('img[data-house]').forEach(img => {
+    const p = img.dataset.house;
+    if (photoUrls[p]){ if (img.getAttribute('src') !== photoUrls[p]) img.src = photoUrls[p]; }
+    else if (!photoWant.has(p)){ photoWant.add(p); photoQueue.push({p, tries: 0}); pumpPhotos(); }
+  });
+}
+function pumpPhotos(){
+  while (photoActive < 4 && photoQueue.length){
+    const job = photoQueue.shift();
+    photoActive++;
+    (async () => {
+      try {
+        let blob = null;
+        try { const c = await caches.open('ws-photos'); const m = await c.match('photo/' + job.p); if (m) blob = await m.blob(); } catch (e) {}
+        if (!blob){
+          const r = await storage('GET', job.p);
+          if (!r.ok) throw new Error('http ' + r.status);
+          blob = await r.blob();
+        }
+        await keepPhoto(job.p, blob);
+        hydratePhotos();
+      } catch (e) {
+        if (++job.tries < 4) setTimeout(() => { photoQueue.push(job); pumpPhotos(); }, 1000 * 2 ** job.tries);
+        else photoWant.delete(job.p);   // asked for again the next time a screen shows it
+      } finally { photoActive--; pumpPhotos(); }
+    })();
+  }
+}
+function deletePhotoFile(path){ if (path) storage('DELETE', path).catch(() => {}); }
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-photo-for]')) return;
+  const cid = inp.dataset.photoFor, file = inp.files && inp.files[0];
+  inp.value = '';
+  if (!file || !session) return;
+  const cust = db.customers[cid] || (Object.values(db.jobs).find(j => j.customer_id === cid) || {}).customer || {};
+  const old = cust.photo_path || null;
+  photoBusy.add(cid); render();
+  try {
+    const blob = await fitPhoto(file, 1000);
+    const path = 'house/' + cid + '/' + await hashOf(blob) + '.jpg';
+    const r = await storage('POST', path, blob);
+    if (!r.ok && r.status !== 409 && r.status !== 400){
+      const b = await r.json().catch(() => ({}));
+      throw new Error(b.message || b.error || 'HTTP ' + r.status);
+    }
+    if (r.status === 400){ const b = await r.json().catch(() => ({})); if (!/exist/i.test(b.message || b.error || '')) throw new Error(b.message || b.error || 'HTTP 400'); }
+    await keepPhoto(path, blob);
+    const op = write('set_customer_photo', {p_customer: cid, p_path: path}, 'House photo — ' + (cust.full_name || ''), [cid], db => {
+      if (db.customers[cid]) db.customers[cid].photo_path = path;
+      Object.values(db.jobs).forEach(j => { if (j.customer_id === cid && j.customer) j.customer.photo_path = path; });
+    });
+    if (old && old !== path){ op.cleanup_photo = old; saveLocal(); }
+  } catch (err) {
+    notice(err instanceof TypeError ? 'The photo needs signal to send. Nothing was saved — try again when there is signal.'
+                                    : 'The photo was not saved: ' + err.message, true);
+  } finally { photoBusy.delete(cid); render(); }
+});
+
+/* ---------------------------------------------------------------- numbers */
+function drawNumbers(){
+  // The three numbers (docs/scope.md), worked out from this phone's copy.
+  const bookings = Object.values(db.bookings), jobs = Object.values(db.jobs);
+  const weekStart = ymd => addDays(ymd, -((new Date(ymd + 'T00:00:00Z').getUTCDay() + 6) % 7));
+  const thisWeek = weekStart(manilaDate(0));
+  const weeks = [];
+  for (let i = 7; i >= 0; i--) weeks.push(addDays(thisWeek, -7 * i));
+  const perWeek = weeks.map(w => [w, bookings.filter(b => weekStart(manilaDay(b.created_at)) === w).length]);
+  const since = Date.now() - 30 * 864e5;
+  const mins = bookings.filter(b => b.handled_at && new Date(b.created_at) > since)
+    .map(b => (new Date(b.handled_at) - new Date(b.created_at)) / 60000).sort((a, b) => a - b);
+  const median = mins.length ? mins[Math.floor((mins.length - 1) / 2)] : null;
+  const waiting = bookings.filter(b => b.status === 'new').length;
+  const done = jobs.filter(j => j.status === 'done' && j.done_at && new Date(j.done_at) > since && j.scheduled_on);
+  const onDay = done.filter(j => manilaDay(j.done_at) === j.scheduled_on).length;
+  const fmtMins = m => m == null ? '—' : m < 60 ? Math.round(m) + ' min' : m < 1440 ? (m / 60).toFixed(1) + ' h' : (m / 1440).toFixed(1) + ' days';
+  const max = Math.max(1, ...perWeek.map(p => p[1]));
+  return `<div class="card"><div class="sec" style="margin-top:0">1 · Bookings through the page, per week</div>
+      ${perWeek.map(([w, n]) => `<div class="bar-row">
+        <span class="bar-when">${esc(shortDate(w))}</span>
+        <span class="bar" style="width:${Math.round(n / max * 100)}%;min-width:${n ? 4 : 0}px"></span>
+        <b>${n}</b></div>`).join('')}
+      <p class="hint">Compare with the calls and Facebook messages the page is replacing.</p></div>
+    <div class="card"><div class="sec" style="margin-top:0">2 · How fast the office rings back</div>
+      <div class="num">${fmtMins(median)}</div>
+      <p class="meta">Middle time from booking to first action, last 30 days (${mins.length} booking${mins.length === 1 ? '' : 's'}). ${waiting} waiting now.</p></div>
+    <div class="card"><div class="sec" style="margin-top:0">3 · Jobs done on the day promised</div>
+      <div class="num">${done.length ? Math.round(onDay / done.length * 100) + '%' : '—'}</div>
+      <p class="meta">${onDay} of ${done.length} done jobs in the last 30 days.</p></div>`;
+}
+
+/* ---------------------------------------------------------------- technician
+   No assignment (2026-09-26): every technician sees every job on the schedule. */
+function drawTech(){
+  const days = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['all', 'Upcoming'], ['done', 'Done']];
+  const v = days.some(d => d[0] === ui.techDay) ? ui.techDay : 'today';
+  const n = k => k === 'done' ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
+  const rows = jobList(v);
+  return pageHead('Jobs', 'tech') +
+    chips('techday', days.map(([k, t]) => [k, t, n(k)]), v) +
+    (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
+}
+
+/* ---------------------------------------------------------------- customer */
+function drawMine(){
+  const mine = Object.values(db.bookings).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
+  const words = b => {
+    const j = b.job;
+    if (j && j.status === 'done') return 'Done. Thank you!';
+    if (j && j.status === 'in_progress') return 'The technician is on it.';
+    if (j && j.status === 'cancelled') return 'Cancelled by the shop.';
+    if (j && j.scheduled_on) return 'Scheduled for ' + niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) + '.';
+    return {new: 'Received. We will ring you to agree a time.', accepted: 'Accepted. We will confirm the time with you.',
+            rejected: 'We could not take this booking. Please ' + ringUs() + '.', cancelled: 'Cancelled.'}[b.status] || b.status;
+  };
+  return mine.length ? `<div class="list">${mine.map(b => `<div class="lrow col" data-row="${esc(b.id)}">
+      <div class="lrow-top"><div class="lrow-main">
+        <div class="lrow-title">${esc(unitsLine(unitsOf(b)) || svcList(b.services))}${unsentPill(b.id)}</div>
+        <div class="lrow-sub">${esc(svcList(b.services))}</div>
+        <div class="lrow-sub">${esc(words(b))}</div></div>
+        <div class="lrow-side">${pill(b.job ? b.job.status : b.status, b.ref)}</div></div>
+      <div class="actions">
+        <button type="button" class="b" data-act="open" data-kind="bookingstatus" data-id="${esc(b.id)}">${ico('status')} Full status</button>
+        ${b.status === 'new' ? `<button type="button" class="b danger" data-act="mycancel" data-id="${esc(b.id)}">Cancel this booking</button>` : ''}
+      </div>
+    </div>`).join('')}</div>` : empty('No bookings on this account yet.');
+}
+
+/* ---------------------------------------------------------------- settings (SukiRun's ⚙) */
+function applyTheme(){
+  const t = lsGet('ws_theme', 'system');
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+}
+function panelSettings(){
+  const role = (db && db.role) || (session && session.role), prof = (db && db.profile) || {};
+  const name = prof.display_name || (session.email || '').split('@')[0];
+  const theme = lsGet('ws_theme', 'system'), m = checkupMonths();
+  const unsent = queue.filter(o => o.state === 'pending').length, failed = queue.filter(o => o.state === 'failed').length;
+  const staff = role === 'admin' || role === 'technician';
+  return {title: 'Settings', sub: name, body: `
+    <div class="card me-card"><div class="avatar big">${esc(initials(name))}</div>
+      <div class="lrow-main"><div class="lrow-title">${esc(name)}</div><div class="lrow-sub">${esc(session.email || '')}</div></div>
+      ${rolePill(role)}</div>
+
+    <div class="sec">Appearance</div>
+    <div class="segment">${[['system', 'Like the phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, t]) =>
+      `<button type="button" class="${theme === k ? 'active' : ''}" data-act="theme" data-v="${k}">${t}</button>`).join('')}</div>
+
+    ${role === 'admin' ? `<div class="sec">Check-up calls</div>
+    <div class="card row-between">
+      <div class="lrow-main"><div class="menu-title">Ring customers again after ${infoBtn('gap')}</div></div>
+      <div class="stepper"><button type="button" class="b" data-act="months" data-v="-1" aria-label="One month less" ${m <= 1 ? 'disabled' : ''}>−</button>
+        <b>${m} mo</b><button type="button" class="b" data-act="months" data-v="1" aria-label="One month more" ${m >= 24 ? 'disabled' : ''}>+</button></div>
+    </div>` : ''}
+
+    <div class="sec">This phone</div>
+    <div class="card">
+      ${kv('Sending', esc(failed ? failed + ' not sent — see the red cards' : unsent ? unsent + ' waiting' + (online ? '' : ', offline') : online ? 'All sent' : 'Offline'))}
+      ${kv('Last refresh', esc(lastPullOk ? timeAgo(lastPullOk.toISOString()) : 'not yet'))}
+      <div class="actions"><button type="button" class="b" data-act="refresh">↻ Refresh now</button></div>
+    </div>
+    ${staff ? `<div class="card row-between">
+      <div class="menu-title">Something looks wrong? ${infoBtn('reset')}</div>
+      <button type="button" class="b danger" data-act="reset">Take the office's copy</button>
+    </div>` : ''}
+
+    <div class="stack"><button type="button" class="b danger wide" data-act="logout">Log out</button></div>
+    <p class="credit">Icons by <a href="https://www.flaticon.com/" target="_blank" rel="noopener">Flaticon</a></p>`};
+}
+
+/* ---------------------------------------------------------------- panels
+   A panel is a screen on top of the list, with Back. The stack lives in memory only, and
+   every panel is redrawn by render() — the same one function as every other view
+   (docs/rules/ui.md). Android's own back button closes the top one (history). */
+let stack = [];
+const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, schedule: panelSchedule, price: panelPrice,
+  editbooking: panelEditBooking, service: panelService, receipt: panelReceipt,
+  bookingstatus: panelStatus, jobstatus: panelStatus,
+  cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
+  book: panelBook, settings: panelSettings};
+const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy']);
+const topPanel = () => stack[stack.length - 1];
+function openPanel(p){
+  stack.push(p);
+  try { history.pushState({ws: stack.length}, ''); } catch (e) {}
+  render();
+}
+/* Back closes the top screen AT ONCE; the history step follows and is ignored. Leaning on
+   popstate to do the closing needed two taps whenever a history entry was left over from
+   a log-out (measured 2026-09-26). Android's own back button still closes one screen. */
+let ignorePop = 0;
+function closePanel(){
+  if (!stack.length) return;
+  stack.pop();
+  render();
+  if (history.state && history.state.ws){ ignorePop++; history.back(); }
+}
+function replacePanel(p){ stack[stack.length - 1] = p; render(); }
+window.addEventListener('popstate', () => {
+  if (ignorePop){ ignorePop--; return; }
+  if (stack.length){ stack.pop(); render(); }
+});
+function drawPanels(){
+  const host = $('#panels');
+  if (!session || !db) stack = [];
+  while (host.children.length > stack.length) host.lastElementChild.remove();
+  stack.forEach((p, i) => {
+    const key = p.kind + ':' + (p.id || '');
+    let el = host.children[i];
+    if (!el || el.dataset.key !== key){
+      const fresh = document.createElement('div');
+      fresh.innerHTML = `<div class="sheet-inner" role="dialog" aria-modal="true">
+        <header class="topbar sheet-top"><div class="topbar-left">
+          <button type="button" class="btn-back" data-act="back">&larr; Back</button>
+          <div style="min-width:0"><div class="topbar-title sheet-title"></div><div class="topbar-sub sheet-sub"></div></div>
+          <span class="sheet-info"></span>
+        </div></header><div class="sheet-body"></div></div>`;
+      if (el) host.replaceChild(fresh, el); else host.appendChild(fresh);
+      el = fresh;
+      el.dataset.key = key;
+    }
+    el.className = 'sheet' + (SMALL.has(p.kind) ? ' small' : '');
+    el.style.zIndex = String(40 + i * 2);   // on top of the one below it, by depth (ui.md)
+    let out = null;
+    keepTyping($('.sheet-body', el), () => {
+      out = (PANELS[p.kind] || (() => ({title: '', body: ''})))(p);
+      return out.body;
+    });
+    if (out){
+      $('.sheet-title', el).textContent = out.title || '';
+      $('.sheet-sub', el).textContent = out.sub || '';
+      $('.sheet-info', el).innerHTML = out.info ? infoBtn(out.info) : '';
+    }
+  });
+  lockBody();
+}
+
+/* ================================================================ what the taps do */
+function val(k){ const el = $(`[data-k="${CSS.escape(k)}"]`); return el ? (el.type === 'checkbox' ? el.checked : el.value) : null; }
+
+/* Money: REFUSE what cannot be read, never strip it into a number (docs/rules/schema.md). */
+function parsePrice(s){
+  const t = String(s || '').trim().replace(/^₱\s*/, '');
+  if (!/^(\d{1,3}(,\d{3})+|\d+)(\.\d{1,2})?$/.test(t)) return null;
+  return Number(t.replace(/,/g, ''));
+}
+function goTab(tab){ ui.tab = tab; saveUi(); stack = []; render(); window.scrollTo({top: 0}); }
+
+/* Clipboard, with the old textarea way for a browser that refuses the new one. The button
+   says what happened, then goes back — a copy that fails silently looks like it worked. */
+async function copyText(text, el){
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; }
+  catch (_){
+    const t = document.createElement('textarea');
+    t.value = text; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(t); t.select();
+    try { ok = document.execCommand('copy'); } catch (_){}
+    t.remove();
+  }
+  const was = el.textContent;
+  el.textContent = ok ? '✓ Copied' : 'Could not copy — hold and select the text instead';
+  setTimeout(() => { if (el.isConnected) el.textContent = was; }, 1800);
+}
+
+const ACTIONS = {
+  copystatus: (id, el) => { const p = topPanel(); if (p && p.copy) copyText(p.copy, el); },
+  dismiss: id => { notices = notices.filter(n => n.id !== id); saveLocal(); render(); },
+  retry: id => { const o = queue.find(o => o.op_id === id); if (o){ o.state = 'pending'; delete o.error; saveLocal(); flush(); } },
+  discard: id => { queue = queue.filter(o => o.op_id !== id); db.cursor = null; saveLocal(); flush(); },
+  reset: (id, el) => {
+    const n = queue.length;
+    if (n && !confirmTwice(el, 'Throw away ' + n + ' unsent?')) return;
+    queue = []; notices = []; db = emptyDb(); db.role = session.role; saveLocal(); flush();
+  },
+  refresh: () => flush(),
+  info: (id, el) => showInfo(el.dataset.v),
+  infook: () => hideInfo(),
+  logout: (id, el) => logOut(el),
+  theme: (id, el) => { lsSet('ws_theme', el.dataset.v); applyTheme(); render(); },
+  months: (id, el) => {
+    const n = Math.min(24, Math.max(1, checkupMonths() + Number(el.dataset.v)));
+    write('set_shop_setting', {p_key: 'checkup_months', p_value: n}, 'Check-up gap ' + n + ' month' + (n === 1 ? '' : 's'), ['checkup_months'],
+      db => { db.settings = {...(db.settings || {}), checkup_months: n}; });
+  },
+
+  tab: (id, el) => goTab(el.dataset.v),
+  adminsec: (id, el) => { ui.adminSec = el.dataset.v; saveUi(); render(); },
+  showprices: (id, el) => {
+    const on = el.dataset.v === 'true';
+    if (!!((db.settings || {}).show_prices) === on) return;
+    write('set_shop_setting', {p_key: 'show_prices', p_value: on}, on ? 'Show prices on the booking page' : 'Hide prices from the booking page',
+      ['show_prices'], db => { db.settings = {...(db.settings || {}), show_prices: on}; });
+  },
+  print: id => {
+    const j = id && db.jobs[id];
+    $('#printArea').innerHTML = receiptHtml(j ? receiptOf(j) : receiptSample());
+    window.print();
+  },
+  editbooking: id => {
+    const b = db.bookings[id], p = topPanel(); if (!b || !p) return;
+    if (!(p.units || []).length){ notice('Add at least one aircon. Nothing was changed.', true); return; }
+    const units = p.units.map(u => ({...u, services: [...u.services]}));
+    write('edit_booking', {p_booking: id, p_units: units}, 'Edit ' + b.ref, [id], () => {
+      b.units = units; b.services = unionServices(units); b.unit_count = units.length;
+      b.unit_type = [...new Set(units.map(u => u.type))].length === 1 ? units[0].type : 'Mixed';
+    });
+    closePanel();
+  },
+  saveservice: () => {
+    const p = topPanel(); if (!p || p.kind !== 'service') return;
+    const label = (p.label || '').trim();
+    if (label.length < 2){ notice('Give the service a name. Nothing was saved.', true); return; }
+    const prices = {};
+    for (const t of UNIT_TYPES){
+      const raw = (p['price_' + t] || '').trim();
+      if (!raw){ prices[t] = null; continue; }
+      const v = parsePrice(raw);
+      if (v == null){ notice('The ' + t + ' price “' + raw + '” is not a number I can read. Nothing was saved.', true); return; }
+      prices[t] = v;
+    }
+    const key = p.id || (label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'svc')
+      + '_' + Math.random().toString(16).slice(2, 6);
+    const active = p.active !== '0';
+    write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices}, 'Service — ' + label, ['svc:' + key], db => {
+      const list = db.services || (db.services = []);
+      let r = list.find(x => x.key === key);
+      if (!r){ r = {key, sort: 9999}; list.push(r); }
+      const kept = {};
+      UNIT_TYPES.forEach(t => { if (prices[t] != null) kept[t] = prices[t]; });
+      Object.assign(r, {label, active, prices: kept});
+    });
+    closePanel();
+  },
+  inbox: (id, el) => { ui.inbox = el.dataset.v; saveUi(); render(); },
+  day: (id, el) => { ui.day = el.dataset.v; saveUi(); render(); },
+  techday: (id, el) => { ui.techDay = el.dataset.v; saveUi(); render(); },
+  gostat: (id, el) => {
+    if (el.dataset.tab === 'inbox') ui.inbox = el.dataset.v || 'new';
+    if (el.dataset.tab === 'jobs') ui.day = el.dataset.v || 'today';
+    goTab(el.dataset.tab);
+  },
+
+  open: (id, el) => {
+    // The first time the office opens a new booking, Full status says who saw it (15).
+    const b = el.dataset.kind === 'booking' && db && db.role === 'admin' && db.bookings[id];
+    if (b && b.status === 'new' && !b.seen_at){
+      b.seen_at = new Date().toISOString();
+      write('mark_seen', {p_booking: id}, 'Seen ' + b.ref, [id]);
+    }
+    openPanel({kind: el.dataset.kind, id});
+  },
+  // ---- the aircon cart (15)
+  unitnew: (id, el) => {
+    const cart = el.dataset.cart;
+    if (cartUnits(cart).length >= 20){ notice('That is more than 20 aircons — please ring the shop for a bigger job.', true); return; }
+    unitEd = {cart, index: -1, unit: {type: el.dataset.v, services: [], brand: '', model: ''}};
+    drawUnitSheet();
+  },
+  unitedit: (id, el) => {
+    const u = cartUnits(el.dataset.cart)[+el.dataset.i]; if (!u) return;
+    unitEd = {cart: el.dataset.cart, index: +el.dataset.i, unit: {...u, services: [...u.services]}};
+    drawUnitSheet();
+  },
+  unitsvc: (id, el) => {
+    if (!unitEd) return;
+    const k = el.dataset.v, sv = unitEd.unit.services;
+    unitEd.unit.services = sv.includes(k) ? sv.filter(x => x !== k) : [...sv, k];
+    drawUnitSheet();
+  },
+  unitdone: () => {
+    if (!unitEd) return;
+    const u = unitEd.unit;
+    if (!u.services.length){ $('#unitMsg').textContent = 'Choose at least one service for this aircon.'; return; }
+    const clean = {type: u.type, services: [...u.services], brand: (u.brand || '').trim() || null, model: (u.model || '').trim() || null};
+    const units = cartUnits(unitEd.cart), cart = unitEd.cart;
+    if (unitEd.index >= 0) units[unitEd.index] = clean; else units.push(clean);
+    unitEd = null; drawUnitSheet(); afterCart(cart);
+  },
+  unitclose: () => { unitEd = null; drawUnitSheet(); },
+  unitdel: (id, el) => { cartUnits(el.dataset.cart).splice(+el.dataset.i, 1); afterCart(el.dataset.cart); },
+  unitsvcx: (id, el) => {
+    const units = cartUnits(el.dataset.cart), i = +el.dataset.i, u = units[i]; if (!u) return;
+    u.services = u.services.filter(k => k !== el.dataset.v);
+    if (!u.services.length) units.splice(i, 1);   // an aircon with nothing to do is not on the booking
+    afterCart(el.dataset.cart);
+  },
+  cartopen: () => drawCartSheet(),
+  cartclose: () => { $('#cartSheet').hidden = true; lockBody(); },
+  pubsend: () => { $('#cartSheet').hidden = true; lockBody(); bookForm.requestSubmit(); },
+  back: () => closePanel(),
+  settings: () => openPanel({kind: 'settings'}),
+  newbook: () => openBook(null, []),
+  book: (id, el) => openBook(id, el.dataset.svc && serviceLabels[el.dataset.svc] ? [el.dataset.svc] : []),
+  /* A choice inside a panel: kept on the panel itself, so it survives every redraw. */
+  pset: (id, el) => {
+    const p = topPanel(); if (!p) return;
+    p[el.dataset.f] = el.dataset.v;
+    if (p.kind === 'book' && el.dataset.f === 'mode') p.customer_id = '';
+    render();
+  },
+  psvc: (id, el) => {
+    const p = topPanel(); if (!p) return;
+    const k = el.dataset.v;
+    p.services = p.services.includes(k) ? p.services.filter(s => s !== k) : [...p.services, k];
+    render();
+  },
+  pcount: (id, el) => {
+    const p = topPanel(); if (!p) return;
+    p.count = Math.min(20, Math.max(1, (p.count || 1) + Number(el.dataset.v)));
+    render();
+  },
+  pickcust: (id, el) => { const p = topPanel(); if (!p) return; p.mode = 'existing'; p.customer_id = el.dataset.v; render(); },
+
+  setactive: (id, el) => {
+    const t = db.team[id]; if (!t) return;
+    const on = el.dataset.to === 'on';
+    // Switching somebody off loses them their work screens, so it asks twice; on does not.
+    if (!on && !confirmTwice(el, 'Tap again to switch off')) return;
+    write('set_active', {p_user: id, p_active: on}, (on ? 'Switch on ' : 'Switch off ') + (t.display_name || t.email || ''), [id],
+      () => { t.active = on; });
+  },
+  setrole: id => {
+    const t = db.team[id], p = topPanel(); if (!t || !p) return;
+    const role = p.role || t.role, name = (p.name != null ? p.name : (t.display_name || '')).trim();
+    write('set_role', {p_user: id, p_role: role, p_display_name: name || null}, 'Role for ' + (t.email || ''), [id], () => {
+      t.role = role; if (name) t.display_name = name;
+    });
+    closePanel();
+  },
+
+  accept: (id, el) => {
+    const b = db.bookings[id]; if (!b || b.status !== 'new') return;
+    const link = el.dataset.link || null, cid = link || uuid();
+    write('accept_booking', {p_booking: id, p_link_to: link, p_customer_id: link ? null : cid},
+      'Accept ' + b.ref, [id, cid], db => {
+        b.status = 'accepted'; b.customer_id = cid; b.handled_at = b.handled_at || new Date().toISOString();
+        if (!link) db.customers[cid] = {id: cid, full_name: b.full_name, contact: b.contact, address: b.address,
+          landmark: b.landmark, lat: b.lat, lng: b.lng, from_booking: b.id, created_at: new Date().toISOString()};
+      });
+  },
+  reject: id => {
+    const b = db.bookings[id], p = topPanel(); if (!b) return;
+    write('reject_booking', {p_booking: id, p_reason: ((p && p.why) || '').trim() || null}, 'Reject ' + b.ref, [id], () => {
+      b.status = 'rejected'; b.handled_at = b.handled_at || new Date().toISOString();
+    });
+    closePanel();
+  },
+  makejob: id => {
+    const b = db.bookings[id]; if (!b) return;
+    const jid = uuid();
+    write('create_job', {p_id: jid, p_customer: b.customer_id, p_booking: b.id}, 'New job for ' + b.full_name, [jid, id], db => {
+      db.jobs[jid] = {id: jid, customer_id: b.customer_id, booking_id: b.id, services: b.services, status: 'booked',
+        unit_type: b.unit_type, unit_brand: b.unit_brand, unit_model: b.unit_model, notes: b.notes,
+        scheduled_on: null, slot: b.slot, unit_count: b.unit_count || 1, units: unitsOf(b),
+        price: unitsPrice(unitsOf(b), officePrice), created_at: new Date().toISOString()};
+    });
+    replacePanel({kind: 'job', id: jid});
+  },
+  savebook: () => {
+    const p = topPanel(); if (!p || p.kind !== 'book') return;
+    const say = t => notice(t + ' Nothing was booked.', true);
+    let cid, name;
+    if (p.mode === 'existing'){
+      const c = db.customers[p.customer_id];
+      if (!c) return say('Choose the customer first.');
+      cid = c.id; name = c.full_name;
+    } else {
+      if (p.full_name.trim().length < 2) return say('Type the customer’s name.');
+      if (digits(p.contact).length < 7) return say('Type a contact number.');
+      if (p.address.trim().length < 4) return say('Type the address.');
+      cid = uuid(); name = p.full_name.trim();
+    }
+    if (!(p.units || []).length) return say('Add at least one aircon — tap its type.');
+    if (p.date && p.date < manilaDate(0)) return say('That day has already passed.');
+    const jid = uuid(), fresh = p.mode !== 'existing';
+    const units = p.units.map(u => ({...u, services: [...u.services]}));
+    const details = {new_customer: fresh, units, notes: p.notes.trim(), date: p.date || null, slot: p.date ? p.slot : null};
+    if (fresh) Object.assign(details, {full_name: name, contact: p.contact.trim(), address: p.address.trim(), landmark: p.landmark.trim()});
+    write('book_by_phone', {p_job: jid, p_customer: cid, p_details: details}, 'Booked by phone — ' + name, fresh ? [jid, cid] : [jid], db => {
+      const now = new Date().toISOString();
+      if (fresh) db.customers[cid] = {id: cid, full_name: name, contact: details.contact, address: details.address,
+        landmark: details.landmark || null, created_at: now};
+      db.jobs[jid] = {id: jid, customer_id: cid, services: unionServices(units), units, unit_count: units.length,
+        unit_type: [...new Set(units.map(u => u.type))].length === 1 ? units[0].type : 'Mixed',
+        unit_brand: units[0].brand, unit_model: units[0].model, notes: details.notes || null,
+        scheduled_on: details.date, slot: details.slot, status: details.date ? 'scheduled' : 'booked',
+        status_by: session.uid, price: unitsPrice(units, officePrice), created_at: now};
+    });
+    replacePanel({kind: 'job', id: jid});
+  },
+  schedule: id => {
+    const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
+    const d = p.date != null ? p.date : j.scheduled_on, s = p.slot || j.slot || 'am';
+    if (!d){ notice('Choose a day first. Nothing was changed.', true); return; }
+    write('schedule_job', {p_job: id, p_date: d, p_slot: s, p_decided_at: null},
+      'Schedule ' + (jobCust(j).full_name || 'job'), [id], () => {
+        j.scheduled_on = d; j.slot = s;
+        if (j.status === 'booked') j.status = 'scheduled';
+      });
+    closePanel();
+  },
+  price: id => {
+    const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
+    const v = parsePrice(p.price != null ? p.price : j.price);
+    if (v == null){ notice('Type the price in numbers, like 1500 or 1,500.50. Nothing was changed.', true); return; }
+    write('set_job_price', {p_job: id, p_price: v, p_decided_at: null}, 'Price ' + peso(v), [id], () => { j.price = v; });
+    closePanel();
+  },
+  status: (id, el) => {
+    const j = db.jobs[id]; if (!j) return;
+    const to = el.dataset.to;
+    write('set_job_status', {p_job: id, p_status: to, p_decided_at: null},
+      STATUS_LABEL[to] + ' — ' + (jobCust(j).full_name || 'job'), [id], () => {
+        (j._prev = j._prev || []).push(j.status);
+        j.status = to; j.status_by = session.uid; if (to === 'done') j.done_at = new Date().toISOString();
+      });
+  },
+  cancel: id => {
+    const j = db.jobs[id], p = topPanel(); if (!j) return;
+    const why = ((p && p.why) || '').trim();
+    if (!why){ notice('Say why the job is cancelled. Nothing was changed.', true); return; }
+    write('set_job_status', {p_job: id, p_status: 'cancelled', p_reason: why, p_decided_at: null},
+      'Cancel job — ' + (jobCust(j).full_name || ''), [id], () => {
+        (j._prev = j._prev || []).push(j.status); j.status = 'cancelled'; j.cancel_reason = why; j.status_by = session.uid;
+      });
+    closePanel();
+  },
+  undo: id => {
+    const j = db.jobs[id]; if (!j) return;
+    write('undo_job_status', {p_job: id, p_decided_at: null}, 'Undo — ' + (jobCust(j).full_name || 'job'), [id], () => {
+      if (j._prev && j._prev.length){ j.status = j._prev.pop(); j.status_by = session.uid; if (j.status !== 'done') j.done_at = null; }
+    });
+  },
+  later: id => {
+    const c = db.customers[id]; if (!c) return;
+    const until = addMonths(manilaDate(0), checkupMonths());
+    write('checkup_later', {p_customer: id, p_until: until}, 'Check-up later — ' + c.full_name, [id], () => { c.checkup_snooze = until; });
+  },
+  putback: id => {
+    const c = db.customers[id]; if (!c) return;
+    write('checkup_later', {p_customer: id, p_until: null}, 'Check-up list — ' + c.full_name, [id], () => { c.checkup_snooze = null; });
+  },
+  forget: id => {
+    const c = db.customers[id], p = topPanel(); if (!c) return;
+    if (!(p && p.ok)){ notice('Tick the box first — removing details cannot be undone.', true); return; }
+    const old = c.photo_path;
+    const op = write('forget_customer', {p_customer: id}, 'Remove details of ' + c.full_name, [id], () => {
+      Object.assign(c, {full_name: '(removed)', contact: '0000000', address: '(removed)', landmark: null, lat: null, lng: null, photo_path: null});
+    });
+    if (old){ op.cleanup_photo = old; saveLocal(); }
+    closePanel();
+  },
+  tidy: () => {
+    const p = topPanel() || {};
+    const days = parseInt(p.days != null ? p.days : '365', 10);
+    if (!(days >= 1)){ notice('Type a number of days, like 365.', true); return; }
+    if (!p.ok){ notice('Tick the box first — deleted bookings cannot be brought back.', true); return; }
+    write('clear_old_bookings', {p_days: days}, 'Delete rejected and cancelled bookings older than ' + days + ' days', [], db => {
+      const cut = Date.now() - days * 864e5;
+      for (const b of Object.values(db.bookings))
+        if (['rejected', 'cancelled'].includes(b.status) && new Date(b.created_at) < cut) delete db.bookings[b.id];
+    });
+    closePanel();
+  },
+  mycancel: id => {
+    const b = db.bookings[id]; if (!b) return;
+    write('cancel_my_booking', {p_ref: b.ref}, 'Cancel ' + b.ref, [id], () => { b.status = 'cancelled'; });
+  },
+};
+
+document.addEventListener('click', e => {
+  if (e.target.id === 'infoBox'){ hideInfo(); return; }
+  if (e.target.id === 'unitSheet'){ unitEd = null; drawUnitSheet(); return; }
+  if (e.target.id === 'cartSheet'){ $('#cartSheet').hidden = true; lockBody(); return; }
+  // The grey behind a small panel closes it, like every Android sheet.
+  if (e.target.classList && e.target.classList.contains('sheet') && e.target.classList.contains('small')){ closePanel(); return; }
+  const el = e.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  e.preventDefault();
+  const f = ACTIONS[el.dataset.act];
+  if (f) f(el.dataset.id, el);
+});
+/* A row is a button to a keyboard too. */
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role=button][data-act]')){
+    e.preventDefault(); e.target.click();
+  }
+});
+document.addEventListener('input', e => {
+  const t = e.target, f = t.dataset && t.dataset.pf;
+  if (t.dataset && t.dataset.ued && unitEd){ unitEd.unit[t.dataset.ued] = t.value; return; }
+  if (f){
+    const p = topPanel(); if (!p) return;
+    p[f] = t.type === 'checkbox' ? t.checked : t.value;
+    // Redraw only the part that answers the typing, never the box being typed in.
+    if (f === 'q'){ const m = $('#bookMatches'); if (m) m.innerHTML = bookMatches(p); }
+    if (f === 'contact'){ const m = $('#bookSame'); if (m) m.innerHTML = bookSame(p); }
+    if (f === 'date' || t.type === 'checkbox'){ t.blur(); render(); }
+    return;
+  }
+  if (t.id === 'custSearch'){ ui.search = t.value; saveUi(); $('#custList').innerHTML = custListHtml(); }
+  if (t.id === 'teamSearch'){ ui.teamSearch = t.value; saveUi(); $('#teamList').innerHTML = teamListHtml(); }
+});
+
+/* ================================================================ sign in, register, sign out */
+/* The login door (SukiRun's authForm): Log in, or make an account. Making one asks for a
+   name, and whether you work here. That tick is a claim about yourself, never a role —
+   the database always makes a new account a customer, and only an admin moves it up. */
+function openAuth(mode){
+  authOpen = true; authMode = mode;
+  const f = $('#authCard'), up = mode === 'register';
+  $('#authTitle').textContent = up ? 'Make an account' : 'Log in';
+  $('#authHint').textContent = up
+    ? 'Customers: see all your bookings in one place, even on a new phone. Staff: tick "I work here".'
+    : 'For the shop\'s staff, and for customers who made an account.';
+  $('#staffTick').hidden = !up;
+  $('#nameRow').hidden = !up;
+  $('#authSubmit').textContent = up ? 'Make my account' : 'Log in';
+  $('#authSwitch').textContent = up ? 'I already have an account' : 'I don’t have an account yet';
+  $('#authFoot').textContent = up
+    ? 'At least 8 characters for the password. An admin gives staff their role after this.'
+    : 'The first login needs internet — after that this phone works with no signal.';
+  f.password.autocomplete = up ? 'new-password' : 'current-password';
+  $('#authMsg').className = 'msg';
+  render();
+  (up ? f.name : f.email).focus();
+}
+function signedOut(why){
+  session = null; db = null; queue = []; notices = []; stack = [];
+  lsDel('ws_session');
+  if (why){ authOpen = true; authMode = 'signin'; say($('#authMsg'), false, why); }
+  render();
+}
+async function afterSignIn(){
+  loadLocal();
+  authOpen = false;
+  render();
+  await flush();
+  if (!db.role) await pull();
+}
+
+$('#accountBtn').addEventListener('click', () => {
+  if (!session){ openAuth('signin'); return; }
+  if (!db) loadLocal();
+  openPanel({kind: 'settings'});
+});
+async function logOut(btn){
+  const unsent = queue.filter(o => o.state === 'pending').length;
+  if (unsent && !confirmTwice(btn, 'Log out and lose ' + unsent + ' unsent?')) return;
+  const t = session.access_token;
+  // This phone's copy goes with the account: the next person to use the phone must not see it.
+  lsDel(dbKey()); lsDel(qKey()); lsDel(nKey());
+  signedOut(null);
+  try { await authFetch('/logout', {}, t); } catch (e) {}
+}
+/* A destructive button asks twice by changing its own words, not with a pop-up. */
+function confirmTwice(btn, question){
+  if (btn.dataset.armed){ delete btn.dataset.armed; return true; }
+  btn.dataset.armed = '1'; const old = btn.textContent; btn.textContent = question;
+  setTimeout(() => { if (btn.dataset.armed){ delete btn.dataset.armed; btn.textContent = old; } }, 4000);
+  return false;
+}
+$('#authSwitch').addEventListener('click', () => openAuth(authMode === 'signin' ? 'register' : 'signin'));
+$('#registerLink').addEventListener('click', e => { e.preventDefault(); openAuth('register'); });
+
+/* The top bar's Back is only for the login door; panels carry their own. */
+$('#backBtn').addEventListener('click', () => { authOpen = false; render(); });
+
+/* Waiting for the office: check now, or say you were a customer after all. */
+$('#waitAgain').addEventListener('click', async e => {
+  const b = e.target; b.disabled = true; b.textContent = 'Checking…';
+  db.cursor = null; await pull();
+  b.disabled = false; b.textContent = 'Check again';
+  if (db.profile && db.profile.signup_kind === 'employee' && db.role === 'customer')
+    notice('Not yet — the office hasn’t given you a role.', false);
+});
+$('#waitCustomer').addEventListener('click', async e => {
+  e.target.disabled = true;
+  try { await rpc('i_am_a_customer', {}); db.cursor = null; await pull(); }
+  catch (err) { notice(err instanceof Unreachable ? 'That needs signal — try again in a minute.' : err.message, true); }
+  finally { e.target.disabled = false; }
+});
+$('#offLogout').addEventListener('click', e => logOut(e.target));
+
+$('#authCard').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target, msg = $('#authMsg'), btn = $('#authSubmit'), up = authMode === 'register';
+  const email = f.email.value.trim(), password = f.password.value, name = f.name.value.trim();
+  if (up && name.length < 2){ say(msg, false, 'Please type your name.'); f.name.focus(); return; }
+  if (!/^\S+@\S+\.\S+$/.test(email)){ say(msg, false, 'Please give your email address.'); f.email.focus(); return; }
+  if (password.length < 8){ say(msg, false, 'The password needs at least 8 characters.'); f.password.focus(); return; }
+  btn.disabled = true;
+  btn.textContent = up ? 'Making your account…' : 'Logging in…';
+  try {
+    if (!up){
+      keepSession(await authFetch('/token?grant_type=password', {email, password}));
+    } else {
+      // No email confirmation (decided 2026-09-26, TODO L): making an account logs you
+      // straight in. The name and the tick travel as sign-up data — claims the database
+      // reads for display only (05, handle_new_user).
+      const b = await authFetch('/signup', {email, password,
+        data: {name, signupKind: f.staff.checked ? 'employee' : 'customer'}});
+      keepSession(b.access_token ? b : await authFetch('/token?grant_type=password', {email, password}));
+    }
+    f.reset();
+    await afterSignIn();
+  } catch (err) {
+    say(msg, false, err instanceof Unreachable ? 'No internet. The first login needs a signal — after that this phone works offline.'
+      : /invalid login/i.test(err.message) ? 'That email and password do not match.'
+      : /already registered/i.test(err.message) ? 'That email already has an account. Log in instead.'
+      : err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = up ? 'Make my account' : 'Log in';
+  }
+});
+
+/* ================================================================ the public page */
+function say(el, ok, text){
+  el.className = 'msg show ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+}
+
+const bookForm = $('#bookForm');
+const bookMsg  = $('#bookMsg');
+bookForm.preferred_on.min = manilaDate(0);
+bookForm.preferred_on.max = manilaDate(120);
+
+$('#privacyText').textContent =
+  'We keep your name, number, address and anything else you write here, so we can do the job. ' +
+  'Only ' + SHOP_NAME + ' staff see it. To have it removed, ' + ringUs() + '.';
+
+/* The service list comes from the database, not from an array in here. Prices come with
+   it only while the owner shows them (13). */
+const serviceLabels = lsGet('ws_services', {});
+const pubPrices = {};
+(async function loadServices(){
+  try {
+    const rows = await rpc('list_services', {}, false);
+    // The fresh list REPLACES the kept one: a service the owner hid or deleted stayed on
+    // offer from the phone's copy (measured 2026-09-27, "ZZ Count Test").
+    Object.keys(serviceLabels).forEach(k => { delete serviceLabels[k]; });
+    Object.keys(pubPrices).forEach(k => { delete pubPrices[k]; });
+    rows.forEach(s => { serviceLabels[s.key] = s.label; pubPrices[s.key] = s.prices || null; });
+    lsSet('ws_services', serviceLabels);
+  } catch (e) {
+    say(bookMsg, false, 'We could not load the list of services. Please ' + ringUs() + ' instead.');
+  }
+  drawPubCart();
+  render();
+})();
+
+/* Location: optional, one tap, and easy to take back. */
+const locBtn = $('#locBtn'), locMsg = $('#locMsg');
+locBtn.addEventListener('click', () => {
+  if (bookForm.lat.value){
+    bookForm.lat.value = bookForm.lng.value = '';
+    locBtn.textContent = '📍 Pin my location';
+    locMsg.textContent = 'Location removed.';
+    return;
+  }
+  if (!navigator.geolocation){ locMsg.textContent = 'This phone cannot share its location. The landmark will do.'; return; }
+  locBtn.disabled = true;
+  locMsg.textContent = 'Finding you…';
+  navigator.geolocation.getCurrentPosition(p => {
+    bookForm.lat.value = p.coords.latitude.toFixed(6);
+    bookForm.lng.value = p.coords.longitude.toFixed(6);
+    locBtn.disabled = false;
+    locBtn.textContent = '✕ Remove the pin';
+    locMsg.textContent = 'Location added.';
+  }, () => {
+    locBtn.disabled = false;
+    locMsg.textContent = 'Could not get your location. That is fine — the landmark will do.';
+  }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 60000});
+});
+
+function missing(f, payload){
+  if (payload.full_name.trim().length < 2) return ['full_name', 'Please give your name.'];
+  if (payload.contact.replace(/\D/g, '').length < 7) return ['contact', 'Please give a contact number we can ring.'];
+  if (payload.address.trim().length < 4) return ['address', 'Please give the address.'];
+  if (!pubUnits.length) return ['#pubTypes', 'Add your aircon — tap its type: Window, Split, Floor-mounted or Cassette.'];
+  if (!payload.preferred_on) return ['preferred_on', 'Please choose a date.'];
+  if (payload.preferred_on < f.preferred_on.min) return ['preferred_on', 'That date has already passed.'];
+  if (payload.preferred_on > f.preferred_on.max) return ['preferred_on', 'That is too far ahead. Please pick a date within the next few months.'];
+  if (!f.consent.checked) return ['consent', 'Please tick the box to say you have read how we keep your details.'];
+  return null;
+}
+
+/* Booking is the one write that does NOT queue: a stranger must know, there and then,
+   whether the shop has it. A failed booking must never look like a successful one. */
+bookForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = bookForm, btn = f.querySelector('button[type=submit]');
+  const payload = Object.fromEntries(new FormData(f).entries());
+  payload.units = pubUnits.map(u => ({type: u.type, services: u.services, brand: u.brand || null, model: u.model || null}));
+  delete payload.consent;
+
+  const bad = missing(f, payload);
+  if (bad){
+    say(bookMsg, false, bad[1]);
+    if (bad[0] && bad[0][0] === '#') $(bad[0]).scrollIntoView({block: 'center', behavior: 'smooth'});
+    else if (bad[0]) f[bad[0]].focus();
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    // Signed in as a customer, the token goes with it so the booking lands on the account.
+    const res = await rpc('book_job', {payload}, !!session);
+    if (!res || !res.ok || !res.ref) throw new Unreachable('no ref');
+    try { localStorage.setItem(REF_KEY, res.ref); } catch (err) {}
+    trackForm.code.value = res.ref;
+    $('#doneRef').textContent = res.ref;
+    f.reset();
+    bookForm.lat.value = bookForm.lng.value = '';
+    pubUnits = [];
+    drawPubCart();
+    locBtn.textContent = '📍 Pin my location';
+    locMsg.textContent = 'Optional. At the house? Tap Pin. Anywhere else? Pick it on the map.';
+    bookMsg.className = 'msg';
+    f.hidden = true;
+    $('#done').hidden = false;
+    showPubBar();
+    window.scrollTo({top: 0});
+    if (session) pull();
+  } catch (err) {
+    say(bookMsg, false, err instanceof Refused && err.human ? err.message
+      : 'Your booking was NOT sent — we could not reach the booking system. Please try again in a minute, or ' + ringUs() + '.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send the booking';
+  }
+});
+
+$('#again').addEventListener('click', () => {
+  $('#done').hidden = true;
+  bookForm.hidden = false;
+  showPubBar();
+  bookForm.full_name.focus();
+});
+
+const trackForm = $('#trackForm');
+try {
+  const last = localStorage.getItem(REF_KEY);
+  if (last) trackForm.code.value = last;
+} catch (e) {}
+
+const STATUS_WORDS = {
+  new:       'Received. We have not rung you yet — we will, to agree a time.',
+  accepted:  'Accepted. We will ring you to confirm the time.',
+  rejected:  'We could not take this booking. Please ' + ringUs() + '.',
+  cancelled: 'Cancelled.',
+};
+
+trackForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('#trackMsg'), btn = trackForm.querySelector('button');
+  if (!trackForm.code.value.trim() || trackForm.contact.value.replace(/\D/g, '').length < 7){
+    say(msg, false, 'Enter your reference code and the number you booked with.');
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const res = await rpc('check_booking', {code: trackForm.code.value, contact: trackForm.contact.value}, false);
+    if (!res.ok){ say(msg, false, res.message); return; }
+    say(msg, res.status !== 'rejected' && res.status !== 'cancelled',
+      res.ref + ' — ' + (STATUS_WORDS[res.status] || res.status) +
+      ' You asked for ' + niceDate(res.preferred_on) + ', ' + slotWord(res.slot) + '.');
+  } catch (err) {
+    say(msg, false, err instanceof Refused && err.human ? err.message
+      : 'We could not reach the booking system just now. Please try again in a minute, or ' + ringUs() + '.');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#claimForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target, msg = $('#claimMsg');
+  if (!f.code.value.trim() || digits(f.contact.value).length < 7){
+    say(msg, false, 'Enter a reference code and the number you booked with.'); return;
+  }
+  try {
+    const res = await rpc('claim_bookings', {p_code: f.code.value, p_contact: f.contact.value});
+    if (!res.ok){ say(msg, false, res.message); return; }
+    say(msg, true, res.claimed ? res.claimed + ' booking' + (res.claimed === 1 ? '' : 's') + ' added to your account.'
+                               : 'Those bookings are already on an account.');
+    f.reset();
+    db.cursor = null; pull();
+  } catch (err) {
+    say(msg, false, err instanceof Unreachable ? 'Could not reach the server. This one needs signal — try again later.' : err.message);
+  }
+});
+
+/* Pick on map (SukiRun's pick mode): the map moves under a pin that stays in the middle.
+   MapLibre (BSD, web/vendor/) is 1 MB, so it loads only when somebody taps the button.
+   Tiles: OpenFreeMap, free, no key. The page never needs it to take a booking. */
+const BACOLOD = {lat: 10.6765, lng: 122.9509};
+let mapObj = null, mapPickCb = null, mapLib = null;
+function loadMapLib(){
+  if (window.maplibregl) return Promise.resolve();
+  if (mapLib) return mapLib;
+  mapLib = new Promise((res, rej) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'vendor/maplibre-gl.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = 'vendor/maplibre-gl.js'; js.onload = res;
+    js.onerror = () => { mapLib = null; rej(new Error('map')); };
+    document.head.appendChild(js);
+  });
+  return mapLib;
+}
+async function openMapPick(start, onPick){
+  const sheet = $('#mapSheet'), msg = $('#mapMsg');
+  mapPickCb = onPick;
+  sheet.hidden = false; document.body.classList.add('locked');
+  msg.hidden = false; msg.textContent = 'Loading the map…';
+  try { await loadMapLib(); }
+  catch (e) { msg.textContent = 'The map needs internet. Close this and use the landmark instead.'; return; }
+  const at = start || BACOLOD, zoom = start ? 18 : 13;
+  if (!mapObj){
+    mapObj = new maplibregl.Map({container: 'mapCanvas', style: 'https://tiles.openfreemap.org/styles/liberty',
+      center: [at.lng, at.lat], zoom, attributionControl: {compact: true}});
+    mapObj.on('load', () => { msg.hidden = true; });
+    mapObj.on('error', () => { msg.hidden = false; msg.textContent = 'Part of the map did not load. Check the signal.'; });
+  } else {
+    mapObj.resize(); mapObj.jumpTo({center: [at.lng, at.lat], zoom}); msg.hidden = true;
+  }
+}
+function closeMapPick(){ $('#mapSheet').hidden = true; lockBody(); }
+$('#mapBack').addEventListener('click', closeMapPick);
+$('#mapUse').addEventListener('click', () => {
+  if (!mapObj) return;
+  const c = mapObj.getCenter();
+  closeMapPick();
+  if (mapPickCb) mapPickCb({lat: c.lat, lng: c.lng});
+});
+$('#mapLocate').addEventListener('click', () => {
+  if (!navigator.geolocation || !mapObj) return;
+  navigator.geolocation.getCurrentPosition(p => mapObj.flyTo({center: [p.coords.longitude, p.coords.latitude], zoom: 18}),
+    () => { const m = $('#mapMsg'); m.hidden = false; m.textContent = 'Could not find you — move the map by hand.'; },
+    {enableHighAccuracy: true, timeout: 12000, maximumAge: 60000});
+});
+$('#mapBtn').addEventListener('click', () => {
+  const f = bookForm;
+  openMapPick(f.lat.value ? {lat: +f.lat.value, lng: +f.lng.value} : null, p => {
+    f.lat.value = p.lat.toFixed(6); f.lng.value = p.lng.toFixed(6);
+    locBtn.textContent = '✕ Remove the pin';
+    locMsg.textContent = 'Pinned on the map. Tap “Pick on map” again to move it.';
+  });
+});
+
+/* ================================================================ more than one tab
+   Two tabs of the app share one saved copy but each keeps its own in memory. Without this,
+   each tab saved its own queue over the other's — measured 2026-09-26: a refused write
+   fixed in one tab kept coming back from the owner's other tab. Now a tab that sees the
+   saved copy change takes it, and redraws. */
+window.addEventListener('storage', e => {
+  if (!e.key || !e.key.startsWith('ws_')) return;
+  if (e.key === 'ws_session'){
+    const s = lsGet('ws_session', null);
+    if (!s){ if (session){ session = null; db = null; queue = []; notices = []; render(); } return; }
+    if (!session || s.uid !== session.uid){ session = s; loadLocal(); render(); flush(); return; }
+    session = s;   // a refreshed token from the other tab
+    return;
+  }
+  if (session && (e.key === dbKey() || e.key === qKey() || e.key === nKey())){
+    loadLocal();
+    render();
+  }
+});
+
+/* ================================================================ start */
+window.addEventListener('online',  () => { online = true; flush(); });
+window.addEventListener('offline', () => { online = false; render(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && session) flush(); });
+setInterval(() => { if (session && !document.hidden) flush(); }, 30000);
+
+applyTheme();
+if (session){ loadLocal(); render(); flush(); } else render();
+
+/* The page opens without signal too, once it has been opened once (Phase 6). */
+if ('serviceWorker' in navigator && location.protocol !== 'file:'){
+  // updateViaCache 'none': the worker file itself is never taken from the HTTP cache either.
+  navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).catch(() => {});
+}
+</script>
+</body>
+</html>
