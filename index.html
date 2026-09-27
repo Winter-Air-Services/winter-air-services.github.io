@@ -142,6 +142,17 @@
   .msg.err{background:var(--bad-bg);color:var(--bad)}
   .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
   .hint{color:var(--ink-soft);font-size:13px;margin-top:4px}
+  /* THE booking form: what is missing turns red, shakes once, and says what (SukiRun 0.24.6). */
+  .bk-send{margin-top:18px}
+  .bk-bad input,.bk-bad textarea,.bk-bad .type-btn,.bk-bad .tab-btn{border-color:var(--bad);background:var(--bad-bg)}
+  .bk-sec.bk-bad .fieldlabel,label.bk-bad{color:var(--bad)}
+  .tick.bk-bad{outline:2px solid var(--bad);outline-offset:4px;border-radius:6px}
+  .bk-why{color:var(--bad);font-size:13px;font-weight:600;margin-top:6px}
+  .shake{animation:bk-shake .45s ease}
+  @keyframes bk-shake{0%,100%{transform:none}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}
+    60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+  @media (prefers-reduced-motion:reduce){ .shake{animation:none} }
+  .sheet .bk-form{margin-top:4px}
   .done{text-align:center;padding:28px 16px}
   .done .big{font:700 40px/1.1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;
          margin:10px 0 14px;word-break:break-all}
@@ -150,8 +161,12 @@
 
   /* ---------- top bar (SukiRun's .topbar) ---------- */
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:10px;
-    padding:14px 0 12px;position:sticky;top:0;background:var(--bg);z-index:20;
-    border-bottom:1px solid var(--border);margin-bottom:16px}
+    padding:14px 0 12px;position:sticky;top:0;z-index:20;margin-bottom:16px}
+  /* The bar's colour and line run the whole screen width; its contents stay in the column.
+     Only as wide as the column, the edge-to-edge photo showed beside and above it and the
+     bar looked cut off (Guile's screenshot, 2026-09-27). */
+  .topbar::before{content:"";position:absolute;z-index:-1;top:0;bottom:0;left:50%;width:100vw;
+    transform:translateX(-50%);background:var(--bg);border-bottom:1px solid var(--border)}
   .topbar-left{display:flex;align-items:center;gap:10px;min-width:0}
   .topbar-title{font-weight:800;font-size:clamp(15px,4.2vw,18px);letter-spacing:.02em;
     text-transform:uppercase;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -516,7 +531,7 @@
 
   /* ---------- panels: a tap opens a screen on top, with Back (SukiRun's panelShell) ---------- */
   body.locked{overflow:hidden}
-  .sheet{position:fixed;inset:0;background:var(--bg);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  .sheet{position:fixed;inset:0;background:var(--bg);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
   .sheet-inner{max-width:660px;margin:0 auto;padding:0 16px 40px}
   .sheet-top{margin-bottom:12px}
   .sheet-title{text-transform:none;letter-spacing:0;font-size:16px}
@@ -669,58 +684,9 @@
       <button type="button" class="ghost" id="again">Book another job</button>
     </section>
 
-    <form class="panel" id="bookForm" autocomplete="on" novalidate>
-      <label>Your name <input name="full_name" required maxlength="120" autocomplete="name"></label>
-
-      <label>Contact number <input name="contact" required inputmode="tel" maxlength="30"
-        autocomplete="tel" placeholder="09XX XXX XXXX"></label>
-
-      <label>Address <input name="address" required maxlength="300"
-        placeholder="Street, barangay, city"></label>
-
-      <label>Landmark <span class="opt">— optional, but it is how we find you</span>
-        <input name="landmark" maxlength="200" placeholder="beside the chapel, blue gate…"></label>
-      <div class="hint">In Bacolod this matters more than the address. Please fill it in.</div>
-
-      <div class="loc-row">
-        <button type="button" class="b" id="locBtn">📍 Pin my location</button>
-        <button type="button" class="b" id="mapBtn">🗺️ Pick on map</button>
-      </div>
-      <div class="hint" id="locMsg">Optional. At the house? Tap Pin. Anywhere else? Pick it on the map.</div>
-      <input type="hidden" name="lat"><input type="hidden" name="lng">
-
-      <!-- The aircons (15): tap a type, a small window asks what that aircon needs, and it
-           joins the Service summary below — Suki's Store Visit. Type is required. -->
-      <label>Aircon type</label>
-      <div id="pubTypes"></div>
-      <div id="pubCart" aria-live="polite"></div>
-
-      <div class="row">
-        <label>Preferred date <input type="date" name="preferred_on" required></label>
-        <label>Morning or afternoon
-          <select name="slot" required>
-            <option value="am">Morning (AM)</option>
-            <option value="pm">Afternoon (PM)</option>
-          </select>
-        </label>
-      </div>
-
-      <label>Anything else <span class="opt">— optional</span>
-        <textarea name="notes" maxlength="1000"
-          placeholder="What is wrong, how long it has been like that…"></textarea></label>
-
-      <!-- The honeypot. Hidden from people, filled in by bots. See book_job(). -->
-      <div class="hp" aria-hidden="true">
-        <label>Website<input name="website" tabindex="-1" autocomplete="off"></label>
-      </div>
-
-      <!-- RA 10173. Wording shown to the owner and approved (TODO.md, D). -->
-      <label class="tick"><input type="checkbox" name="consent" id="consent">
-        <span id="privacyText"></span></label>
-
-      <button type="submit">Send the booking</button>
-      <div class="msg" id="bookMsg" aria-live="polite"></div>
-    </form>
+    <!-- THE booking form. Its fields are drawn by bookFormHtml('pub') — the same builder the
+         office's Book a job uses, so a change to the form is a change to both (2026-09-27). -->
+    <form class="panel" id="bookForm" autocomplete="on" novalidate><div id="bookFields"></div></form>
       </div>
       <!-- Under the photo on the left on a computer; after the form on a phone. -->
       <div class="hero-side">
@@ -959,6 +925,9 @@ function notice(text, bad){
   notices.push({id: uuid(), at: new Date().toISOString(), text, bad: !!bad});
   if (session) lsSet(nKey(), notices);
   render();
+  // The card lives on the main screen; with a screen open on top it was hidden under it
+  // (measured 2026-09-27: Book it's complaints). Say it on top as well.
+  if (typeof stack !== 'undefined' && stack.length && typeof toast === 'function') toast(text, bad);
 }
 
 /* A write: apply it here, queue it, try to send. It always "succeeds" on the phone. */
@@ -1584,7 +1553,12 @@ function cartUnits(cart){
 }
 const cartPrice = cart => cart === 'pub' ? pagePrice() : officePrice;
 const cartKeys = cart => cart === 'pub' ? Object.keys(serviceLabels) : activeServiceKeys();
-function afterCart(cart){ if (cart === 'pub') drawPubCart(); else render(); if (!$('#cartSheet').hidden) drawCartSheet(); }
+function afterCart(cart){
+  const s = bkState(cart);
+  if (s && s._bad && cartUnits(cart).length){ delete s._bad.units; if (!Object.keys(s._bad).length) s._msg = ''; }
+  if (cart === 'pub') drawPubCart(); else render();
+  if (!$('#cartSheet').hidden) drawCartSheet();
+}
 
 /* The four types, two by two. */
 function typeGrid(cart){
@@ -1639,11 +1613,173 @@ function drawUnitSheet(){
     <div class="stack"><button type="button" class="b primary wide" data-act="unitdone">Finish</button></div>`;
   lockBody();
 }
-/* The page's summary, the bar, and the sheet the bar opens. */
+/* ================================================================ THE booking form
+   Guile, 2026-09-27, "top 1 priority": every change on the customer's booking form is also
+   the office's Book a job and its Edit. So there is ONE builder. bookFormHtml(ctx, s) draws
+   the form for the public page (ctx 'pub', state pubBook) and for Book a job (ctx 'panel',
+   state = the open panel); Edit draws its aircon part, bkAirconsHtml. Add or change a field
+   HERE and every one of them changes. Only the words differ where the person differs
+   ("Your name" / "Customer's name"); the boxes, their order and their look do not.
+   The checks are shared too (bookProblems), and a problem is never silent: every box that
+   needs something turns red and shakes, with a line under it saying what. The office's
+   Book it used to put its complaint on the screen UNDER the one being typed in — measured
+   2026-09-27, "Type the customer's name" hidden behind Book a job. */
+const PRIVACY_TEXT = () => 'We keep your name, number, address and anything else you write here, so we can do the job. ' +
+  'Only ' + SHOP_NAME + ' staff see it. To have it removed, ' + ringUs() + '.';
+const freshPubBook = () => ({full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '',
+  date: '', slot: 'am', notes: '', website: '', consent: false});
+let pubBook = freshPubBook();
+const bkState = ctx => ctx === 'pub' ? pubBook : topPanel();
+const BK_WORDS = {
+  pub:   {name: 'Your name', auto: ['name', 'tel'], notes: 'What is wrong, how long it has been like that…',
+          loc: 'Optional. At the house? Tap Pin. Anywhere else? Pick it on the map.'},
+  panel: {name: 'Customer’s name', auto: ['off', 'off'], notes: 'What is wrong, the price you agreed…',
+          loc: 'Optional. At the house now? Tap Pin. On the phone? Pick it on the map.'},
+};
+const bkBad = (s, f) => (s && s._bad && s._bad[f]) || '';
+const bkCls = (s, f) => bkBad(s, f) ? ' bk-bad' + (s._shake ? ' shake' : '') : '';
+const bkWhy = (s, f) => bkBad(s, f) ? `<div class="bk-why" data-bkwhy="${f}">${esc(bkBad(s, f))}</div>` : '';
+function bkInput(ctx, s, f, label, opt, attrs){
+  return `<label class="bk-f${bkCls(s, f)}" data-bkf="${f}">${label}${opt ? ` <span class="opt">${opt}</span>` : ''}
+    <input data-bk="${f}" data-cart="${ctx}" value="${esc(s[f] || '')}" ${attrs}></label>${bkWhy(s, f)}`;
+}
+function bkLocHtml(ctx, s){
+  const has = !!(s.lat && s.lng);
+  return `<div class="loc-row">
+      <button type="button" class="b" data-act="bkpin" data-cart="${ctx}"${s._locBusy ? ' disabled' : ''}>${has ? '✕ Remove the pin' : '📍 Pin my location'}</button>
+      <button type="button" class="b" data-act="bkmap" data-cart="${ctx}">🗺️ Pick on map</button></div>
+    <div class="hint">${esc(s._loc || BK_WORDS[ctx].loc)}</div>`;
+}
+/* The aircons (15): tap a type, a small window asks what it needs, and it joins the Service
+   summary — Suki's Store Visit. Type is required. Edit uses exactly this part. */
+function bkAirconsHtml(ctx, s, label){
+  const units = cartUnits(ctx);
+  return `<div class="bk-sec${bkCls(s, 'units')}" data-bkf="units">
+      <div class="fieldlabel">${esc(label || 'Aircon type')}</div>
+      ${typeGrid(ctx)}${bkWhy(s, 'units')}
+      ${units.length ? `<div class="fieldlabel">Service summary</div>${cartHtml(ctx, units, ctx === 'pub' ? {editable: true}
+        : {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}` : ''}
+    </div>`;
+}
+function bkWhenHtml(ctx, s){
+  const pub = ctx === 'pub', today = manilaDate(0), d = s.date || '';
+  const chips = [...(pub ? [] : [['', 'Not yet']]), [today, 'Today'], [addDays(today, 1), 'Tomorrow'],
+    [addDays(today, 2), niceDate(addDays(today, 2))]];
+  const chip = (f, v, t, on) => `<button type="button" class="tab-btn${on ? ' active' : ''}" data-act="bkset" data-cart="${ctx}" data-f="${f}" data-v="${v}">${esc(t)}</button>`;
+  return `<div class="bk-sec${bkCls(s, 'date')}" data-bkf="date">
+      <div class="fieldlabel">${pub ? 'Preferred date' : 'When <span class="opt">— or leave it for later</span>'}</div>
+      <div class="tabbar tight">${chips.map(([v, t]) => chip('date', v, t, d === v)).join('')}</div>
+      <input type="date" data-bk="date" data-cart="${ctx}" value="${esc(d)}" min="${today}"${pub ? ` max="${manilaDate(120)}"` : ''} aria-label="Another day">
+      ${bkWhy(s, 'date')}
+    </div>
+    ${pub || d ? `<div class="fieldlabel">Morning or afternoon</div>
+      <div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
+        `<button type="button" class="${(s.slot || 'am') === k ? 'active' : ''}" data-act="bkset" data-cart="${ctx}" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>` : ''}`;
+}
+function bookFormHtml(ctx, s){
+  const pub = ctx === 'pub', w = BK_WORDS[ctx], existing = !pub && s.mode === 'existing';
+  let who = '';
+  if (!pub) who = `<div class="segment">${[['new', 'New customer'], ['existing', 'Customer files']].map(([k, t]) =>
+      `<button type="button" class="${s.mode === k ? 'active' : ''}" data-act="pset" data-f="mode" data-v="${k}">${t}</button>`).join('')}</div>`;
+  if (existing){
+    const c = db.customers[s.customer_id];
+    who += `<div class="bk-sec${bkCls(s, 'customer')}" data-bkf="customer">${c
+      ? `<div class="lrow flat"><div class="avatar">${esc(initials(c.full_name))}</div>
+          <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
+          <button type="button" class="b" data-act="pset" data-f="customer_id" data-v="">Change</button></div>`
+      : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name or number" value="${esc(s.q || '')}" autocomplete="off">
+          <div class="list" id="bookMatches">${bookMatches(s)}</div>`}${bkWhy(s, 'customer')}</div>`;
+  } else {
+    who += bkInput(ctx, s, 'full_name', w.name, '', `maxlength="120" autocomplete="${w.auto[0]}"`)
+      + bkInput(ctx, s, 'contact', 'Contact number', '', `inputmode="tel" maxlength="30" autocomplete="${w.auto[1]}" placeholder="09XX XXX XXXX"`)
+      + (pub ? '' : `<div id="bookSame">${bookSame(s)}</div>`)
+      + bkInput(ctx, s, 'address', 'Address', '', `maxlength="300" autocomplete="${pub ? 'street-address' : 'off'}" placeholder="Street, barangay, city"`)
+      + bkInput(ctx, s, 'landmark', 'Landmark', '— optional, but it is how we find you', `maxlength="200" autocomplete="off" placeholder="beside the chapel, blue gate…"`)
+      + `<div class="hint">In Bacolod this matters more than the address. Please fill it in.</div>`
+      + bkLocHtml(ctx, s);
+  }
+  const n = (s._bad && Object.keys(s._bad).length) || 0;
+  return who + bkAirconsHtml(ctx, s) + bkWhenHtml(ctx, s) + `
+    <label>Anything else <span class="opt">— optional</span>
+      <textarea data-bk="notes" data-cart="${ctx}" maxlength="1000" placeholder="${esc(w.notes)}">${esc(s.notes || '')}</textarea></label>
+    ${pub ? `<!-- The honeypot. Hidden from people, filled in by bots. See book_job(). -->
+      <div class="hp" aria-hidden="true"><label>Website<input data-bk="website" data-cart="pub" tabindex="-1" autocomplete="off" value="${esc(s.website)}"></label></div>
+      <!-- RA 10173. Wording shown to the owner and approved (TODO.md, D). -->
+      <label class="tick bk-sec${bkCls(s, 'consent')}" data-bkf="consent"><input type="checkbox" data-bk="consent" data-cart="pub"${s.consent ? ' checked' : ''}>
+        <span>${esc(PRIVACY_TEXT())}</span></label>${bkWhy(s, 'consent')}` : ''}
+    <button type="${pub ? 'submit' : 'button'}" class="bk-send${n && s._shake ? ' shake' : ''}"${pub ? '' : ' data-act="savebook"'}${s._sending ? ' disabled' : ''}>${
+      s._sending ? 'Sending…' : pub ? 'Send the booking' : 'Book it'}</button>
+    <div class="msg${s._msg ? ' show ' + (s._msgOk ? 'ok' : 'err') : ''}"${pub ? ' id="bookMsg"' : ''} aria-live="polite">${esc(s._msg || '')}</div>`;
+}
+/* What is missing, as [field, what to do] — the same rules for a stranger and the office. */
+function bookProblems(ctx, s){
+  const pub = ctx === 'pub', out = [], today = manilaDate(0);
+  if (!pub && s.mode === 'existing'){
+    if (!db.customers[s.customer_id]) out.push(['customer', 'Choose the customer from the list — or tap New customer.']);
+  } else {
+    if ((s.full_name || '').trim().length < 2) out.push(['full_name', pub ? 'Please give your name.' : 'Type the customer’s name.']);
+    if (digits(s.contact).length < 7) out.push(['contact', pub ? 'Please give a number we can ring — at least 7 digits.' : 'Type a contact number — at least 7 digits.']);
+    if ((s.address || '').trim().length < 4) out.push(['address', pub ? 'Please give the address.' : 'Type the address.']);
+  }
+  if (!cartUnits(ctx).length) out.push(['units', pub ? 'Add your aircon — tap its type: Window, Split, Floor-mounted or Cassette.' : 'Add at least one aircon — tap its type.']);
+  if (pub && !s.date) out.push(['date', 'Please choose a date.']);
+  else if (s.date && s.date < today) out.push(['date', 'That day has already passed.']);
+  else if (pub && s.date > manilaDate(120)) out.push(['date', 'That is too far ahead. Please pick a date within the next few months.']);
+  if (pub && !s.consent) out.push(['consent', 'Please tick the box to say you have read how we keep your details.']);
+  return out;
+}
+const bkRoot = ctx => ctx === 'pub' ? $('#bookFields') : $('#panels').lastElementChild;
+function bkRedraw(ctx){ if (ctx === 'pub') drawPubCart(); else render(); }
+/* Every box that needs something turns red and shakes, the button says how many, and the
+   first one comes into view. Typing in a red box takes its red away at once. */
+function bkShow(ctx, s, list){
+  s._bad = Object.fromEntries(list);
+  s._shake = true;
+  s._msgOk = false;
+  s._msg = list.length === 1 ? list[0][1] : list.length + ' things still needed — they are marked in red.';
+  bkRedraw(ctx);
+  const root = bkRoot(ctx), first = root && $(`[data-bkf="${list[0][0]}"]`, root);
+  if (first){
+    first.scrollIntoView({block: 'center', behavior: 'smooth'});
+    const box = $('input:not([type=checkbox]),textarea', first);
+    if (box) setTimeout(() => box.focus({preventScroll: true}), 350);
+  }
+  setTimeout(() => { s._shake = false; }, 700);
+}
+function bkClear(ctx, f){
+  const s = bkState(ctx);
+  if (!s || !bkBad(s, f)) return;
+  delete s._bad[f];
+  const root = bkRoot(ctx); if (!root) return;
+  const el = $(`[data-bkf="${f}"]`, root); if (el) el.classList.remove('bk-bad', 'shake');
+  const why = $(`[data-bkwhy="${f}"]`, root); if (why) why.remove();
+  if (!Object.keys(s._bad).length){ s._msg = ''; const m = $('.bk-send + .msg', root); if (m) m.className = 'msg'; }
+}
+/* Location, either form: one tap, and easy to take back. */
+function bkPin(ctx){
+  const s = bkState(ctx); if (!s) return;
+  if (s.lat){ s.lat = s.lng = ''; s._loc = 'Location removed.'; bkRedraw(ctx); return; }
+  if (!navigator.geolocation){ s._loc = 'This phone cannot share its location. The landmark will do.'; bkRedraw(ctx); return; }
+  s._locBusy = true; s._loc = 'Finding you…'; bkRedraw(ctx);
+  navigator.geolocation.getCurrentPosition(p => {
+    s._locBusy = false; s.lat = p.coords.latitude.toFixed(6); s.lng = p.coords.longitude.toFixed(6);
+    s._loc = 'Location added.'; bkRedraw(ctx);
+  }, () => {
+    s._locBusy = false; s._loc = 'Could not get the location. That is fine — the landmark will do.'; bkRedraw(ctx);
+  }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 60000});
+}
+function bkMap(ctx){
+  const s = bkState(ctx); if (!s) return;
+  openMapPick(s.lat ? {lat: +s.lat, lng: +s.lng} : null, p => {
+    s.lat = p.lat.toFixed(6); s.lng = p.lng.toFixed(6);
+    s._loc = 'Pinned on the map. Tap “Pick on map” again to move it.'; bkRedraw(ctx);
+  });
+}
+
+/* The page's form, its summary, the bar, and the sheet the bar opens. */
 function drawPubCart(){
-  const has = pubUnits.length > 0, pf = pagePrice();
-  $('#pubTypes').innerHTML = typeGrid('pub');
-  $('#pubCart').innerHTML = has ? `<div class="fieldlabel">Service summary</div>${cartHtml('pub', pubUnits, {editable: true})}` : '';
+  const pf = pagePrice();
+  keepTyping($('#bookFields'), () => bookFormHtml('pub', pubBook));
   $('#barCount').textContent = pubUnits.length;
   $('#barWord').textContent = pubUnits.length === 1 ? 'AIRCON' : 'AIRCONS';
   const total = unitsPrice(pubUnits, pf);
@@ -1929,12 +2065,10 @@ function panelEditBooking(p){
   const b = db.bookings[p.id];
   if (!b) return {title: 'Edit', body: empty('This booking is no longer on this phone.')};
   if (!p.units) p.units = unitsOf(b).map(u => ({...u, services: [...u.services]}));
+  // The aircon part of THE booking form (bkAirconsHtml), in the same card.
   return {title: 'Aircons and services', sub: b.full_name + ' · ' + b.ref, info: 'editbooking', body: `
-    <div class="fieldlabel">Add an aircon</div>
-    ${typeGrid('panel')}
-    <div class="fieldlabel">Service summary</div>
-    ${cartHtml('panel', p.units, {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}
-    <div class="stack"><button type="button" class="b primary wide" data-act="editbooking" data-id="${esc(b.id)}">Save</button></div>`};
+    <div class="panel bk-form">${bkAirconsHtml('panel', p, 'Add an aircon')}
+      <button type="button" class="bk-send" data-act="editbooking" data-id="${esc(b.id)}">Save</button></div>`};
 }
 function panelReject(p){
   const b = db.bookings[p.id];
@@ -2168,7 +2302,7 @@ function openBook(customerId, services){
       .map(u => ({type: u.type, services: services && services.length ? [...services] : [...u.services], brand: u.brand || null, model: u.model || null}));
   }
   openPanel({kind: 'book', mode: customerId ? 'existing' : 'new', customer_id: customerId || '', q: '',
-    full_name: '', contact: '', address: '', landmark: '', units, notes: '', date: '', slot: 'am'});
+    full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', units, notes: '', date: '', slot: 'am'});
 }
 function bookMatches(p){
   const q = (p.q || '').toLowerCase().trim();
@@ -2186,37 +2320,10 @@ function bookSame(p){
   return same.map(c => `<div class="inline-note">Same number as <b>${esc(c.full_name)}</b> (${esc(c.address)}).
     <button type="button" class="b" data-act="pickcust" data-v="${esc(c.id)}">Use them</button></div>`).join('');
 }
+/* The customer's form, word for word, in the same card — the ONE builder (bookFormHtml). */
 function panelBook(p){
-  const c = p.mode === 'existing' && p.customer_id ? db.customers[p.customer_id] : null;
-  const today = manilaDate(0);
-  const who = p.mode === 'existing'
-    ? (c ? `<div class="lrow flat"><div class="avatar">${esc(initials(c.full_name))}</div>
-          <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
-          <button type="button" class="b" data-act="pset" data-f="customer_id" data-v="">Change</button></div>`
-         : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name or number" value="${esc(p.q)}" autocomplete="off">
-            <div class="list" id="bookMatches">${bookMatches(p)}</div>`)
-    : `<label>Name <input data-pf="full_name" maxlength="120" value="${esc(p.full_name)}" autocomplete="off"></label>
-       <label>Contact number <input data-pf="contact" inputmode="tel" maxlength="30" value="${esc(p.contact)}" placeholder="09XX XXX XXXX" autocomplete="off"></label>
-       <div id="bookSame">${bookSame(p)}</div>
-       <label>Address <input data-pf="address" maxlength="300" value="${esc(p.address)}" placeholder="Street, barangay, city" autocomplete="off"></label>
-       <label>Landmark <span class="opt">— how the technician finds it</span>
-         <input data-pf="landmark" maxlength="200" value="${esc(p.landmark)}" placeholder="beside the chapel, blue gate…" autocomplete="off"></label>`;
-  return {title: 'Book a job', sub: 'A call you took yourself', body: `
-    <div class="segment">${[['new', 'New customer'], ['existing', 'Customer files']].map(([k, t]) =>
-      `<button type="button" class="${p.mode === k ? 'active' : ''}" data-act="pset" data-f="mode" data-v="${k}">${t}</button>`).join('')}</div>
-    ${who}
-    <div class="fieldlabel">Aircon type</div>
-    ${typeGrid('panel')}
-    ${p.units.length ? '<div class="fieldlabel">Service summary</div>' : ''}
-    ${cartHtml('panel', p.units, {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}
-    <label>Notes <span class="opt">— optional</span><textarea data-pf="notes" maxlength="1000" placeholder="What is wrong, the price you agreed…">${esc(p.notes)}</textarea></label>
-    <div class="fieldlabel">When <span class="opt">— or leave it for later</span></div>
-    <div class="tabbar tight">${[['', 'Not yet'], [today, 'Today'], [addDays(today, 1), 'Tomorrow'], [addDays(today, 2), niceDate(addDays(today, 2))]].map(([v, t]) =>
-      `<button type="button" class="tab-btn${p.date === v ? ' active' : ''}" data-act="pset" data-f="date" data-v="${v}">${esc(t)}</button>`).join('')}</div>
-    <input type="date" data-pf="date" value="${esc(p.date)}" min="${today}" aria-label="Another day">
-    ${p.date ? `<div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
-      `<button type="button" class="${p.slot === k ? 'active' : ''}" data-act="pset" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>` : ''}
-    <div class="stack"><button type="button" class="b primary wide" data-act="savebook">Book it</button></div>`, info: 'book'};
+  return {title: 'Book a job', sub: 'A call you took yourself', info: 'book',
+    body: `<div class="panel bk-form">${bookFormHtml('panel', p)}</div>`};
 }
 
 /* ---------------------------------------------------------------- team (SukiRun's Admin → Team) */
@@ -2756,7 +2863,7 @@ const ACTIONS = {
   },
   editbooking: id => {
     const b = db.bookings[id], p = topPanel(); if (!b || !p) return;
-    if (!(p.units || []).length){ notice('Add at least one aircon. Nothing was changed.', true); return; }
+    if (!(p.units || []).length){ bkShow('panel', p, [['units', 'Add at least one aircon — tap its type. Nothing was changed.']]); return; }
     const units = p.units.map(u => ({...u, services: [...u.services]}));
     write('edit_booking', {p_booking: id, p_units: units}, 'Edit ' + b.ref, [id], () => {
       b.units = units; b.services = unionServices(units); b.unit_count = units.length;
@@ -2853,9 +2960,19 @@ const ACTIONS = {
   pset: (id, el) => {
     const p = topPanel(); if (!p) return;
     p[el.dataset.f] = el.dataset.v;
-    if (p.kind === 'book' && el.dataset.f === 'mode') p.customer_id = '';
+    if (p.kind === 'book' && el.dataset.f === 'mode'){ p.customer_id = ''; p._bad = null; p._msg = ''; }
+    if (p._bad && el.dataset.f === 'customer_id' && el.dataset.v) bkClear('panel', 'customer');
     render();
   },
+  // THE booking form's own taps (bookFormHtml), for the page and the office alike
+  bkset: (id, el) => {
+    const ctx = el.dataset.cart, s = bkState(ctx); if (!s) return;
+    s[el.dataset.f] = el.dataset.v;
+    bkClear(ctx, el.dataset.f);
+    bkRedraw(ctx);
+  },
+  bkpin: (id, el) => bkPin(el.dataset.cart),
+  bkmap: (id, el) => bkMap(el.dataset.cart),
   psvc: (id, el) => {
     const p = topPanel(); if (!p) return;
     const k = el.dataset.v;
@@ -2867,7 +2984,7 @@ const ACTIONS = {
     p.count = Math.min(20, Math.max(1, (p.count || 1) + Number(el.dataset.v)));
     render();
   },
-  pickcust: (id, el) => { const p = topPanel(); if (!p) return; p.mode = 'existing'; p.customer_id = el.dataset.v; render(); },
+  pickcust: (id, el) => { const p = topPanel(); if (!p) return; p.mode = 'existing'; p.customer_id = el.dataset.v; p._bad = null; p._msg = ''; render(); },
 
   setactive: (id, el) => {
     const t = db.team[id]; if (!t) return;
@@ -2916,28 +3033,20 @@ const ACTIONS = {
   },
   savebook: () => {
     const p = topPanel(); if (!p || p.kind !== 'book') return;
-    const say = t => notice(t + ' Nothing was booked.', true);
-    let cid, name;
-    if (p.mode === 'existing'){
-      const c = db.customers[p.customer_id];
-      if (!c) return say('Choose the customer first.');
-      cid = c.id; name = c.full_name;
-    } else {
-      if (p.full_name.trim().length < 2) return say('Type the customer’s name.');
-      if (digits(p.contact).length < 7) return say('Type a contact number.');
-      if (p.address.trim().length < 4) return say('Type the address.');
-      cid = uuid(); name = p.full_name.trim();
-    }
-    if (!(p.units || []).length) return say('Add at least one aircon — tap its type.');
-    if (p.date && p.date < manilaDate(0)) return say('That day has already passed.');
-    const jid = uuid(), fresh = p.mode !== 'existing';
+    const bad = bookProblems('panel', p);
+    if (bad.length) return bkShow('panel', p, bad);
+    const fresh = p.mode !== 'existing';
+    const cid = fresh ? uuid() : p.customer_id;
+    const name = fresh ? p.full_name.trim() : db.customers[cid].full_name;
+    const jid = uuid();
     const units = p.units.map(u => ({...u, services: [...u.services]}));
-    const details = {new_customer: fresh, units, notes: p.notes.trim(), date: p.date || null, slot: p.date ? p.slot : null};
-    if (fresh) Object.assign(details, {full_name: name, contact: p.contact.trim(), address: p.address.trim(), landmark: p.landmark.trim()});
+    const details = {new_customer: fresh, units, notes: (p.notes || '').trim(), date: p.date || null, slot: p.date ? p.slot : null};
+    if (fresh) Object.assign(details, {full_name: name, contact: p.contact.trim(), address: p.address.trim(),
+      landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null});
     write('book_by_phone', {p_job: jid, p_customer: cid, p_details: details}, 'Booked by phone — ' + name, fresh ? [jid, cid] : [jid], db => {
       const now = new Date().toISOString();
       if (fresh) db.customers[cid] = {id: cid, full_name: name, contact: details.contact, address: details.address,
-        landmark: details.landmark || null, created_at: now};
+        landmark: details.landmark || null, lat: p.lat ? +p.lat : null, lng: p.lng ? +p.lng : null, created_at: now};
       db.jobs[jid] = {id: jid, customer_id: cid, services: unionServices(units), units, unit_count: units.length,
         unit_type: [...new Set(units.map(u => u.type))].length === 1 ? units[0].type : 'Mixed',
         unit_brand: units[0].brand, unit_model: units[0].model, notes: details.notes || null,
@@ -3047,6 +3156,16 @@ document.addEventListener('keydown', e => {
 document.addEventListener('input', e => {
   const t = e.target, f = t.dataset && t.dataset.pf;
   if (t.dataset && t.dataset.ued && unitEd){ unitEd.unit[t.dataset.ued] = t.value; return; }
+  // THE booking form: every box writes to its form's state, and typing clears its red
+  if (t.dataset && t.dataset.bk){
+    const ctx = t.dataset.cart, s = bkState(ctx); if (!s) return;
+    const f = t.dataset.bk;
+    s[f] = t.type === 'checkbox' ? t.checked : t.value;
+    bkClear(ctx, f);
+    if (f === 'contact' && ctx !== 'pub'){ const m = $('#bookSame'); if (m) m.innerHTML = bookSame(s); }
+    if (f === 'date'){ t.blur(); bkRedraw(ctx); }   // the day chips follow the calendar
+    return;
+  }
   if (f){
     const p = topPanel(); if (!p) return;
     p[f] = t.type === 'checkbox' ? t.checked : t.value;
@@ -3181,20 +3300,15 @@ function say(el, ok, text){
 }
 
 const bookForm = $('#bookForm');
-const bookMsg  = $('#bookMsg');
-bookForm.preferred_on.min = manilaDate(0);
-bookForm.preferred_on.max = manilaDate(120);
 
 $('#heroCall').href = 'tel:' + digits(SHOP_PHONE);
 $('#heroCall').textContent = '📞 Rather talk? ' + SHOP_PHONE;
-$('#privacyText').textContent =
-  'We keep your name, number, address and anything else you write here, so we can do the job. ' +
-  'Only ' + SHOP_NAME + ' staff see it. To have it removed, ' + ringUs() + '.';
 
 /* The service list comes from the database, not from an array in here. Prices come with
    it only while the owner shows them (13). */
 const serviceLabels = lsGet('ws_services', {});
 const pubPrices = {};
+drawPubCart();   // THE booking form, drawn now by bookFormHtml('pub'); again when the services arrive
 (async function loadServices(){
   try {
     const rows = await rpc('list_services', {}, false);
@@ -3205,67 +3319,26 @@ const pubPrices = {};
     rows.forEach(s => { serviceLabels[s.key] = s.label; pubPrices[s.key] = s.prices || null; });
     lsSet('ws_services', serviceLabels);
   } catch (e) {
-    say(bookMsg, false, 'We could not load the list of services. Please ' + ringUs() + ' instead.');
+    pubBook._msg = 'We could not load the list of services. Please ' + ringUs() + ' instead.';
+    pubBook._msgOk = false;
   }
   drawPubCart();
   render();
 })();
 
-/* Location: optional, one tap, and easy to take back. */
-const locBtn = $('#locBtn'), locMsg = $('#locMsg');
-locBtn.addEventListener('click', () => {
-  if (bookForm.lat.value){
-    bookForm.lat.value = bookForm.lng.value = '';
-    locBtn.textContent = '📍 Pin my location';
-    locMsg.textContent = 'Location removed.';
-    return;
-  }
-  if (!navigator.geolocation){ locMsg.textContent = 'This phone cannot share its location. The landmark will do.'; return; }
-  locBtn.disabled = true;
-  locMsg.textContent = 'Finding you…';
-  navigator.geolocation.getCurrentPosition(p => {
-    bookForm.lat.value = p.coords.latitude.toFixed(6);
-    bookForm.lng.value = p.coords.longitude.toFixed(6);
-    locBtn.disabled = false;
-    locBtn.textContent = '✕ Remove the pin';
-    locMsg.textContent = 'Location added.';
-  }, () => {
-    locBtn.disabled = false;
-    locMsg.textContent = 'Could not get your location. That is fine — the landmark will do.';
-  }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 60000});
-});
-
-function missing(f, payload){
-  if (payload.full_name.trim().length < 2) return ['full_name', 'Please give your name.'];
-  if (payload.contact.replace(/\D/g, '').length < 7) return ['contact', 'Please give a contact number we can ring.'];
-  if (payload.address.trim().length < 4) return ['address', 'Please give the address.'];
-  if (!pubUnits.length) return ['#pubTypes', 'Add your aircon — tap its type: Window, Split, Floor-mounted or Cassette.'];
-  if (!payload.preferred_on) return ['preferred_on', 'Please choose a date.'];
-  if (payload.preferred_on < f.preferred_on.min) return ['preferred_on', 'That date has already passed.'];
-  if (payload.preferred_on > f.preferred_on.max) return ['preferred_on', 'That is too far ahead. Please pick a date within the next few months.'];
-  if (!f.consent.checked) return ['consent', 'Please tick the box to say you have read how we keep your details.'];
-  return null;
-}
-
 /* Booking is the one write that does NOT queue: a stranger must know, there and then,
    whether the shop has it. A failed booking must never look like a successful one. */
 bookForm.addEventListener('submit', async e => {
   e.preventDefault();
-  const f = bookForm, btn = f.querySelector('button[type=submit]');
-  const payload = Object.fromEntries(new FormData(f).entries());
-  payload.units = pubUnits.map(u => ({type: u.type, services: u.services, brand: u.brand || null, model: u.model || null}));
-  delete payload.consent;
+  const s = pubBook;
+  if (s._sending) return;
+  const bad = bookProblems('pub', s);
+  if (bad.length){ bkShow('pub', s, bad); return; }
+  const payload = {full_name: s.full_name, contact: s.contact, address: s.address, landmark: s.landmark,
+    lat: s.lat, lng: s.lng, preferred_on: s.date, slot: s.slot, notes: s.notes, website: s.website,
+    units: pubUnits.map(u => ({type: u.type, services: u.services, brand: u.brand || null, model: u.model || null}))};
 
-  const bad = missing(f, payload);
-  if (bad){
-    say(bookMsg, false, bad[1]);
-    if (bad[0] && bad[0][0] === '#') $(bad[0]).scrollIntoView({block: 'center', behavior: 'smooth'});
-    else if (bad[0]) f[bad[0]].focus();
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = 'Sending…';
+  s._sending = true; s._msg = ''; drawPubCart();
   try {
     // Signed in as a customer, the token goes with it so the booking lands on the account.
     const res = await rpc('book_job', {payload}, !!session);
@@ -3273,24 +3346,21 @@ bookForm.addEventListener('submit', async e => {
     try { localStorage.setItem(REF_KEY, res.ref); } catch (err) {}
     trackForm.code.value = res.ref;
     $('#doneRef').textContent = res.ref;
-    f.reset();
-    bookForm.lat.value = bookForm.lng.value = '';
+    pubBook = freshPubBook();
     pubUnits = [];
     drawPubCart();
-    locBtn.textContent = '📍 Pin my location';
-    locMsg.textContent = 'Optional. At the house? Tap Pin. Anywhere else? Pick it on the map.';
-    bookMsg.className = 'msg';
-    f.hidden = true;
+    bookForm.hidden = true;
     $('#done').hidden = false;
     showPubBar();
     window.scrollTo({top: 0});
     if (session) pull();
   } catch (err) {
-    say(bookMsg, false, err instanceof Refused && err.human ? err.message
-      : 'Your booking was NOT sent — we could not reach the booking system. Please try again in a minute, or ' + ringUs() + '.');
+    s._msgOk = false;
+    s._msg = err instanceof Refused && err.human ? err.message
+      : 'Your booking was NOT sent — we could not reach the booking system. Please try again in a minute, or ' + ringUs() + '.';
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Send the booking';
+    s._sending = false;
+    if (s === pubBook) drawPubCart();   // a failure keeps everything typed, and says why
   }
 });
 
@@ -3298,7 +3368,7 @@ $('#again').addEventListener('click', () => {
   $('#done').hidden = true;
   bookForm.hidden = false;
   showPubBar();
-  bookForm.full_name.focus();
+  const n = $('[data-bk="full_name"]', bookForm); if (n) n.focus();
 });
 
 const trackForm = $('#trackForm');
@@ -3403,14 +3473,6 @@ $('#mapLocate').addEventListener('click', () => {
   navigator.geolocation.getCurrentPosition(p => mapObj.flyTo({center: [p.coords.longitude, p.coords.latitude], zoom: 18}),
     () => { const m = $('#mapMsg'); m.hidden = false; m.textContent = 'Could not find you — move the map by hand.'; },
     {enableHighAccuracy: true, timeout: 12000, maximumAge: 60000});
-});
-$('#mapBtn').addEventListener('click', () => {
-  const f = bookForm;
-  openMapPick(f.lat.value ? {lat: +f.lat.value, lng: +f.lng.value} : null, p => {
-    f.lat.value = p.lat.toFixed(6); f.lng.value = p.lng.toFixed(6);
-    locBtn.textContent = '✕ Remove the pin';
-    locMsg.textContent = 'Pinned on the map. Tap “Pick on map” again to move it.';
-  });
 });
 
 /* ================================================================ more than one tab
