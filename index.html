@@ -1021,8 +1021,9 @@ function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, booking
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
    for rows it already had. 3 (2026-09-26): no assignment — a technician's phone now holds
    every scheduled job, jobs carry status_by, customers carry checkup_snooze. */
-const REPAIR_ID = 8;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+const REPAIR_ID = 9;   // 4: customers carry photo_path; a technician's jobs carry customer_id
                        // 8 (0.1.8): jobs carry paid_*/followup_*; ZZ test rows deleted by hand
+                       // 9 (0.1.9): ZZ test rows deleted by hand again
                        // 5: a customer's booking carries its job's aircons (17)
                        // 6: the test data was deleted in the SQL editor (2026-09-27); a phone
                        //    keeps deleted jobs and customers until it takes a full copy
@@ -1894,7 +1895,7 @@ function bkWhenHtml(ctx, s, opts){
   const shut = closedOn(d);
   return `<div class="bk-sec${bkCls(s, 'date')}" data-bkf="date">
       <div class="fieldlabel">${pub ? 'Preferred date' : opts.notYet ? 'When <span class="opt">— or leave it for later</span>' : 'Day'}</div>
-      <div class="tabbar tight">${chips.map(([v, t]) => chip('date', v, t, d === v)).join('')}</div>
+      <div class="tabbar tight">${chips.map(([v, t]) => chip('date', v, t, v === '' ? s.date === '' : d === v)).join('')}</div>
       <input type="date" data-bk="date" data-cart="${ctx}" value="${esc(d)}" min="${today}"${pub ? ` max="${manilaDate(120)}"` : ''} aria-label="Another day">
       ${bkWhy(s, 'date') || (shut ? `<div class="${pub ? 'bk-why' : 'hint warn-line'}">${esc(pub ? closedWords(d, shut)
         : '⚠ The shop is closed that day' + (shut.why ? ' — ' + shut.why : '') + '. You can still book it.')}</div>` : '')}
@@ -1990,6 +1991,7 @@ function bookProblems(ctx, s){
   // an edit is only asked about the day when the day was changed: a job done last week is fine
   const dayMoved = s.mode !== 'edit' || s.date !== (s._origDate || '');
   if ((pub || s._needDate) && !s.date) out.push(['date', pub ? 'Please choose a date.' : 'Choose the day they want.']);
+  else if (!pub && s.date == null && s.mode !== 'edit') out.push(['date', 'Choose the day — or Not yet, if they have not said.']);
   else if (dayMoved && s.date && s.date < today) out.push(['date', 'That day has already passed.']);
   else if (pub && s.date > manilaDate(120)) out.push(['date', 'That is too far ahead. Please pick a date within the next few months.']);
   else if (pub && closedOn(s.date)) out.push(['date', closedWords(s.date, closedOn(s.date))]);
@@ -2870,8 +2872,8 @@ function openBook(customerId, services){
       .map(u => ({type: u.type, services: services && services.length ? [...services] : [...u.services], brand: u.brand || null, model: u.model || null}));
   }
   openPanel({kind: 'book', mode: customerId ? 'existing' : 'new', customer_id: customerId || '', q: '',
-    full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', units, notes: '', date: '', slot: 'am'});
-}
+    full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', units, notes: '', date: null, slot: 'am'});
+}   // date null = not chosen yet: Save asks (2026-09-27, the job saved as Not scheduled unseen)
 function bookMatches(p){
   const q = (p.q || '').toLowerCase().trim();
   const list = Object.values(db.customers).filter(c => c.full_name !== '(removed)')
@@ -3819,8 +3821,18 @@ const ACTIONS = {
     const {jid, op} = makeJobFor(b, cid, acc.op_id);
     if (price != null) write('set_job_price', {p_job: jid, p_price: price, p_decided_at: null}, 'Price ' + peso(price), [jid],
       db => { if (db.jobs[jid]) db.jobs[jid].price = price; }, op.op_id);
+    /* Guile, 2026-09-27: "I press Accept and the job always says Not scheduled." Accept now
+       puts the job on the day the customer asked for; ✏️ Edit moves it. A day already
+       passed stays empty, and the job says so (wantNote). */
+    const on = b.preferred_on, slot = b.slot || 'am', ok = on && on >= manilaDate(0);
+    // no p_decided_at: the server stamps it after "Job made", so the history reads in order
+    if (ok) write('schedule_job', {p_job: jid, p_date: on, p_slot: slot},
+      'Schedule ' + b.full_name, [jid], db => {
+        const j = db.jobs[jid]; if (j){ j.scheduled_on = on; j.slot = slot; if (j.status === 'booked') j.status = 'scheduled'; }
+      }, op.op_id);
     closePanel();
-    toast('Accepted — the job is waiting in Jobs.');
+    toast(ok ? 'Accepted — scheduled for ' + niceDate(on) + ', ' + slotWord(slot) + '. ✏️ Edit changes the day.'
+             : 'Accepted — the day they asked for has passed. Choose one in Jobs → No date.');
   },
   reject: id => {
     const b = db.bookings[id], p = topPanel(); if (!b) return;
