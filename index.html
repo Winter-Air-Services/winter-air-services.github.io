@@ -1158,6 +1158,7 @@ async function pull(){
   for (const row of res.team || []) db.team[row.id] = row;
   for (const id of res.removed_jobs || []) if (!busy.has(id)) delete db.jobs[id];
   for (const id of res.removed_bookings || []) if (!busy.has(id)) delete db.bookings[id];
+  for (const id of res.removed_customers || []) if (!busy.has(id)) delete db.customers[id];   // 22
   db.cursor = res.cursor || db.cursor;
   if (res.profile) db.profile = res.profile;   // name and the "I work here" claim
   if (res.settings) db.settings = res.settings; // the shop's own settings (admin only)
@@ -2512,7 +2513,7 @@ function panelReject(p){
   const b = db.bookings[p.id];
   if (!b) return {title: 'Reject', body: empty('This booking is no longer on this phone.')};
   return {title: 'Reject ' + b.ref, sub: b.full_name, body: `
-    <label>Why <span class="opt">— optional, for the office</span>
+    <label>Why <span class="opt">— optional; empty says “No reason”</span>
       <input data-pf="why" maxlength="300" value="${esc(p.why || '')}"></label>
     <div class="stack"><button type="button" class="b danger wide" data-act="reject" data-id="${esc(b.id)}">Reject this booking</button></div>`};
 }
@@ -2696,7 +2697,8 @@ function panelCancel(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Cancel', body: empty('This job is no longer on this phone.')};
   return {title: 'Cancel the job', sub: jobCust(j).full_name, body: `
-    <label>Why <input data-pf="why" maxlength="300" value="${esc(p.why || '')}" placeholder="Customer cancelled, no parts…"></label>
+    <label>Why <span class="opt">— optional; empty says “No reason”</span>
+      <input data-pf="why" maxlength="300" value="${esc(p.why || '')}" placeholder="Customer cancelled, no parts…"></label>
     <div class="stack"><button type="button" class="b danger wide" data-act="cancel" data-id="${esc(j.id)}">Cancel this job</button></div>`, info: 'cancel'};
 }
 
@@ -2721,7 +2723,7 @@ function drawPeople(){
       <span class="menu-sub">${pinned} pinned · days since each one's last visit</span></span><span class="menu-chev">›</span></button></div>
     <input type="search" class="find" id="custSearch" placeholder="🔎 Name, number or address" value="${esc(ui.search || '')}" autocomplete="off">
     <div id="custList">${custListHtml()}</div>
-    <div class="menu">${menuRow('tidy', '', '🧹', 'Tidy up old bookings', 'Delete old rejected and cancelled ones')}</div>`;
+    <div class="menu">${menuRow('tidy', '', '🧹', 'Tidy up old bookings', 'Delete rejected and cancelled ones')}</div>`;
 }
 function custRow(c){
   const n = jobsOf(c.id).length;
@@ -2763,25 +2765,29 @@ function panelCustomer(p){
         <div class="lrow-main"><div class="lrow-title">${esc(svcList(b.services))}</div>
           <div class="lrow-sub">${esc(new Date(b.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}))}</div></div>
         <div class="lrow-side">${pill(b.status, b.ref)}</div></div>`).join('')}</div>` : empty('None.')}
-    ${removed ? '' : `<div class="menu">${menuRow('forget', c.id, '🗑️', 'Remove this customer’s details', 'When they ask. Cannot be undone.', 'is-danger')}</div>`}`};
+    <div class="menu">${menuRow('forget', c.id, '🗑️', 'Delete this customer', 'With their bookings and jobs. Cannot be undone.', 'is-danger')}</div>`};
 }
 function panelForget(p){
   const c = db.customers[p.id];
-  if (!c) return {title: 'Remove details', body: empty('This customer is no longer on this phone.')};
-  return {title: 'Remove details', sub: c.full_name, body: `
-    <p class="hint" style="font-size:14px">Name, number, address, landmark, pin and notes are wiped from
-      the customer, their bookings and their jobs. The jobs stay, with no name, so the numbers
-      still count them. <b>This cannot be undone.</b></p>
-    <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, remove ${esc(c.full_name)}’s details</label>
-    <div class="stack"><button type="button" class="b danger wide" data-act="forget" data-id="${esc(c.id)}">Remove the details</button></div>`};
+  if (!c) return {title: 'Delete customer', body: empty('This customer is no longer on this phone.')};
+  // 22 (Guile, 2026-09-27): delete means gone — not "(removed) 0000000"
+  const js = jobsOf(c.id), bs = Object.values(db.bookings).filter(b => b.customer_id === c.id);
+  const n = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
+  return {title: 'Delete customer', sub: c.full_name, body: `
+    <p class="hint" style="font-size:14px"><b>${esc(c.full_name)}</b> is deleted with ${esc(n(bs.length, 'booking'))},
+      ${esc(n(js.length, 'job'))}, their history and their gate photo — from every phone. Numbers stop
+      counting those jobs. <b>This cannot be undone.</b> A job on today or in progress stops it.</p>
+    <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, delete ${esc(c.full_name)}</label>
+    <div class="stack"><button type="button" class="b danger wide" data-act="forget" data-id="${esc(c.id)}">Delete for good</button></div>`};
 }
 function panelTidy(p){
   return {title: 'Tidy up old bookings', body: `
     <p class="hint" style="font-size:14px">Deletes rejected and cancelled bookings older than the number
-      of days you choose. Accepted bookings stay — they are customers' history.</p>
-    <label>Older than (days) <input data-pf="days" inputmode="numeric" value="${esc(p.days != null ? p.days : '365')}"></label>
+      of days you choose — <b>0 deletes all of them</b>, today's too. Accepted bookings stay: their
+      jobs point to them. To delete a customer with everything, open them → Delete this customer.</p>
+    <label>Older than (days) <input data-pf="days" inputmode="numeric" value="${esc(p.days != null ? p.days : '0')}"></label>
     <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, delete them</label>
-    <div class="stack"><button type="button" class="b danger wide" data-act="tidy">Delete old rejected and cancelled bookings</button></div>`};
+    <div class="stack"><button type="button" class="b danger wide" data-act="tidy">Delete rejected and cancelled bookings</button></div>`};
 }
 
 /* Idea 9: each aircon's own history, across jobs. An aircon has no serial number here, so
@@ -3836,7 +3842,7 @@ const ACTIONS = {
   },
   reject: id => {
     const b = db.bookings[id], p = topPanel(); if (!b) return;
-    write('reject_booking', {p_booking: id, p_reason: ((p && p.why) || '').trim() || null}, 'Reject ' + b.ref, [id], () => {
+    write('reject_booking', {p_booking: id, p_reason: ((p && p.why) || '').trim() || 'No reason'}, 'Reject ' + b.ref, [id], () => {
       b.status = 'rejected'; b.handled_at = b.handled_at || new Date().toISOString();
     });
     closePanel();
@@ -3985,8 +3991,8 @@ const ACTIONS = {
   },
   cancel: id => {
     const j = db.jobs[id], p = topPanel(); if (!j) return;
-    const why = ((p && p.why) || '').trim();
-    if (!why){ notice('Say why the job is cancelled. Nothing was changed.', true); return; }
+    // Guile, 2026-09-27: an empty box is not a question — it goes as "No reason"
+    const why = ((p && p.why) || '').trim() || 'No reason';
     write('set_job_status', {p_job: id, p_status: 'cancelled', p_reason: why, p_decided_at: null},
       'Cancel job — ' + (jobCust(j).full_name || ''), [id], () => {
         (j._prev = j._prev || []).push(j.status); j.status = 'cancelled'; j.cancel_reason = why; j.status_by = session.uid;
@@ -4011,23 +4017,29 @@ const ACTIONS = {
   },
   forget: id => {
     const c = db.customers[id], p = topPanel(); if (!c) return;
-    if (!(p && p.ok)){ notice('Tick the box first — removing details cannot be undone.', true); return; }
-    const old = c.photo_path;
-    const op = write('forget_customer', {p_customer: id}, 'Remove details of ' + c.full_name, [id], () => {
-      Object.assign(c, {full_name: '(removed)', contact: '0000000', address: '(removed)', landmark: null, lat: null, lng: null, photo_path: null});
+    if (!(p && p.ok)){ notice('Tick the box first — deleting cannot be undone.', true); return; }
+    const today = manilaDate(0);
+    if (jobsOf(id).some(j => j.status === 'in_progress' || (['booked', 'scheduled'].includes(j.status) && j.scheduled_on === today))){
+      notice('They have a job on today or in progress. Finish or cancel it first. Nothing was deleted.', true); return;
+    }
+    const old = c.photo_path, jids = jobsOf(id).map(j => j.id);
+    const bids = Object.values(db.bookings).filter(b => b.customer_id === id).map(b => b.id);
+    const op = write('delete_customer', {p_customer: id}, 'Delete ' + c.full_name, [id, ...jids, ...bids], db => {
+      jids.forEach(k => delete db.jobs[k]); bids.forEach(k => delete db.bookings[k]); delete db.customers[id];
     });
     if (old){ op.cleanup_photo = old; saveLocal(); }
     closePanel();
   },
   tidy: () => {
     const p = topPanel() || {};
-    const days = parseInt(p.days != null ? p.days : '365', 10);
-    if (!(days >= 1)){ notice('Type a number of days, like 365.', true); return; }
+    const days = parseInt(p.days != null && p.days !== '' ? p.days : '0', 10);
+    if (!(days >= 0)){ notice('Type a number of days — 0 for all of them.', true); return; }
     if (!p.ok){ notice('Tick the box first — deleted bookings cannot be brought back.', true); return; }
-    write('clear_old_bookings', {p_days: days}, 'Delete rejected and cancelled bookings older than ' + days + ' days', [], db => {
+    write('clear_old_bookings', {p_days: days}, days ? 'Delete rejected and cancelled bookings older than ' + days + ' days'
+      : 'Delete every rejected and cancelled booking', [], db => {
       const cut = Date.now() - days * 864e5;
       for (const b of Object.values(db.bookings))
-        if (['rejected', 'cancelled'].includes(b.status) && new Date(b.created_at) < cut) delete db.bookings[b.id];
+        if (['rejected', 'cancelled'].includes(b.status) && new Date(b.created_at) <= cut) delete db.bookings[b.id];
     });
     closePanel();
   },
