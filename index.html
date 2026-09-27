@@ -71,6 +71,9 @@
   .hero-kicker{margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
   .hero h1{color:#fff;font-size:28px;line-height:1.15;margin:0 0 6px}
   .hero .lede{color:rgba(255,255,255,.9);margin:0 0 14px}
+  .hero-call.fb{margin-top:8px;background:#1877f2;color:#fff}   /* the space before it is the gap; wraps flush left */
+  .tab-btn.closed{opacity:.55;text-decoration:line-through}
+  .warn-line{color:var(--warn)}
   .hero-call{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:8px 16px;border-radius:999px;
     background:#0D6FB8;color:#fff;font-weight:700;font-size:14.5px;text-decoration:none}   /* on the photo in both themes */
   .hero-card .panel{box-shadow:0 10px 30px rgba(6,18,34,.22)}
@@ -479,6 +482,28 @@
   .tl-what{font-size:13.5px;line-height:1.4;overflow-wrap:anywhere}
   .tl-when{font-size:11.5px;color:var(--ink-soft)}
   .tl-changes{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  /* idea 4: the closed-days calendar */
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:10px}
+  .cal-head{text-align:center;font-size:12px;color:var(--ink-soft);font-weight:700}
+  .cal-day{min-height:40px;margin:0;padding:0;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);
+    color:var(--ink);font-size:14px;font-weight:600}
+  .cal-day:disabled{opacity:.35}
+  .cal-day.today{outline:2px solid var(--primary);outline-offset:-2px}
+  .cal-day.shut{background:#d64545;border-color:#d64545;color:#fff;opacity:1}
+  .cal-day.weekly{background:var(--surface-alt);text-decoration:line-through}
+  .cal-nav{display:flex;align-items:center;gap:8px}
+  .wd-row{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px}   /* one row at 375px */
+  .wd-row .tab-btn{min-width:0;padding:8px 0;justify-content:center;text-align:center}
+  .cal-nav .b{min-height:34px;padding:4px 12px}
+  /* idea 5: paid */
+  /* three equal buttons under their line — no lone button wrapping at 375px */
+  .paid-row{display:grid;grid-template-columns:repeat(3,1fr);align-items:center;gap:8px;margin-top:10px}
+  .paid-row .b{min-height:40px;min-width:0;padding:6px 4px;justify-content:center}
+  .paid-row > .muted{grid-column:1/-1}
+  .paid-row > .pill{grid-column:span 2;justify-self:start}
+  .rc-paid{margin-top:8px;font-weight:700}
+  .rc-gcash{display:flex;gap:12px;align-items:center;margin-top:10px;font-size:12px}
+  .rc-gcash img{width:90px;height:90px;object-fit:contain}
   .route-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;font-size:13px;color:var(--ink-soft)}
   .route-bar > span:first-child{flex:1 1 auto}
   input.locked{background:var(--surface-alt);color:var(--ink-soft)}
@@ -996,7 +1021,8 @@ function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, booking
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
    for rows it already had. 3 (2026-09-26): no assignment — a technician's phone now holds
    every scheduled job, jobs carry status_by, customers carry checkup_snooze. */
-const REPAIR_ID = 7;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+const REPAIR_ID = 8;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+                       // 8 (0.1.8): jobs carry paid_*/followup_*; ZZ test rows deleted by hand
                        // 5: a customer's booking carries its job's aircons (17)
                        // 6: the test data was deleted in the SQL editor (2026-09-27); a phone
                        //    keeps deleted jobs and customers until it takes a full copy
@@ -1654,6 +1680,10 @@ const INFO = {
   roles: ['What they can do', 'Technician — sees every job on the schedule, marks jobs started and done.\n\nAdmin — everything: bookings, jobs, customers, team and settings.\n\nCustomer — books on the page and sees their own bookings. Nothing else.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
   showpricestech: ['Show prices to technicians', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt.\n\nOff: technicians never see a price; the server does not even send it.'],
+  closedwd: ['Closed every week', 'Tap the weekdays the shop never works. The booking page greys them out and will not take a booking for one. Book a job (a call you take) only warns you.'],
+  closeddates: ['Days off', 'A holiday, a fiesta, a day off: tap the day in the calendar. Type a reason first if you want the customer to see it ("Christmas"). Past days drop off by themselves.'],
+  shopfb: ['Facebook page', 'With a link here, the booking page shows “Message us on Facebook” beside the call button. Leave it empty to hide it.'],
+  shopgcash: ['GCash', 'The receipt shows the number and the name, so the customer can pay on the spot. With a picture named gcash-qr.png in web/img, the receipt shows the QR code too.'],
   gap: ['Check-up gap', 'Counted from a customer’s last finished job. Every admin phone uses the same number.'],
   reset: ['Take the office’s copy', 'Throws away everything on this phone that has not been sent, and takes the office’s copy again. Nothing else ever overwrites what you did here.'],
 };
@@ -1674,6 +1704,22 @@ const hideInfo = () => { $('#infoBox').hidden = true; };
    The SAME cart on the public page and in the office's Book a job and Edit: one set of
    functions, two places the list lives — 'pub' on the page, 'panel' on the open screen. */
 let pubUnits = [];
+/* What the booking page may know about the shop (21): the weekdays and dates it is closed, and
+   its Facebook link. From list_services(), kept for the next time with no signal. */
+let pubShop = lsGet('ws_shop', null) || {closed_days: [], closed_dates: [], facebook_url: ''};
+const PAY = {cash: 'cash', gcash: 'GCash', other: 'other'};
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+/* Idea 4: is the shop closed that day? The office reads its own settings; the page, pubShop. */
+function closedOn(ymd){
+  if (!ymd) return null;
+  const src = db && db.role === 'admin' && db.settings
+    ? {closed_days: db.settings.closed_days || [], closed_dates: db.settings.closed_dates || []} : pubShop;
+  const d = (src.closed_dates || []).find(x => x.on === ymd);
+  if (d) return {why: d.why || '', date: true};
+  const dow = new Date(ymd + 'T00:00:00Z').getUTCDay();
+  return (src.closed_days || []).includes(dow) ? {why: 'closed on ' + WEEKDAYS[dow] + 's', date: false} : null;
+}
+const closedWords = (ymd, c) => 'We are closed on ' + niceDate(ymd) + (c.why ? ' — ' + c.why : '') + '. Please choose another day.';
 let unitEd = null;   // the aircon being added or changed: {cart, index, unit}
 const ico = (name, cls) => `<img class="ico${cls ? ' ' + cls : ''}" src="icons/${name}.png" alt="" aria-hidden="true">`;
 /* A row made before the list existed still has one: n copies of its one aircon. */
@@ -1840,12 +1886,18 @@ function bkWhenHtml(ctx, s, opts){
   opts = {notYet: !pub, slot: pub, ...(opts || {})};
   const chips = [...(opts.notYet ? [['', 'Not yet']] : []), [today, 'Today'], [addDays(today, 1), 'Tomorrow'],
     [addDays(today, 2), niceDate(addDays(today, 2))]];
-  const chip = (f, v, t, on) => `<button type="button" class="tab-btn${on ? ' active' : ''}" data-act="bkset" data-cart="${ctx}" data-f="${f}" data-v="${v}">${esc(t)}</button>`;
+  const chip = (f, v, t, on) => {
+    // idea 4: a closed day stays in the row, greyed and marked; the page cannot choose it
+    const c = f === 'date' && v ? closedOn(v) : null;
+    return `<button type="button" class="tab-btn${on ? ' active' : ''}${c ? ' closed' : ''}" data-act="bkset" data-cart="${ctx}" data-f="${f}" data-v="${v}"${c && pub ? ' disabled' : ''}>${esc(t)}${c ? ' · Closed' : ''}</button>`;
+  };
+  const shut = closedOn(d);
   return `<div class="bk-sec${bkCls(s, 'date')}" data-bkf="date">
       <div class="fieldlabel">${pub ? 'Preferred date' : opts.notYet ? 'When <span class="opt">— or leave it for later</span>' : 'Day'}</div>
       <div class="tabbar tight">${chips.map(([v, t]) => chip('date', v, t, d === v)).join('')}</div>
       <input type="date" data-bk="date" data-cart="${ctx}" value="${esc(d)}" min="${today}"${pub ? ` max="${manilaDate(120)}"` : ''} aria-label="Another day">
-      ${bkWhy(s, 'date')}
+      ${bkWhy(s, 'date') || (shut ? `<div class="${pub ? 'bk-why' : 'hint warn-line'}">${esc(pub ? closedWords(d, shut)
+        : '⚠ The shop is closed that day' + (shut.why ? ' — ' + shut.why : '') + '. You can still book it.')}</div>` : '')}
     </div>
     ${opts.slot || d ? `<div class="fieldlabel">Morning or afternoon</div>
       <div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
@@ -1915,7 +1967,8 @@ function heroTextHtml(ctx, s){
   return `<p class="hero-kicker">Aircon cleaning · repair · installation<span class="hero-where"> · Bacolod</span></p>
     <h1>${ctx === 'edit' ? (s && s._saveAct === 'editbooking' ? 'Edit the booking' : 'Edit the job') : 'Book an aircon job'}</h1>
     ${lede}
-    ${ctx === 'pub' ? `<a class="hero-call" href="tel:${esc(digits(SHOP_PHONE))}">📞 Rather talk? ${esc(SHOP_PHONE)}</a>` : ''}`;
+    ${ctx === 'pub' ? `<a class="hero-call" href="tel:${esc(digits(SHOP_PHONE))}">📞 Rather talk? ${esc(SHOP_PHONE)}</a>` : ''}
+    ${ctx === 'pub' && pubShop.facebook_url ? `<a class="hero-call fb" href="${esc(pubShop.facebook_url)}" target="_blank" rel="noopener">💬 Message us on Facebook</a>` : ''}`;
 }
 /* A booking form on the photo — Book a job and Edit the job, the customer's page's shape. */
 const heroFormHtml = (ctx, s, form) => `<section class="hero">
@@ -1939,6 +1992,7 @@ function bookProblems(ctx, s){
   if ((pub || s._needDate) && !s.date) out.push(['date', pub ? 'Please choose a date.' : 'Choose the day they want.']);
   else if (dayMoved && s.date && s.date < today) out.push(['date', 'That day has already passed.']);
   else if (pub && s.date > manilaDate(120)) out.push(['date', 'That is too far ahead. Please pick a date within the next few months.']);
+  else if (pub && closedOn(s.date)) out.push(['date', closedWords(s.date, closedOn(s.date))]);
   if (pub && !s.consent) out.push(['consent', 'Please tick the box to say you have read how we keep your details.']);
   return out;
 }
@@ -2173,6 +2227,8 @@ function eventRow(e){
       return [icon, what, [['Status', lab(before.status), lab(to)]], by];
     }
     case 'job_onway': return ['🚐', 'On the way', null, by];
+    case 'job_paid':  return ['💵', after.paid ? 'Paid · ' + (PAY[after.paid] || after.paid) : 'Marked not paid', null, by];   // 21
+    case 'job_followup': return ['☎️', 'After-job call', after.note ? [['Note', '', after.note]] : null, by];
     case 'job_seen':  return ['👀', 'Seen', null, by];   // one per person who opened the job (20)
     case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
     case 'job_photo': return ['📷', before.had ? 'New gate photo' : 'Gate photo', null, by];   // L3: the gate, for the next visit
@@ -2306,7 +2362,8 @@ function unseenCounts(){
   return {
     inbox: newBookings().filter(b => !b.seen_at).length,   // shared by the office (15)
     jobs: Object.values(db.jobs).filter(jobUnseen).length,
-    checkups: db.role === 'admin' ? checkups().filter(checkupUnseen).length : 0,
+    // the after-job calls count until made (idea 11): they leave the list once rung
+    checkups: db.role === 'admin' ? checkups().filter(checkupUnseen).length + followups().length : 0,
     team: db.role === 'admin' ? Object.values(db.team).filter(userUnseen).length : 0,
   };
 }
@@ -2336,7 +2393,7 @@ function drawStats(){
     [newBookings().length, 'New', 'inbox', 'new'],
     [jobs.filter(j => j.scheduled_on === today && j.status !== 'cancelled').length, 'Today', 'jobs', 'today'],
     [jobs.filter(j => !j.scheduled_on && !['done', 'cancelled'].includes(j.status)).length, 'No date', 'jobs', 'unplanned'],
-    [checkups().length, 'Check-ups', 'checkups', ''],
+    [checkups().length + followups().length, 'Check-ups', 'checkups', ''],
   ];
   return `<div class="stat-strip">${stats.map(([n, label, tab, v]) =>
     `<button type="button" class="stat-card" data-act="gostat" data-tab="${tab}" data-v="${v}">
@@ -2523,7 +2580,7 @@ function jobRow(j){
       <div class="lrow-sub">${esc(place(c))}</div>
       ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
-    <div class="lrow-side">${statusPill(j.status)}${j.price != null ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
+    <div class="lrow-side">${statusPill(j.status)}${j.price != null ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}${j.paid_method ? '<span class="tag">Paid</span>' : ''}</div>
   </div>`;
 }
 function panelJob(p){
@@ -2568,6 +2625,11 @@ function panelJob(p){
       ${kv('Landmark', esc(c.landmark || ''))}
       ${kv('Notes', j.notes ? esc(j.notes) : '')}
       ${tech ? '' : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
+      ${tech || j.status === 'cancelled' ? '' : `<div class="paid-row">${j.paid_method
+        ? `<span class="pill done">Paid · ${esc(PAY[j.paid_method])}${j.paid_at ? ' · ' + esc(shortDate(manilaDay(j.paid_at))) : ''}</span>
+           <button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="">Not paid</button>`
+        : `<span class="muted">Not paid yet</span>${['cash', 'gcash', 'other'].map(m =>
+            `<button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="${m}">${m === 'cash' ? '💵 Cash' : m === 'gcash' ? '📱 GCash' : 'Other'}</button>`).join('')}`}</div>`}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
       ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
       <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${j.status !== 'cancelled' || !tech ? editBtn('editjob', j.id) : ''}</div>
@@ -2691,6 +2753,7 @@ function panelCustomer(p){
       <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${removed ? '' : photoBtn(c.id, c.photo_path)}</div>
     </div>
     ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>`}
+    ${airconHistoryHtml(c.id)}
     <div class="sec">Jobs</div>
     ${jobs.length ? `<div class="list">${jobs.map(jobRow).join('')}</div>` : empty('No jobs yet.')}
     <div class="sec">Bookings from the page</div>
@@ -2719,11 +2782,65 @@ function panelTidy(p){
     <div class="stack"><button type="button" class="b danger wide" data-act="tidy">Delete old rejected and cancelled bookings</button></div>`};
 }
 
+/* Idea 9: each aircon's own history, across jobs. An aircon has no serial number here, so
+   it is known by its type, brand and model and its place among its twins ("Split #2"). */
+function airconHistory(cid){
+  const byKey = {};
+  jobsOf(cid).filter(j => j.status === 'done' && j.done_at).sort(byDoneDesc).reverse().forEach(j => {
+    const seen = {};
+    unitsOf(j).forEach(u => {
+      const base = [u.type || 'Aircon', (u.brand || '').trim().toLowerCase(), (u.model || '').trim().toLowerCase()].join('|');
+      seen[base] = (seen[base] || 0) + 1;
+      const key = base + '|' + seen[base], day = manilaDay(j.done_at);
+      const h = byKey[key] || (byKey[key] = {type: u.type || 'Aircon', meta: [u.brand, u.model].filter(Boolean).join(' · '), n: seen[base], last: {}});
+      u.services.forEach(k => { h.last[k] = day; });
+      h.lastDone = day;
+    });
+  });
+  const list = Object.values(byKey);
+  const count = {}; list.forEach(h => { count[h.type] = (count[h.type] || 0) + 1; h.name = h.type + ' #' + count[h.type]; });
+  return list;
+}
+function airconHistoryHtml(cid){
+  const list = airconHistory(cid); if (!list.length) return '';
+  return `<div class="sec">🛒 Their aircons</div><div class="list">${list.map(h => `<div class="lrow flat">
+      <div class="lrow-main"><div class="lrow-title">${esc(h.name)}${h.meta ? ` <span class="muted">${esc(h.meta)}</span>` : ''}</div>
+      <div class="lrow-sub">${esc(Object.entries(h.last).map(([k, d]) => svcLabel(k) + ' ' + shortDate(d) + ' (' + daysAgo(d) + ')').join(' · '))}</div></div></div>`).join('')}</div>`;
+}
+/* The aircon whose last cleaning is oldest — what the check-up call is about. */
+function oldestClean(cid){
+  const list = airconHistory(cid).map(h => ({h, d: h.last.clean || h.lastDone})).sort((a, b) => a.d.localeCompare(b.d));
+  return list[0] || null;
+}
+
 /* ---------------------------------------------------------------- check-ups */
+/* Idea 11: a week after a job is done the office rings — "is it working well?". Jobs done 6
+   to 30 days ago, not yet called. */
+function followups(){
+  const today = manilaDate(0);
+  return Object.values(db.jobs).filter(j => j.status === 'done' && j.done_at && !j.followup_at)
+    .filter(j => { const n = daysSince(manilaDay(j.done_at)); return n >= 6 && n <= 30; })
+    .filter(j => { const c = jobCust(j); return c.full_name && c.full_name !== '(removed)'; })
+    .sort((a, b) => a.done_at < b.done_at ? -1 : 1);
+}
+function followupHtml(){
+  const list = followups(); if (!list.length) return '';
+  return `<div class="sec">☎️ A week after the job</div><div class="list">${list.map(j => { const c = jobCust(j), d = manilaDay(j.done_at);
+    return `<div class="lrow col"><div class="lrow-top" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}">
+        <div class="avatar">${esc(initials(c.full_name))}</div>
+        <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}${unsentPill(j.id)}</div>
+          <div class="lrow-sub">Done ${esc(shortDate(d))} · ${esc(daysAgo(d))} — ${esc(unitsLine(unitsOf(j)))}, ${esc(svcList(j.services))}</div>
+          <div class="lrow-sub">Ask: is it working well?</div></div></div>
+      <div class="actions">${callBtn(c.contact)}
+        <button type="button" class="b primary" data-act="followup" data-id="${esc(j.id)}" data-v="All good">✓ All good</button>
+        <button type="button" class="b" data-act="followup" data-id="${esc(j.id)}" data-v="A problem — a visit booked" data-book="1">A problem — book a visit</button></div>
+    </div>`; }).join('')}</div>`;
+}
 function drawCheckups(){
   const list = checkups(), today = manilaDate(0);
   const hidden = Object.values(db.customers).filter(c => c.checkup_snooze && c.checkup_snooze > today).length;
-  return (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.')) +
+  return followupHtml() + (followups().length ? '<div class="sec">📅 Check-ups due</div>' : '') +
+    (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.')) +
     (hidden ? `<p class="count" style="margin-top:10px">${hidden} put off with “Not now”.</p>` : '');
 }
 function checkupRow(k){
@@ -2733,6 +2850,7 @@ function checkupRow(k){
       <div class="avatar">${esc(initials(c.full_name))}</div>
       <div class="lrow-main"><div class="lrow-title">${newDot(checkupUnseen(k))}${esc(c.full_name)}${unsentPill(c.id)}</div>
         <div class="lrow-sub">Last job ${esc(shortDate(doneDay))} · ${esc(daysAgo(doneDay))}</div>
+        ${(o => o ? `<div class="lrow-sub">Longest since: ${esc(o.h.name)}${o.h.meta ? ' (' + esc(o.h.meta) + ')' : ''} — ${esc(daysAgo(o.d))}</div>` : '')(oldestClean(c.id))}
         <div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
     </div>
     <div class="actions">${callBtn(c.contact)}
@@ -2874,10 +2992,60 @@ function panelMember(p){
 
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
-  const secs = [['services', 'Services & prices'], ['receipt', 'Receipt'], ['numbers', 'Numbers']];
+  const secs = [['services', 'Services & prices'], ['closed', 'Closed days'], ['shop', 'Shop'], ['receipt', 'Receipt'], ['numbers', 'Numbers']];
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
-    ({services: drawServices, receipt: drawReceiptSample, numbers: drawNumbers})[v]();
+    ({services: drawServices, closed: drawClosed, shop: drawShop, receipt: drawReceiptSample, numbers: drawNumbers})[v]();
+}
+/* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
+   it"): the weekdays the shop never works, and a month calendar to close particular dates —
+   a holiday, a fiesta, a day off — each with a reason the customer is told. */
+function drawClosed(){
+  const set = db.settings || {}, wd = set.closed_days || [], dates = set.closed_dates || [];
+  const today = manilaDate(0), month = ui.calMonth && ui.calMonth >= today.slice(0, 7) ? ui.calMonth : today.slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const first = new Date(Date.UTC(y, m - 1, 1)), days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const cells = [];
+  for (let i = 0; i < first.getUTCDay(); i++) cells.push('<span class="cal-pad"></span>');
+  for (let d = 1; d <= days; d++){
+    const ymd = month + '-' + String(d).padStart(2, '0'), past = ymd < today;
+    const dated = dates.find(x => x.on === ymd), weekly = wd.includes(new Date(ymd + 'T00:00:00Z').getUTCDay());
+    cells.push(`<button type="button" class="cal-day${dated ? ' shut' : weekly ? ' weekly' : ''}${ymd === today ? ' today' : ''}"
+      data-act="closeddate" data-v="${ymd}" ${past || weekly ? 'disabled' : ''} title="${esc(dated ? (dated.why || 'Closed') : weekly ? 'Closed every ' + WEEKDAYS[new Date(ymd + 'T00:00:00Z').getUTCDay()] : 'Open — tap to close')}">${d}</button>`);
+  }
+  const prev = month > today.slice(0, 7), label = first.toLocaleDateString('en-PH', {month: 'long', year: 'numeric', timeZone: 'UTC'});
+  return `<div class="card">
+      <div class="menu-title">Closed every week ${infoBtn('closedwd')}</div>
+      <div class="wd-row">${WEEKDAYS.map((w, i) => `<button type="button" class="tab-btn${wd.includes(i) ? ' active' : ''}" data-act="closedwd" data-v="${i}">${w.slice(0, 3)}</button>`).join('')}</div>
+    </div>
+    <div class="card">
+      <div class="row-between"><div class="menu-title">Days off ${infoBtn('closeddates')}</div>
+        <div class="cal-nav"><button type="button" class="b" data-act="calmonth" data-v="-1" ${prev ? '' : 'disabled'} aria-label="Month before">‹</button>
+          <b>${esc(label)}</b><button type="button" class="b" data-act="calmonth" data-v="1" aria-label="Next month">›</button></div></div>
+      <label>Reason for the next day you close <span class="opt">— optional, customers see it</span>
+        <input data-k="closedWhy" id="closedWhy" maxlength="60" placeholder="Christmas, town fiesta, day off…" autocomplete="off"></label>
+      <div class="cal">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(x => `<span class="cal-head">${x}</span>`).join('')}${cells.join('')}</div>
+      <p class="hint">Tap a day to close it; tap it again to open it. Grey: closed every week.</p>
+    </div>
+    ${dates.length ? `<div class="sec">Coming days off</div><div class="list">${dates.map(x => `<div class="lrow flat">
+        <div class="lrow-main"><div class="lrow-title">${esc(niceDate(x.on))}</div><div class="lrow-sub">${esc(x.why || 'Closed')}</div></div>
+        <button type="button" class="b" data-act="closeddate" data-v="${esc(x.on)}">Open it</button></div>`).join('')}</div>` : ''}`;
+}
+/* Ideas 6 and 8: the shop's GCash for the receipt, and its Facebook page for the booking page. */
+function drawShop(){
+  const set = db.settings || {};
+  const field = (k, label, ph, extra) => `<label>${label}<input data-k="shop_${k}" id="shop_${k}" value="${esc(set[k] || '')}" placeholder="${esc(ph)}" autocomplete="off" ${extra || ''}></label>`;
+  return `<div class="card">
+      <div class="menu-title">Facebook page ${infoBtn('shopfb')}</div>
+      ${field('facebook_url', 'Link', 'https://facebook.com/winterairservices', 'inputmode="url" maxlength="200"')}
+      <div class="actions"><button type="button" class="b primary" data-act="saveshop" data-v="facebook_url">Save</button></div>
+    </div>
+    <div class="card">
+      <div class="menu-title">GCash, on the receipt ${infoBtn('shopgcash')}</div>
+      ${field('gcash_number', 'GCash number', '09XX XXX XXXX', 'inputmode="tel" maxlength="20"')}
+      ${field('gcash_name', 'Name on the account', 'e.g. J. Dela Cruz', 'maxlength="60"')}
+      <div class="actions"><button type="button" class="b primary" data-act="saveshop" data-v="gcash">Save</button></div>
+    </div>`;
 }
 const TYPE_SHORT = {Window: 'Window', Split: 'Split', 'Floor-mounted': 'Floor', Cassette: 'Cassette'};
 function drawServices(){
@@ -2972,6 +3140,9 @@ function receiptHtml(r){
     </table>
     ${j.notes ? `<div class="rc-notes"><span class="rc-label">Notes</span> ${esc(j.notes)}</div>` : ''}
     <div class="rc-sign"><div>Received by (customer)</div><div>Technician</div></div>
+    ${j.paid_method ? `<div class="rc-paid">PAID — ${esc(PAY[j.paid_method])}${j.paid_at ? ', ' + esc(d(manilaDay(j.paid_at))) : ''}</div>` : ''}
+    ${(db && db.settings || {}).gcash_number && !j.paid_method ? `<div class="rc-gcash"><img src="img/gcash-qr.png" alt="" onerror="this.remove()">
+      <div>Pay by GCash: <b>${esc(db.settings.gcash_number)}</b>${db.settings.gcash_name ? '<br>' + esc(db.settings.gcash_name) : ''}</div></div>` : ''}
     <div class="rc-foot">Thank you for choosing ${esc(SHOP_NAME)}.<br>This is not an official receipt.</div>
   </div>`;
 }
@@ -2996,6 +3167,7 @@ function receiptText(j){
   return [SHOP_NAME + ' — service receipt ' + r.no, 'Date: ' + niceDate(r.date), c.full_name ? 'Customer: ' + c.full_name : '',
     '', ...r.lines.map(l => '• ' + (l.unit || l.type) + ' — ' + l.label + (l.amount != null ? ': ' + peso(l.amount) : '')),
     r.adjust != null ? 'Adjustment: ' + peso(r.adjust) : '', 'TOTAL: ' + (r.total != null ? peso(r.total) : '—'),
+    j.paid_method ? 'PAID — ' + PAY[j.paid_method] : ((db.settings || {}).gcash_number ? 'Pay by GCash: ' + db.settings.gcash_number + (db.settings.gcash_name ? ' (' + db.settings.gcash_name + ')' : '') : ''),
     '', 'Thank you for choosing ' + SHOP_NAME + '. ' + SHOP_PHONE, 'This is not an official receipt.'].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
 }
 async function shareReceipt(id){
@@ -3147,7 +3319,50 @@ function drawNumbers(){
       <p class="meta">Middle time from booking to first action, last 30 days (${mins.length} booking${mins.length === 1 ? '' : 's'}). ${waiting} waiting now.</p></div>
     <div class="card"><div class="sec" style="margin-top:0">3 · Jobs done on the day promised</div>
       <div class="num">${done.length ? Math.round(onDay / done.length * 100) + '%' : '—'}</div>
-      <p class="meta">${onDay} of ${done.length} done jobs in the last 30 days.</p></div>`;
+      <p class="meta">${onDay} of ${done.length} done jobs in the last 30 days.</p></div>
+    ${takingsHtml(jobs, weekStart, thisWeek)}
+    <div class="card"><div class="sec" style="margin-top:0">A month's jobs, for the books</div>
+      <p class="meta">Every finished job of the month — day, customer, aircons, price, paid — as a spreadsheet (CSV, opens in Excel or Google Sheets).</p>
+      <div class="actions"><button type="button" class="b" data-act="exportmonth" data-v="0">⬇ This month</button>
+        <button type="button" class="b" data-act="exportmonth" data-v="-1">⬇ Last month</button></div></div>`;
+}
+
+/* Idea 5: what came in — the jobs marked paid, by the day they were paid. */
+function takingsHtml(jobs, weekStart, thisWeek){
+  const paid = jobs.filter(j => j.paid_method && j.paid_at && j.price != null);
+  const sum = list => list.reduce((a, j) => a + Number(j.price), 0);
+  const week = paid.filter(j => weekStart(manilaDay(j.paid_at)) === thisWeek);
+  const month = paid.filter(j => manilaDay(j.paid_at).slice(0, 7) === manilaDate(0).slice(0, 7));
+  const owed = jobs.filter(j => j.status === 'done' && !j.paid_method && j.price != null);
+  const by = m => sum(week.filter(j => j.paid_method === m));
+  return `<div class="card"><div class="sec" style="margin-top:0">Paid this week</div>
+      <div class="num">${esc(peso(sum(week)))}</div>
+      <p class="meta">${week.length} job${week.length === 1 ? '' : 's'} · cash ${esc(peso0(by('cash')))} · GCash ${esc(peso0(by('gcash')))} · other ${esc(peso0(by('other')))}.
+        This month ${esc(peso(sum(month)))}.</p>
+      ${owed.length ? `<p class="meta">Done but not marked paid: ${owed.length} job${owed.length === 1 ? '' : 's'}, ${esc(peso(sum(owed)))}.</p>` : ''}</div>`;
+}
+/* Idea 10: a month of finished jobs as a spreadsheet — for the owner's books. */
+function exportMonth(delta){
+  const now = manilaDate(0), [y, m] = now.split('-').map(Number);
+  const month = new Date(Date.UTC(y, m - 1 + delta, 1)).toISOString().slice(0, 7);
+  const rows = Object.values(db.jobs).filter(j => j.status === 'done' && j.done_at && manilaDay(j.done_at).slice(0, 7) === month)
+    .sort((a, b) => a.done_at < b.done_at ? -1 : 1);
+  // what the public page typed must never run as a formula (=, +, -, @ first): a ' before it
+  const cell = (v, i) => { let t = String(v == null ? '' : v); if (i !== 3 && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const lines = [['Done', 'Receipt no.', 'Customer', 'Number', 'Address', 'Aircons', 'Services', 'Price', 'Paid', 'Paid on', 'Done by']]
+    .concat(rows.map(j => { const c = jobCust(j);
+      // ="0917…": a number with its leading 0 kept — Excel and Sheets drop it otherwise
+      return [manilaDay(j.done_at), receiptOf(j).no, c.full_name, c.contact ? '="' + digits(c.contact) + '"' : '', place(c),
+        unitsLine(unitsOf(j)), svcList(j.services), j.price != null ? Number(j.price).toFixed(2) : '',
+        j.paid_method ? PAY[j.paid_method] : 'not yet', j.paid_at ? manilaDay(j.paid_at) : '', j.status_by_name || personName(j.status_by) || '']; }));
+  const csv = '\ufeff' + lines.map(r => r.map(cell).join(',')).join('\r\n');
+  const name = 'winter-air-jobs-' + month + '.csv';
+  if (window.AndroidBridge && window.AndroidBridge.shareText){ window.AndroidBridge.shareText(name, csv); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'})); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast(rows.length + ' job' + (rows.length === 1 ? '' : 's') + ' in ' + name);
 }
 
 /* ---------------------------------------------------------------- technician
@@ -3172,9 +3387,26 @@ function drawMine(){
       <div class="mine-steps">${stepsHtml({booking: b, job: b.job || null})}</div>
       <div class="actions">
         <button type="button" class="b" data-act="open" data-kind="bookingstatus" data-id="${esc(b.id)}">${ico('status')} Full status</button>
+        ${['cancelled', 'rejected'].includes(b.status) && !b.job ? '' : `<button type="button" class="b" data-act="bookagain" data-id="${esc(b.id)}">↻ Book again</button>`}
         ${b.status === 'new' ? `<button type="button" class="b danger" data-act="mycancel" data-id="${esc(b.id)}">Cancel this booking</button>` : ''}
       </div>
     </div>`).join('')}</div>` : empty('No bookings on this account yet.');
+}
+
+/* Idea 7: the same aircons and the same house, a new day — the form filled in, the day and
+   the privacy tick left to the customer. */
+function bookAgain(id){
+  const b = db.bookings[id]; if (!b) return;
+  const units = (b.job && Array.isArray(b.job.units) && b.job.units.length ? b.job.units : unitsOf(b))
+    .filter(u => u.type).map(u => ({type: u.type, services: [...u.services], brand: u.brand || null, model: u.model || null}));
+  pubBook = {...freshPubBook(), full_name: (db.profile && db.profile.display_name) || '', address: b.address || '', landmark: b.landmark || ''};
+  pubUnits = units;
+  $('#done').hidden = true; bookForm.hidden = false;
+  drawPubCart(); saveDraft();
+  const n = $('[data-bk="' + (pubBook.full_name ? 'contact' : 'full_name') + '"]', bookForm);
+  bookForm.scrollIntoView({behavior: 'smooth', block: 'start'});
+  if (n) setTimeout(() => n.focus({preventScroll: true}), 400);
+  toast('Filled in from ' + b.ref + ' — add your number and choose a day.');
 }
 
 /* ---------------------------------------------------------------- settings (SukiRun's ⚙) */
@@ -3663,6 +3895,51 @@ const ACTIONS = {
       ['slot_capacity'], db => { db.settings = {...(db.settings || {}), slot_capacity: n}; });
   },
   sharereceipt: id => shareReceipt(id),
+  closedwd: (id, el) => {   // idea 4: a weekday closed every week, on or off
+    const i = Number(el.dataset.v), cur = (db.settings || {}).closed_days || [];
+    const next = cur.includes(i) ? cur.filter(x => x !== i) : [...cur, i].sort();
+    if (next.length > 6){ notice('At least one day must stay open.', true); return; }
+    write('set_shop_setting', {p_key: 'closed_days', p_value: next}, (cur.includes(i) ? 'Open on ' : 'Closed on ') + WEEKDAYS[i] + 's',
+      ['closed_days'], db => { db.settings = {...(db.settings || {}), closed_days: next}; });
+  },
+  closeddate: (id, el) => {   // idea 4: one date closed or opened again
+    const ymd = el.dataset.v, cur = (db.settings || {}).closed_dates || [], had = cur.some(x => x.on === ymd);
+    const whyBox = $('#closedWhy'), why = had ? '' : ((whyBox && whyBox.value) || '').trim().slice(0, 60);
+    const next = had ? cur.filter(x => x.on !== ymd) : [...cur, {on: ymd, why: why || null}].sort((a, b) => a.on.localeCompare(b.on));
+    if (whyBox && !had) whyBox.value = '';   // before the redraw, which keeps what a data-k box holds
+    write('set_shop_setting', {p_key: 'closed_dates', p_value: next}, (had ? 'Open ' : 'Closed ') + niceDate(ymd) + (why ? ' — ' + why : ''),
+      ['closed_dates'], db => { db.settings = {...(db.settings || {}), closed_dates: next}; });
+  },
+  calmonth: (id, el) => {
+    const base = ui.calMonth || manilaDate(0).slice(0, 7), [y, m] = base.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + Number(el.dataset.v), 1));
+    ui.calMonth = d.toISOString().slice(0, 7); saveUi(); render();
+  },
+  saveshop: (id, el) => {   // ideas 6 and 8
+    const keys = el.dataset.v === 'gcash' ? ['gcash_number', 'gcash_name'] : [el.dataset.v];
+    for (const k of keys){
+      const v = (($('#shop_' + k) || {}).value || '').trim();
+      if ((db.settings || {})[k] === v || (!(db.settings || {})[k] && !v)) continue;
+      write('set_shop_setting', {p_key: k, p_value: v}, 'Shop — ' + k.replace('_', ' '), ['shop_' + k],
+        db => { db.settings = {...(db.settings || {}), [k]: v}; });
+    }
+    toast('Saved.');
+  },
+  paid: (id, el) => {   // idea 5
+    const j = db.jobs[id]; if (!j) return;
+    const m = el.dataset.v || null;
+    write('set_job_paid', {p_job: id, p_method: m}, m ? 'Paid by ' + PAY[m] + ' — ' + (jobCust(j).full_name || '') : 'Not paid — ' + (jobCust(j).full_name || ''),
+      [id], () => { j.paid_method = m; j.paid_at = m ? new Date().toISOString() : null; });
+  },
+  followup: (id, el) => {   // idea 11
+    const j = db.jobs[id]; if (!j) return;
+    const note = el.dataset.v || null;
+    write('set_job_followup', {p_job: id, p_note: note}, 'After-job call — ' + (jobCust(j).full_name || ''), [id],
+      () => { j.followup_at = new Date().toISOString(); j.followup_note = note; });
+    if (el.dataset.book) openBook(j.customer_id, []);
+  },
+  bookagain: id => bookAgain(id),   // idea 7
+  exportmonth: (id, el) => exportMonth(Number(el.dataset.v)),   // idea 10
   custmap: () => customersMap(),
   routemap: (id, el) => routeMap(el.dataset.v),
   mapgo: (id, el) => mapGo(el.dataset.kind, id),
@@ -3933,6 +4210,7 @@ drawPubCart();   // THE booking form, drawn now by bookFormHtml('pub'); again wh
     Object.keys(serviceLabels).forEach(k => { delete serviceLabels[k]; });
     Object.keys(pubPrices).forEach(k => { delete pubPrices[k]; });
     rows.forEach(s => { serviceLabels[s.key] = s.label; pubPrices[s.key] = s.prices || null; });
+    if (rows[0] && rows[0].shop){ pubShop = rows[0].shop; lsSet('ws_shop', pubShop); }   // 21
     lsSet('ws_services', serviceLabels);
   } catch (e) {
     pubBook._msg = 'We could not load the list of services. Please ' + ringUs() + ' instead.';
@@ -3975,7 +4253,7 @@ bookForm.addEventListener('submit', async e => {
     s._msg = err instanceof Refused && err.human ? err.message
       : 'Your booking was NOT sent — we could not reach the booking system. Please try again in a minute, or ' + ringUs() + '.';
     // idea 3: a full morning or afternoon — the day box goes red with the answer under it
-    if (err instanceof Refused && err.human && /is full/.test(err.message)){ s._sending = false; bkShow('pub', s, [['date', err.message]]); return; }
+    if (err instanceof Refused && err.human && /is full|are closed/.test(err.message)){ s._sending = false; bkShow('pub', s, [['date', err.message]]); return; }
   } finally {
     s._sending = false;
     if (s === pubBook) drawPubCart();   // a failure keeps everything typed, and says why
