@@ -58,6 +58,37 @@
   body{margin:0;background:var(--bg);color:var(--ink);
        font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   .wrap{max-width:660px;margin:0 auto;padding:0 16px 60px}
+  /* ---------- the booking page's top: photo, words, card (Travelista's shape, 2026-09-27) ----------
+     The photo is a layer of fixed height behind the top; the form card is taller and simply
+     runs on past it, which is what makes it look laid over the picture. */
+  html{overflow-x:clip}   /* a full-width band is 100vw, and 100vw counts the scrollbar */
+  .hero{position:relative;isolation:isolate;margin:-16px calc(50% - 50vw) 0;
+    padding:28px max(16px, calc(50vw - 314px)) 0}
+  .hero::before{content:"";position:absolute;left:0;right:0;top:0;height:300px;z-index:-1;
+    background:linear-gradient(180deg,rgba(6,18,34,.62),rgba(6,18,34,.40) 55%,rgba(6,18,34,.70)),
+      url(img/hero-phone.jpg) center/cover}
+  .hero-text{color:#fff;margin-bottom:18px}
+  .hero-kicker{margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
+  .hero h1{color:#fff;font-size:28px;line-height:1.15;margin:0 0 6px}
+  .hero .lede{color:rgba(255,255,255,.9);margin:0 0 14px}
+  .hero-call{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:8px 16px;border-radius:999px;
+    background:#0D6FB8;color:#fff;font-weight:700;font-size:14.5px;text-decoration:none}   /* on the photo in both themes */
+  .hero-card .panel{box-shadow:0 10px 30px rgba(6,18,34,.22)}
+  @media (max-width:600px){ .hero-where{display:none} }   /* it wrapped alone onto a line at 375px */
+  @media (min-width:900px){
+    body.pub .wrap{max-width:1112px}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) 460px;grid-template-rows:auto 1fr;column-gap:48px;align-items:start;
+      padding:64px max(16px, calc(50vw - 540px)) 0}
+    .hero::before{height:520px;
+      background:linear-gradient(90deg,rgba(6,18,34,.72),rgba(6,18,34,.35) 70%),url(img/hero-1600.jpg) center/cover}
+    /* row 1 ends where the photo ends (520 - 64 padding), so the left column's cards start below it */
+    .hero-text{padding-top:84px;margin:0;min-height:456px;grid-column:1;grid-row:1}
+    .hero-card{grid-column:2;grid-row:1 / span 2}
+    .hero-side{grid-column:1;grid-row:2;padding-top:24px}
+    .hero h1{font-size:46px;text-transform:uppercase;letter-spacing:.01em}
+    .hero .lede{font-size:17px}
+    body.pub #publicView > .credit{max-width:628px;margin-left:auto;margin-right:auto}
+  }
   h1{font-size:26px;margin:0 0 4px}
   h2{font-size:19px;margin:0 0 4px}
   h3{font-size:17px;margin:0 0 2px}
@@ -618,8 +649,16 @@
 
   <!-- ─────────────────────────── public: book + track ─────────────────────────── -->
   <div id="publicView">
-    <h1>Book an aircon job</h1>
-    <p class="lede" id="lede">No account needed. We ring you back to agree a time.</p>
+    <!-- The Travelista look (Guile's sample, 2026-09-27), our own code: the photo behind the
+         top, the words on it, the form in a white card overlapping it. -->
+    <section class="hero">
+      <div class="hero-text">
+        <p class="hero-kicker">Aircon cleaning · repair · installation<span class="hero-where"> · Bacolod</span></p>
+        <h1>Book an aircon job</h1>
+        <p class="lede" id="lede">No account needed. We ring you back to agree a time.</p>
+        <a class="hero-call" id="heroCall" href="tel:">📞 Rather talk? Call us</a>
+      </div>
+      <div class="hero-card">
 
     <section class="panel done" id="done" hidden aria-live="polite">
       <p>Booked. Your reference code is</p>
@@ -682,6 +721,9 @@
       <button type="submit">Send the booking</button>
       <div class="msg" id="bookMsg" aria-live="polite"></div>
     </form>
+      </div>
+      <!-- Under the photo on the left on a computer; after the form on a phone. -->
+      <div class="hero-side">
 
     <!-- A signed-in customer's own bookings (Phase 5). -->
     <section class="panel" id="customerView" hidden>
@@ -715,6 +757,10 @@
       <p class="hint" id="registerNudge">Make an account to see all your bookings in one
         place, even on a new phone. <a href="#" id="registerLink">Make an account</a></p>
     </form>
+      </div>
+    </section>
+    <!-- CC BY 3.0 asks for the credit while their photo is up. Goes with the photo. -->
+    <p class="credit">Placeholder photo from the <a href="https://colorlib.com/" target="_blank" rel="noopener">Travelista template by Colorlib</a> (CC BY 3.0)</p>
   </div>
 
   <!-- ─────────────────────────── admin ─────────────────────────── -->
@@ -1059,6 +1105,7 @@ function render(){
   $('#offView').hidden = authOpen || !off;
   $('#notices').hidden = authOpen || off;   // a switched-off account has nothing to act on
   $('#publicView').hidden = blocked || staff;
+  document.body.classList.toggle('pub', !$('#publicView').hidden);   // the wide Travelista top
   $('#adminView').hidden = blocked || role !== 'admin';
   $('#techView').hidden = blocked || role !== 'technician';
   $('#customerView').hidden = role !== 'customer';
@@ -3138,6 +3185,8 @@ const bookMsg  = $('#bookMsg');
 bookForm.preferred_on.min = manilaDate(0);
 bookForm.preferred_on.max = manilaDate(120);
 
+$('#heroCall').href = 'tel:' + digits(SHOP_PHONE);
+$('#heroCall').textContent = '📞 Rather talk? ' + SHOP_PHONE;
 $('#privacyText').textContent =
   'We keep your name, number, address and anything else you write here, so we can do the job. ' +
   'Only ' + SHOP_NAME + ' staff see it. To have it removed, ' + ringUs() + '.';
