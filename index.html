@@ -943,6 +943,7 @@ let notices = [];    // decisions that lost, and writes that were refused — sh
 let online = navigator.onLine;
 let lastPullOk = null;
 let pullStats = null;  // what the last good pull changed; null = it did not get through
+let lastChangeAt = null;   // when a pull last brought something (R5)
 
 const dbKey = () => 'ws_db_' + session.uid;
 const qKey  = () => 'ws_queue_' + session.uid;
@@ -1080,6 +1081,7 @@ async function pull(){
   if (res.services) db.services = res.services; // the price list, sent whole (admin only)
   if (db.role !== res.role){ db.role = res.role; session.role = res.role; lsSet('ws_session', session); }
   pullStats = diffStats(before, db);
+  if (pullStats.bookings || pullStats.jobs || pullStats.customers || pullStats.updated || pullStats.removed) lastChangeAt = new Date();
   // something changed, or a history failed to load earlier: ask again on the next draw
   if (pullStats.bookings || pullStats.jobs || pullStats.updated || pullStats.removed) forgetStatus();
   else Object.keys(statusLive).forEach(k => { if (statusLive[k].error) delete statusLive[k]; });
@@ -1255,7 +1257,12 @@ async function refreshNow(){
     if (s.customers) bits.push(count(s.customers, 'new customer'));
     if (s.updated) bits.push(s.updated + ' updated');
     if (s.removed) bits.push(s.removed + ' removed');
-    toast(bits.length ? bits.join(' · ') : 'Nothing new — everything here is up to date', !!nowFailed);
+    // R5: the sync every 30 s had often just brought the change ↻ was pressed for, and
+    // "Nothing new" then read as "your change did not arrive" (2026-09-27)
+    const recent = lastChangeAt && Date.now() - lastChangeAt < 15 * 60000;
+    toast(bits.length ? bits.join(' · ')
+      : recent ? 'Up to date — the last change came in ' + timeAgo(lastChangeAt.toISOString())
+      : 'Nothing new — everything here is up to date', !!nowFailed);
   } finally {
     // A refresh that answers in 80 ms would blink the spinner away unseen.
     await sleep(Math.max(0, 600 - (Date.now() - started)));
@@ -1805,6 +1812,8 @@ function bookFormHtml(ctx, s){
       + `<div class="hint">In Bacolod this matters more than the address. Please fill it in.</div>`
       + bkLocHtml(ctx, s);
   }
+  if (pub && s._restored) who = `<div class="inline-note"><span>Filled in from last time, on this phone only.</span>
+      <button type="button" class="b" data-act="pubreset">Start again</button></div>` + who;
   const n = (s._bad && Object.keys(s._bad).length) || 0;
   // Editing a job: the day only while the job is still open, and a word about the price,
   // which is frozen onto the job and changed by hand (docs/scope.md).
@@ -1812,9 +1821,13 @@ function bookFormHtml(ctx, s){
   const when = edit ? (s._noWhen ? '' : bkWhenHtml(ctx, s, s._needDate ? {notYet: false, slot: true} : {notYet: !s._origDate}))
                     : bkWhenHtml(ctx, s);
   const priceNote = edit && s._priceNote ? `<p class="hint">${esc(s._priceNote)}</p>` : '';
+  // R1: the day the customer asked for, one tap away while the job has none
+  const want = edit && !s._noWhen && s._want && !s._want.past && s.date !== s._want.on ? s._want : null;
+  const wantChip = want ? `<div class="inline-note"><span>They asked for <b>${esc(niceDate(want.on) + ', ' + slotWord(want.slot))}</b>.</span>
+      <button type="button" class="b" data-act="usewantform">Use their day</button></div>` : '';
   const send = pub ? 'Send the booking' : edit ? 'Save changes' : 'Book it';
   const act = pub ? '' : edit ? ` data-act="${s._saveAct || 'savejob'}" data-id="${esc(s.id || '')}"` : ' data-act="savebook"';
-  return who + (s._removed ? `<p class="hint">${esc(s._removed)}</p>` : '') + bkAirconsHtml(ctx, s) + priceNote + when + `
+  return who + (s._removed ? `<p class="hint">${esc(s._removed)}</p>` : '') + bkAirconsHtml(ctx, s) + priceNote + wantChip + when + `
     <label>Anything else <span class="opt">— optional</span>
       <textarea data-bk="notes" data-cart="${ctx}" maxlength="1000" placeholder="${esc(w.notes)}">${esc(s.notes || '')}</textarea></label>
     ${pub ? `<!-- The honeypot. Hidden from people, filled in by bots. See book_job(). -->
@@ -1915,7 +1928,33 @@ function bkMap(ctx){
 }
 
 /* The page's form, its summary, the bar, and the sheet the bar opens. */
+/* R9 (2026-09-27): the unsent booking stays on THIS phone — a reload, a closed tab or a
+   phone that killed the browser lost a half-filled form and its aircons. Kept in this
+   browser only, never sent; gone when the booking is sent, on "Start again", or after a
+   month. The privacy tick is not kept: it is asked again each time. */
+const DRAFT_KEY = 'ws_pub_draft';
+const DRAFT_FIELDS = ['full_name', 'contact', 'address', 'landmark', 'lat', 'lng', 'date', 'slot', 'notes'];
+function saveDraft(){
+  const has = pubUnits.length || DRAFT_FIELDS.some(f => f !== 'slot' && pubBook[f]);
+  if (!has){ lsDel(DRAFT_KEY); return; }
+  const d = {at: Date.now(), units: pubUnits};
+  DRAFT_FIELDS.forEach(f => { d[f] = pubBook[f] || ''; });
+  lsSet(DRAFT_KEY, d);
+}
+function loadDraft(){
+  const d = lsGet(DRAFT_KEY, null);
+  if (!d) return;
+  if (!(Date.now() - (d.at || 0) < 30 * 864e5)){ lsDel(DRAFT_KEY); return; }
+  DRAFT_FIELDS.forEach(f => { if (typeof d[f] === 'string') pubBook[f] = d[f]; });
+  if (pubBook.date && pubBook.date < manilaDate(0)) pubBook.date = '';   // a day that has passed
+  if (!['am', 'pm'].includes(pubBook.slot)) pubBook.slot = 'am';
+  pubUnits = (Array.isArray(d.units) ? d.units : [])
+    .filter(u => u && UNIT_TYPES.includes(u.type) && Array.isArray(u.services) && u.services.length).slice(0, 20)
+    .map(u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null}));
+  pubBook._restored = pubUnits.length > 0 || DRAFT_FIELDS.some(f => f !== 'slot' && pubBook[f]);
+}
 function drawPubCart(){
+  saveDraft();
   const pf = pagePrice();
   keepTyping($('#bookFields'), () => bookFormHtml('pub', pubBook));
   $('#barCount').textContent = pubUnits.length;
@@ -2069,6 +2108,7 @@ function eventRow(e){
       return [icon, what, [['Status', lab(before.status), lab(to)]], by];
     }
     case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
+    case 'job_photo': return ['📷', before.had ? 'New house photo' : 'House photo', null, by];
     case 'job_price': return ['₱', 'Price', [['Price', before.price != null ? peso(before.price) : 'not set', after.price != null ? peso(after.price) : 'not set']], by];
   }
   return ['•', e.kind, null, by];
@@ -2356,7 +2396,9 @@ function jobDayFilter(j, day){
   if (day === 'unplanned') return !j.scheduled_on && !['done', 'cancelled'].includes(j.status);
   if (day === 'done') return j.status === 'done';
   if (day === 'cancelled') return j.status === 'cancelled';
-  return j.scheduled_on >= today && !['done', 'cancelled'].includes(j.status);   // upcoming
+  // upcoming: every job from today on, done ones too — Today and Tomorrow show those, and
+  // "Tomorrow (4)" beside "Upcoming (3)" read as a job gone missing (R3, 2026-09-27)
+  return j.scheduled_on >= today && j.status !== 'cancelled';
 }
 function jobList(day){
   const rows = Object.values(db.jobs).filter(j => jobDayFilter(j, day));
@@ -2379,7 +2421,7 @@ function jobRow(j){
       : '<b>—</b><span>no date</span>'}</div>
     <div class="lrow-main">
       <div class="lrow-title">${newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
-      <div class="lrow-sub">${esc(svcList(j.services))}</div>
+      <div class="lrow-sub">${esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — '))}</div>
       <div class="lrow-sub">${esc(place(c))}</div>
       ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
@@ -2422,6 +2464,7 @@ function panelJob(p){
       ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
       <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${tech ? '' : editBtn('editjob', j.id)}</div>
     </div>
+    ${tech ? '' : wantNote(j)}
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons</div>
     ${cartHtml('view', unitsOf(j), {pf: tech ? null : officePrice, missing: 'Not every service has a price yet'})}
@@ -2429,6 +2472,21 @@ function panelJob(p){
     <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>
     ${menu}
     ${statusBlockHtml('job', j.id)}`};
+}
+/* R1 (2026-09-27): Accept makes the job with no day, though the customer already chose one
+   — WA-1970 asked for Mon Sep 28 PM and the day had to be picked again. Offer theirs. */
+function wantOf(j){
+  const b = bookingOfJob(j);
+  if (!b || !b.preferred_on || j.scheduled_on || ['done', 'cancelled'].includes(j.status)) return null;
+  return {on: b.preferred_on, slot: b.slot || 'am', past: b.preferred_on < manilaDate(0)};
+}
+function wantNote(j){
+  const w = wantOf(j); if (!w) return '';
+  const day = niceDate(w.on) + ', ' + slotWord(w.slot);
+  return `<div class="inline-note"><span>${w.past
+      ? `They asked for <b>${esc(day)}</b> — that day has passed. Choose one with ✏️ Edit.`
+      : `No day yet. They asked for <b>${esc(day)}</b>.`}</span>${w.past ? ''
+      : `<button type="button" class="b" data-act="usewant" data-id="${esc(j.id)}">Use their day</button>`}</div>`;
 }
 /* The job's price is frozen; the list above adds up today's aircons. When the two differ —
    an aircon added to a running job, say — the screen showed ₱1,800 and ₱3,300 with nothing
@@ -2615,7 +2673,8 @@ function panelEditJob(p){
       units: unitsOf(j).map(u => ({...u, services: [...u.services]})), notes: j.notes || '',
       date: j.scheduled_on || '', slot: j.slot || 'am', _origDate: j.scheduled_on || '', _origSlot: j.slot || 'am',
       _noWhen: ['done', 'cancelled'].includes(j.status),
-      _removed: removed ? 'This customer’s details were removed on request, so only the job itself can change.' : ''});
+      _removed: removed ? 'This customer’s details were removed on request, so only the job itself can change.' : '',
+      _want: wantOf(j)});
   }
   // asked again on every draw: adding an aircon moves the list's total, never the job's price
   const l = unitsPrice(p.units || [], officePrice);
@@ -2895,7 +2954,9 @@ document.addEventListener('change', async e => {
     }
     if (r.status === 400){ const b = await r.json().catch(() => ({})); if (!/exist/i.test(b.message || b.error || '')) throw new Error(b.message || b.error || 'HTTP 400'); }
     await keepPhoto(path, blob);
-    const op = write('set_customer_photo', {p_customer: cid, p_path: path}, 'House photo — ' + (cust.full_name || ''), [cid], db => {
+    // taken from a job's screen: that job's history gets the line (18)
+    const from = topPanel(), jobId = from && from.kind === 'job' && db.jobs[from.id] && db.jobs[from.id].customer_id === cid ? from.id : null;
+    const op = write('set_customer_photo', {p_customer: cid, p_path: path, p_job: jobId}, 'House photo — ' + (cust.full_name || ''), [cid, jobId].filter(Boolean), db => {
       if (db.customers[cid]) db.customers[cid].photo_path = path;
       Object.values(db.jobs).forEach(j => { if (j.customer_id === cid && j.customer) j.customer.photo_path = path; });
     });
@@ -3287,6 +3348,11 @@ const ACTIONS = {
   },
   cartopen: () => drawCartSheet(),
   cartclose: () => { $('#cartSheet').hidden = true; lockBody(); },
+  pubreset: () => {   // R9: throw the kept booking away
+    pubBook = freshPubBook(); pubUnits = []; lsDel(DRAFT_KEY);
+    drawPubCart();
+    const n = $('[data-bk="full_name"]', bookForm); if (n) n.focus();
+  },
   pubsend: () => { $('#cartSheet').hidden = true; lockBody(); bookForm.requestSubmit(); },
   back: () => closePanel(),
   settings: () => openPanel({kind: 'settings'}),
@@ -3416,6 +3482,18 @@ const ACTIONS = {
     toast('Price set to ' + peso(v) + ', the price list’s.');
   },
   nopin: (id, el) => showNoPin(el.dataset.href, el.dataset.landmark),
+  usewant: id => {   // R1: the job gets the day the customer asked for, one tap
+    const j = db.jobs[id], w = j && wantOf(j); if (!w || w.past) return;
+    write('schedule_job', {p_job: id, p_date: w.on, p_slot: w.slot, p_decided_at: null},
+      'Schedule ' + (jobCust(j).full_name || 'job'), [id], () => {
+        j.scheduled_on = w.on; j.slot = w.slot; if (j.status === 'booked') j.status = 'scheduled';
+      });
+    toast('Scheduled for ' + niceDate(w.on) + ', ' + slotWord(w.slot) + ' — the technicians see it now.');
+  },
+  usewantform: () => {
+    const p = topPanel(); if (!p || !p._want) return;
+    p.date = p._want.on; p.slot = p._want.slot; bkClear('panel', 'date'); render();
+  },
   price: id => {
     const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
     const v = parsePrice(p.price != null ? p.price : j.price);
@@ -3515,6 +3593,7 @@ document.addEventListener('input', e => {
     s[f] = t.type === 'checkbox' ? t.checked : t.value;
     bkClear(ctx, f);
     if (f === 'contact' && ctx !== 'pub'){ const m = $('#bookSame'); if (m) m.innerHTML = bookSame(s); }
+    if (ctx === 'pub' && f !== 'website' && f !== 'consent') saveDraft();   // R9: typing is kept too
     if (f === 'date'){ t.blur(); bkRedraw(ctx); }   // the day chips follow the calendar
     return;
   }
@@ -3580,7 +3659,9 @@ async function logOut(btn){
   const t = session.access_token;
   // This phone's copy goes with the account: the next person to use the phone must not see it.
   lsDel(dbKey()); lsDel(qKey()); lsDel(nKey());
+  lsDel(DRAFT_KEY); pubBook = freshPubBook(); pubUnits = [];   // an unsent booking goes too (R9)
   signedOut(null);
+  drawPubCart();
   try { await authFetch('/logout', {}, t); } catch (e) {}
 }
 /* A destructive button asks twice by changing its own words, not with a pop-up. */
@@ -3658,6 +3739,7 @@ const bookForm = $('#bookForm');
    it only while the owner shows them (13). */
 const serviceLabels = lsGet('ws_services', {});
 const pubPrices = {};
+loadDraft();
 drawPubCart();   // THE booking form, drawn now by bookFormHtml('pub'); again when the services arrive
 (async function loadServices(){
   try {
