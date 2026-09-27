@@ -339,6 +339,23 @@
   .map-msg{position:absolute;left:16px;right:16px;top:12px;background:var(--surface);border:1px solid var(--border);
     border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;box-shadow:var(--shadow)}
   .map-bottom{padding:12px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--bg)}
+  /* The same map, to LOOK at (L1, idea 2): no centre pin, no Use this spot; a list below */
+  .map-sheet.view .map-pin, .map-sheet.view #mapUse{display:none}
+  .map-sheet:not(.view) .map-list{display:none}
+  .map-list{max-height:32vh;overflow:auto;font-size:13.5px}
+  .map-list .lrow{margin-bottom:6px}
+  .map-list .lrow-sub{white-space:normal}   /* "no pin — Google Maps finds the address" was cut off */
+  .map-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12.5px;color:var(--ink-soft);margin-bottom:8px}
+  .map-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+  /* a marker: the number in a bubble over the house (or the stop) */
+  .map-mark{display:flex;flex-direction:column;align-items:center;background:none;border:0;padding:0;margin:0;min-height:0;
+    cursor:pointer;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
+  .map-mark b{background:#5b6b7b;color:#fff;font:800 12.5px/1 system-ui,sans-serif;padding:4px 7px;border-radius:11px;
+    border:2px solid #fff;min-width:24px;text-align:center}
+  .map-mark span{font-size:24px;line-height:1;margin-top:-2px}
+  .map-mark.due b{background:#d64545}
+  .map-mark.never b{background:#3b82f6}
+  .map-mark.stop b{background:#1f8a5b}
 
   /* ---------- the receipt: paper, black on white whatever the theme ---------- */
   .receipt-wrap{background:#dfe4ea;border-radius:var(--radius-md);padding:10px;overflow:hidden}
@@ -445,7 +462,9 @@
   .st-total .muted{align-self:center;font-size:12.5px;font-weight:400;text-align:right}
   .st-copy{width:100%;margin:12px 0 0}
   .tl-what b{font-weight:700}
-  .new-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--primary);margin-right:7px;vertical-align:1px}
+  /* "New" on a row this person has not opened (Guile, 2026-09-27: a word, not a dot) */
+  .new-dot{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;line-height:1;
+    padding:3px 6px;border-radius:9px;background:#e5484d;color:#fff;margin-right:7px;vertical-align:2px}
   .tech-new{margin-left:8px;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;background:#E0352B;color:#fff;vertical-align:middle}
   .mine-steps{margin-top:10px}
   .track-steps{margin-top:12px}
@@ -460,6 +479,21 @@
   .tl-what{font-size:13.5px;line-height:1.4;overflow-wrap:anywhere}
   .tl-when{font-size:11.5px;color:var(--ink-soft)}
   .tl-changes{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .route-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;font-size:13px;color:var(--ink-soft)}
+  .route-bar > span:first-child{flex:1 1 auto}
+  input.locked{background:var(--surface-alt);color:var(--ink-soft)}
+  /* L5: what the technician collects, big */
+  .big-price{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;margin:10px 0}
+  .big-price span{font-size:13px;color:var(--ink-soft)}
+  .big-price b{font-size:28px;line-height:1.1;font-weight:800;letter-spacing:-.01em}
+  /* L3: the gate photo on top of a technician's job */
+  .gate-top{margin:0 0 10px}
+  .gate-top .house-photo{margin:0}
+  .gate-cap{font-size:12.5px;color:var(--ink-soft);margin-top:4px}
+  /* R11: the gate photo on its history line, small; nothing drawn until it has loaded */
+  .tl-photo{display:block;width:96px;height:72px;object-fit:cover;border-radius:8px;margin-top:6px;border:1px solid var(--border)}
+  .tl-photo:not([src]){display:none}
   .tl-change{font-size:12px;color:var(--ink-soft);line-height:1.45;overflow-wrap:anywhere}
   .tl-change s{opacity:.7}
   .tl-change b{color:var(--ink)}
@@ -769,8 +803,8 @@
 <div class="map-sheet" id="mapSheet" hidden>
   <header class="map-top">
     <button type="button" class="btn-back" id="mapBack">&larr; Back</button>
-    <div style="min-width:0"><div class="map-title">Pick the house</div>
-      <div class="topbar-sub">Move the map until the pin is on the roof</div></div>
+    <div style="min-width:0"><div class="map-title" id="mapTitle">Pick the house</div>
+      <div class="topbar-sub" id="mapSub">Move the map until the pin is on the roof</div></div>
   </header>
   <!-- The pin sits in the map's own box, so its tip IS the centre that gets saved
        (measured 2026-09-26: placed on the sheet, the tip was 29px — ~17 m — off). -->
@@ -780,7 +814,7 @@
     <button type="button" class="map-locate" id="mapLocate" aria-label="Where I am">🎯</button>
     <div class="map-msg" id="mapMsg" hidden></div>
   </div>
-  <div class="map-bottom"><button type="button" class="b primary wide" id="mapUse">Use this spot</button></div>
+  <div class="map-bottom"><div class="map-list" id="mapList"></div><button type="button" class="b primary wide" id="mapUse">Use this spot</button></div>
 </div>
 <!-- What the printer gets: one receipt, nothing else on the page. -->
 <div id="printArea"></div>
@@ -962,10 +996,12 @@ function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, booking
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
    for rows it already had. 3 (2026-09-26): no assignment — a technician's phone now holds
    every scheduled job, jobs carry status_by, customers carry checkup_snooze. */
-const REPAIR_ID = 6;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+const REPAIR_ID = 7;   // 4: customers carry photo_path; a technician's jobs carry customer_id
                        // 5: a customer's booking carries its job's aircons (17)
                        // 6: the test data was deleted in the SQL editor (2026-09-27); a phone
                        //    keeps deleted jobs and customers until it takes a full copy
+                       // 7: a technician's jobs carry on_way_at, cancel_reason, and the price
+                       //    with the office's switch on (19)
 function loadLocal(){
   db = lsGet(dbKey(), null) || emptyDb();
   if (db.repair !== REPAIR_ID){ db.cursor = null; db.repair = REPAIR_ID; }
@@ -1030,6 +1066,9 @@ async function flush(){
           dropAfter(op.op_id);
         }
         queue = queue.filter(o => o !== op);
+        // its history is asked again NOW it has landed: asked while the write was on its way,
+        // it came back without the new line and stayed that way ("Seen" missing, 2026-09-27)
+        forgetStatus(op.touches);
         if (op.cleanup_photo && !(res && res.ok === false)) deletePhotoFile(op.cleanup_photo);
       } catch (e) {
         if (e instanceof Unreachable){ online = false; break; }
@@ -1072,6 +1111,13 @@ async function pull(){
     db = {...emptyDb(), role: res.role};
     session.role = res.role; lsSet('ws_session', session);
     forgetStatus(); saveLocal();
+    return pull();
+  }
+  if (db.role === 'technician' && res.settings && 'show_prices_tech' in res.settings && db.cursor !== null
+      && !!(db.settings || {}).show_prices_tech !== !!res.settings.show_prices_tech){
+    // L5: the office switched prices on or off — the jobs themselves did not change, so an
+    // ordinary pull would keep them with (or without) their price
+    db.settings = res.settings; db.cursor = null; saveLocal();
     return pull();
   }
   const busy = new Set(queue.flatMap(o => o.touches));
@@ -1606,6 +1652,8 @@ const INFO = {
   book: ['Book a job', 'For a call you took yourself. It goes straight on the job list — there is no booking to accept.'],
   cancel: ['Cancel', 'Every technician stops seeing it as work. Undo on the job puts it back.'],
   roles: ['What they can do', 'Technician — sees every job on the schedule, marks jobs started and done.\n\nAdmin — everything: bookings, jobs, customers, team and settings.\n\nCustomer — books on the page and sees their own bookings. Nothing else.'],
+  slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
+  showpricestech: ['Show prices to technicians', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt.\n\nOff: technicians never see a price; the server does not even send it.'],
   gap: ['Check-up gap', 'Counted from a customer’s last finished job. Every admin phone uses the same number.'],
   reset: ['Take the office’s copy', 'Throws away everything on this phone that has not been sent, and takes the office’s copy again. Nothing else ever overwrites what you did here.'],
 };
@@ -1672,7 +1720,10 @@ function cartUnits(cart){
   const p = topPanel();
   return p ? (p.units || (p.units = [])) : [];
 }
-const cartPrice = cart => cart === 'pub' ? pagePrice() : officePrice;
+/* A technician holds the price list only while the office shows them prices (19); without
+   it, no "₱ ?" either — the question of money is simply not on their screen. */
+const staffPf = () => db && db.role === 'technician' && !svcRows().length ? null : officePrice;
+const cartPrice = cart => cart === 'pub' ? pagePrice() : staffPf();
 const cartKeys = cart => cart === 'pub' ? Object.keys(serviceLabels) : activeServiceKeys();
 function afterCart(cart){
   const s = bkState(cart);
@@ -1753,9 +1804,9 @@ let pubBook = freshPubBook();
 const bkState = ctx => ctx === 'pub' ? pubBook : topPanel();
 const BK_WORDS = {
   pub:   {name: 'Your name', auto: ['name', 'tel'], notes: 'What is wrong, how long it has been like that…',
-          loc: 'Optional. At the house? Tap Pin. Anywhere else? Pick it on the map.'},
+          loc: 'Pin your house so we find your gate. At the house? Tap Pin. Anywhere else? Pick it on the map.'},
   panel: {name: 'Customer’s name', auto: ['off', 'off'], notes: 'What is wrong, the price you agreed…',
-          loc: 'Optional. At the house now? Tap Pin. On the phone? Pick it on the map.'},
+          loc: 'At the house now? Tap Pin. On the phone? Pick it on the map. A pinned house shows on the customers map.'},
 };
 const bkBad = (s, f) => (s && s._bad && s._bad[f]) || '';
 const bkCls = (s, f) => bkBad(s, f) ? ' bk-bad' + (s._shake ? ' shake' : '') : '';
@@ -1779,7 +1830,7 @@ function bkAirconsHtml(ctx, s, label){
       <div class="fieldlabel">${esc(label || 'Aircon type')}</div>
       ${typeGrid(ctx)}${bkWhy(s, 'units')}
       ${units.length ? `<div class="fieldlabel">Service summary</div>${cartHtml(ctx, units, ctx === 'pub' ? {editable: true}
-        : {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}` : ''}
+        : {editable: true, pf: staffPf(), missing: 'Not every service has a price yet'})}` : ''}
     </div>`;
 }
 /* The day and the time. opts.notYet: offer "Not yet" (the office, a job with no day yet);
@@ -1814,8 +1865,10 @@ function bookFormHtml(ctx, s){
       : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name or number" value="${esc(s.q || '')}" autocomplete="off">
           <div class="list" id="bookMatches">${bookMatches(s)}</div>`}${bkWhy(s, 'customer')}</div>`;
   } else if (!s._removed){   // a customer whose details were removed on request stays removed
-    who += bkInput(ctx, s, 'full_name', w.name, '', `maxlength="120" autocomplete="${w.auto[0]}"`)
-      + bkInput(ctx, s, 'contact', 'Contact number', '', `inputmode="tel" maxlength="30" autocomplete="${w.auto[1]}" placeholder="09XX XXX XXXX"`)
+    const lock = s._lockWho ? ' readonly class="locked"' : '';
+    who += bkInput(ctx, s, 'full_name', w.name, '', `maxlength="120" autocomplete="${w.auto[0]}"${lock}`)
+      + bkInput(ctx, s, 'contact', 'Contact number', '', `inputmode="tel" maxlength="30" autocomplete="${w.auto[1]}" placeholder="09XX XXX XXXX"${lock}`)
+      + (s._lockWho ? '<div class="hint">🔒 Only the office changes the name and the number.</div>' : '')
       + (pub || edit ? '' : `<div id="bookSame">${bookSame(s)}</div>`)   // only a NEW customer can be a duplicate
       + bkInput(ctx, s, 'address', 'Address', '', `maxlength="300" autocomplete="${pub ? 'street-address' : 'off'}" placeholder="Street, barangay, city"`)
       + bkInput(ctx, s, 'landmark', 'Landmark', '— optional, but it is how we find you', `maxlength="200" autocomplete="off" placeholder="beside the chapel, blue gate…"`)
@@ -2013,6 +2066,8 @@ function headline(d){
   if (!j && b && b.status === 'cancelled') return ['bad', 'Cancelled'];
   if (j && j.status === 'done') return ['good', 'Done' + (j.done_at ? ' — ' + new Date(j.done_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short'}) : '')];
   if (j && j.status === 'in_progress') return ['', 'The technician is on it'];
+  // idea 1 (19): one tap by the technician on the way there — the customer sees it
+  if (j && j.on_way_at && ['booked', 'scheduled'].includes(j.status)) return ['', 'The technician is on the way'];
   if (j && j.scheduled_on) return ['', 'Scheduled for ' + niceDate(j.scheduled_on) + ', ' + slotWord(j.slot)];
   if (j) return ['', 'A job — no day set yet'];   // the office made it (a call, or accepted): nobody is waiting to ring
   // Track my booking knows only the booking (trust-boundary.md): "will set the day" was
@@ -2117,8 +2172,10 @@ function eventRow(e){
       const what = {in_progress: 'Started', done: 'Marked done', cancelled: 'Job cancelled'}[to] || 'Now ' + lab(to);
       return [icon, what, [['Status', lab(before.status), lab(to)]], by];
     }
+    case 'job_onway': return ['🚐', 'On the way', null, by];
+    case 'job_seen':  return ['👀', 'Seen', null, by];   // one per person who opened the job (20)
     case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
-    case 'job_photo': return ['📷', before.had ? 'New house photo' : 'House photo', null, by];
+    case 'job_photo': return ['📷', before.had ? 'New gate photo' : 'Gate photo', null, by];   // L3: the gate, for the next visit
     case 'job_price': return ['₱', 'Price', [['Price', before.price != null ? peso(before.price) : 'not set', after.price != null ? peso(after.price) : 'not set']], by];
   }
   return ['•', e.kind, null, by];
@@ -2129,6 +2186,8 @@ function timelineHtml(events){
   return `<div class="tl">${events.map(e => { const [icon, what, changes, who] = eventRow(e);
     return `<div class="tl-row"><span class="tl-icon">${icon}</span><span class="tl-body">
       <span class="tl-what">${esc(what)}${who ? ` · <b>${esc(who)}</b>` : ''}</span><span class="tl-when">${esc(stamp(e.at))}</span>
+      ${e.kind === 'job_photo' && e.changes && e.changes.after && typeof e.changes.after.photo === 'string'
+        ? housePhoto(e.changes.after.photo, 'tl-photo') : ''}
       ${(changes || []).length ? `<span class="tl-changes">${changes.map(([w, from, to]) =>
         `<span class="tl-change">${esc(w)}${from ? `: <s>${esc(from)}</s>` : ''}${to ? ` → <b>${esc(to)}</b>` : ''}</span>`).join('')}</span>` : ''}
     </span></div>`; }).join('')}</div>`;
@@ -2186,6 +2245,7 @@ function panelStatus(p){
    Decided 2026-09-26: a customer is due N months after their last Done job; N is the
    owner's, in Settings. Somebody with work already booked is not due — the call would be
    about a job they already have. "Not now" hides them until checkup_snooze. */
+const slotCap = () => Math.min(50, Math.max(0, parseInt(((db && db.settings) || {}).slot_capacity, 10) || 0));
 const checkupMonths = () => Math.min(24, Math.max(1, parseInt(((db && db.settings) || {}).checkup_months, 10) || 1));
 function checkupOf(c){
   const js = jobsOf(c.id);
@@ -2267,7 +2327,7 @@ function seenCheckup(cid){
   if (k) markSeen('checkups', cid, k.due);
 }
 /* The blue dot on a row this account has not opened. */
-const newDot = on => on ? '<span class="new-dot" title="New — not opened yet" aria-label="new"></span>' : '';
+const newDot = on => on ? '<span class="new-dot" title="New — not opened yet">New</span>' : '';
 
 /* SukiRun's stat strip: four numbers, each one a way in. One row, even on a phone. */
 function drawStats(){
@@ -2414,14 +2474,42 @@ function jobList(day){
   const rows = Object.values(db.jobs).filter(j => jobDayFilter(j, day));
   return ['done', 'cancelled'].includes(day) ? rows.sort(byDoneDesc).slice(0, 60) : rows.sort(byTime);
 }
-function drawJobs(){
-  const days = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
-                ['done', 'Done'], ['cancelled', 'Cancelled']];
-  if (!days.some(d => d[0] === ui.day)) ui.day = 'today';
+/* L4 (Guile, 2026-09-27, ui.md Reuse): the office's Jobs and the technician's Jobs were two
+   copies of one tab strip — the technician's had no Cancelled. One function draws both. A
+   technician never receives a job with no day (scope.md), so "No date" is left out for them. */
+const JOB_TABS = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
+                  ['done', 'Done'], ['cancelled', 'Cancelled']];
+function jobTabsHtml(){
+  const tech = db.role === 'technician', key = tech ? 'techDay' : 'day';
+  const days = JOB_TABS.filter(([k]) => !(tech && k === 'unplanned'));
+  if (!days.some(d => d[0] === ui[key])) ui[key] = 'today';
   const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
-  const rows = jobList(ui.day);
-  return chips('day', days.map(([k, t]) => [k, t, n(k)]), ui.day) +
+  const rows = jobList(ui[key]);
+  return chips(tech ? 'techday' : 'day', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + routeBar(ui[key]) +
     (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
+}
+function drawJobs(){ return jobTabsHtml(); }
+/* Idea 2 (2026-09-27): the day's jobs in order — morning first — on the map, and all of
+   them in one Google Maps trip. Only jobs still to do; a stop is its pin, or its address. */
+const stopOf = c => c.lat != null && c.lng != null ? c.lat + ',' + c.lng
+  : [c.address, c.landmark, 'Bacolod'].filter(Boolean).join(', ');
+function routeStops(day){
+  if (!['today', 'tomorrow'].includes(day)) return [];
+  return jobList(day).filter(j => !['done', 'cancelled'].includes(j.status))
+    .filter(j => { const c = jobCust(j); return c.address && c.address !== '(removed)'; });
+}
+function routeUrl(stops){
+  const s = stops.slice(0, 10).map(j => stopOf(jobCust(j)));   // Google takes 9 stops plus the end
+  const dest = s.pop();
+  return 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(dest)
+    + (s.length ? '&waypoints=' + encodeURIComponent(s.join('|')) : '');
+}
+function routeBar(day){
+  const stops = routeStops(day); if (!stops.length) return '';
+  return `<div class="route-bar"><span>${stops.length} stop${stops.length === 1 ? '' : 's'}, morning first</span>
+    <button type="button" class="b" data-act="routemap" data-v="${esc(day)}">🗺️ Route</button>
+    <a class="b primary" target="_blank" rel="noopener" href="${esc(routeUrl(stops))}">Open in Google Maps</a>
+    ${stops.length > 10 ? '<span class="hint">Google Maps takes the first 10.</span>' : ''}</div>`;
 }
 function jobRow(j){
   const c = jobCust(j);
@@ -2435,7 +2523,7 @@ function jobRow(j){
       <div class="lrow-sub">${esc(place(c))}</div>
       ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
-    <div class="lrow-side">${statusPill(j.status)}</div>
+    <div class="lrow-side">${statusPill(j.status)}${j.price != null ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
   </div>`;
 }
 function panelJob(p){
@@ -2444,6 +2532,9 @@ function panelJob(p){
   const tech = db.role === 'technician';
   const c = jobCust(j), open = !['done', 'cancelled'].includes(j.status);
   const acts = [];
+  // idea 1: on the way there — before Start, once, while the job has a day
+  if (['booked', 'scheduled'].includes(j.status) && j.scheduled_on && !j.on_way_at)
+    acts.push(`<button type="button" class="b" data-act="onway" data-id="${esc(j.id)}">🚐 On my way</button>`);
   if (['booked', 'scheduled'].includes(j.status) && (!tech || j.scheduled_on))
     acts.push(`<button type="button" class="b primary" data-act="status" data-to="in_progress" data-id="${esc(j.id)}">▶ Start the job</button>`);
   if (open && (!tech || j.scheduled_on))
@@ -2453,17 +2544,24 @@ function panelJob(p){
   const by = whoPressed(j);
   const cid = j.customer_id, photo = c.photo_path;
   // No "Change the time" row: ✏️ Edit changes the day with everything else (Guile, 2026-09-27)
-  const menu = tech ? '' : `<div class="menu">
+  // L5: a technician sees the price only with the office's switch on — the server sends it
+  // then and only then — and gives the receipt from it
+  const techPrice = tech && j.price != null;
+  const menu = tech ? (techPrice ? `<div class="menu">${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print or share it with the customer')}</div>` : '') : `<div class="menu">
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
       ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'Customer’s history', c.full_name) : ''}
       ${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print on A4')}
       ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
     </div>`;
+  // L3: the gate photo first on a technician's screen — the first thing needed at the street
   return {title: c.full_name || 'Job', sub: svcList(j.services), body: `
+    ${tech && photo ? `<div class="gate-top">${housePhoto(photo)}<div class="gate-cap">📷 The gate — to find the house</div></div>` : ''}
     ${stepsHtml({booking: bookingOfJob(j), job: j})}
+    ${techPrice ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
-      ${photo ? housePhoto(photo) : ''}
+      ${photo && !tech ? housePhoto(photo) : ''}
       ${kv('Status', statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
+      ${j.on_way_at && ['booked', 'scheduled'].includes(j.status) ? kv('On the way', esc('since ' + new Date(j.on_way_at).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit'}))) : ''}
       ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
       ${kv('Number', esc(c.contact || ''))}
       ${kv('Address', esc(c.address || ''))}
@@ -2472,12 +2570,12 @@ function panelJob(p){
       ${tech ? '' : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
       ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
-      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${tech ? '' : editBtn('editjob', j.id)}</div>
+      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${j.status !== 'cancelled' || !tech ? editBtn('editjob', j.id) : ''}</div>
     </div>
     ${tech ? '' : wantNote(j)}
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons</div>
-    ${cartHtml('view', unitsOf(j), {pf: tech ? null : officePrice, missing: 'Not every service has a price yet'})}
+    ${cartHtml('view', unitsOf(j), {pf: tech && !techPrice ? null : officePrice, missing: 'Not every service has a price yet'})}
     ${tech ? '' : listPriceNote(j)}
     <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>
     ${menu}
@@ -2553,7 +2651,11 @@ function custListHtml(){
                  : empty((ui.search || '').trim() ? 'Nobody matches that.' : 'No customers yet.'));
 }
 function drawPeople(){
-  return `<input type="search" class="find" id="custSearch" placeholder="🔎 Name, number or address" value="${esc(ui.search || '')}" autocomplete="off">
+  const pinned = Object.values(db.customers).filter(c => c.lat != null && c.full_name !== '(removed)').length;
+  return `<div class="menu"><button type="button" class="menu-row" data-act="custmap">
+      <span class="menu-ico">🗺️</span><span class="menu-main"><span class="menu-title">Customers on the map</span>
+      <span class="menu-sub">${pinned} pinned · days since each one's last visit</span></span><span class="menu-chev">›</span></button></div>
+    <input type="search" class="find" id="custSearch" placeholder="🔎 Name, number or address" value="${esc(ui.search || '')}" autocomplete="off">
     <div id="custList">${custListHtml()}</div>
     <div class="menu">${menuRow('tidy', '', '🧹', 'Tidy up old bookings', 'Delete old rejected and cancelled ones')}</div>`;
 }
@@ -2678,7 +2780,8 @@ function panelEditJob(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Edit the job', body: empty('This job is no longer on this phone.')};
   if (!p._init){
-    const c = jobCust(j), removed = !c.id || c.full_name === '(removed)';
+    // a technician's phone keeps the customer ON the job, without an id: that is not "removed"
+    const c = jobCust(j), removed = c.full_name === '(removed)' || (!c.id && !j.customer);
     Object.assign(p, {_init: true, mode: 'edit', full_name: c.full_name || '', contact: c.contact || '',
       address: c.address || '', landmark: c.landmark || '', lat: c.lat != null ? String(c.lat) : '', lng: c.lng != null ? String(c.lng) : '',
       units: unitsOf(j).map(u => ({...u, services: [...u.services]})), notes: j.notes || '',
@@ -2686,10 +2789,13 @@ function panelEditJob(p){
       _noWhen: ['done', 'cancelled'].includes(j.status),
       _removed: removed ? 'This customer’s details were removed on request, so only the job itself can change.' : '',
       _want: wantOf(j)});
+    // L2 (19): a technician at the house — the same form; the name, the number, the day and
+    // the price stay the office's (the server refuses them too)
+    if (db.role === 'technician') Object.assign(p, {_lockWho: true, _noWhen: true, _want: null});
   }
   // asked again on every draw: adding an aircon moves the list's total, never the job's price
   const l = unitsPrice(p.units || [], officePrice);
-  p._priceNote = j.price == null ? ''
+  p._priceNote = j.price == null || db.role === 'technician' ? ''
     : l != null && Math.abs(l - Number(j.price)) >= 0.01
       ? 'The job’s price stays ' + peso(j.price) + ' — the price list says ' + peso(l) + ' for these aircons. After saving, tap “Use ' + peso(l) + '” on the job, or Change the price.'
       : 'The price stays ' + peso(j.price) + ' — change it with Change the price.';
@@ -2780,6 +2886,11 @@ function drawServices(){
       <div class="menu-title">Show prices on the booking page ${infoBtn('showprices')}</div>
       <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
         `<button type="button" class="${on === v ? 'active' : ''}" data-act="showprices" data-v="${v}">${t}</button>`).join('')}</div>
+    </div>
+    <div class="card row-between">
+      <div class="menu-title">Show prices to technicians ${infoBtn('showpricestech')}</div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
+        `<button type="button" class="${!!(db.settings || {}).show_prices_tech === v ? 'active' : ''}" data-act="showpricestech" data-v="${v}">${t}</button>`).join('')}</div>
     </div>`;
   const line = (s, ts) => ts.map(t => TYPE_SHORT[t] + ' ' + (s.prices && s.prices[t] != null ? peso0(s.prices[t]) : '—')).join(' · ');
   return sw + (rows.length ? `<div class="list">${rows.map(s => `<div class="lrow${s.active ? '' : ' off'}" role="button" tabindex="0" data-act="open" data-kind="service" data-id="${esc(s.key)}">
@@ -2818,7 +2929,8 @@ function receiptOf(j){
     amount: u.type ? officePrice(k, u.type) : null})));
   const sum = lines.every(l => l.amount != null) ? lines.reduce((a, l) => a + l.amount, 0) : null;
   const total = j.price != null ? Number(j.price) : sum;
-  return {no: b ? b.ref : 'J-' + String(j.id).slice(0, 6).toUpperCase(),
+  // a technician's phone has no bookings: the job brings its booking's code (19)
+  return {no: b ? b.ref : j.booking_ref || 'J-' + String(j.id).slice(0, 6).toUpperCase(),
     date: manilaDay(j.done_at) || manilaDate(0), customer: c, job: j, lines, total,
     adjust: total != null && sum != null && Math.abs(total - sum) >= 0.01 ? Math.round((total - sum) * 100) / 100 : null};
 }
@@ -2872,7 +2984,29 @@ function panelReceipt(p){
   if (!j) return {title: 'Receipt', body: empty('This job is no longer on this phone.')};
   return {title: 'Receipt', sub: jobCust(j).full_name, info: 'receipt', body: `
     <div class="receipt-wrap">${receiptHtml(receiptOf(j))}</div>
-    <div class="stack"><button type="button" class="b primary wide" data-act="print" data-id="${esc(j.id)}">🖨️ Print (A4)</button></div>`};
+    <div class="stack"><button type="button" class="b primary wide" data-act="sharereceipt" data-id="${esc(j.id)}">📤 Share with the customer</button>
+      <button type="button" class="b wide" data-act="print" data-id="${esc(j.id)}">🖨️ Print (A4)</button></div>`};
+}
+
+/* L5 (2026-09-27): on a job there is rarely a printer. Share sends the receipt as text to the
+   customer's Messenger or Viber — the phone's own share sheet (the APK's, or the browser's);
+   with neither, it is copied to paste. */
+function receiptText(j){
+  const r = receiptOf(j), c = r.customer || {};
+  return [SHOP_NAME + ' — service receipt ' + r.no, 'Date: ' + niceDate(r.date), c.full_name ? 'Customer: ' + c.full_name : '',
+    '', ...r.lines.map(l => '• ' + (l.unit || l.type) + ' — ' + l.label + (l.amount != null ? ': ' + peso(l.amount) : '')),
+    r.adjust != null ? 'Adjustment: ' + peso(r.adjust) : '', 'TOTAL: ' + (r.total != null ? peso(r.total) : '—'),
+    '', 'Thank you for choosing ' + SHOP_NAME + '. ' + SHOP_PHONE, 'This is not an official receipt.'].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+}
+async function shareReceipt(id){
+  const j = db.jobs[id]; if (!j) return;
+  const text = receiptText(j), title = 'Receipt ' + receiptOf(j).no;
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.shareText){ window.AndroidBridge.shareText(title, text); return; }
+    if (navigator.share){ await navigator.share({title, text}); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  const btn = $('[data-act="sharereceipt"]');
+  if (btn) copyText(text, btn); else toast('Could not share from this phone.', true);
 }
 
 /* ---------------------------------------------------------------- house photos (12)
@@ -2881,10 +3015,10 @@ function panelReceipt(p){
    the new path. The phone shrinks it to 1000 px before sending. Downloads go four at a
    time and are asked for again when dropped (docs/rules/pictures.md). */
 const photoBusy = new Set();
-function housePhoto(path){ return `<img class="house-photo" data-house="${esc(path)}" alt="The house">`; }
+function housePhoto(path, cls){ return `<img class="${cls || 'house-photo'}" data-house="${esc(path)}" alt="The gate">`; }
 function photoBtn(cid, has){
   return photoBusy.has(cid) ? `<span class="b" aria-busy="true">Sending photo…</span>`
-    : `<label class="b">📷 ${has ? 'New photo' : 'House photo'}<input type="file" accept="image/*" data-photo-for="${esc(cid)}" hidden></label>`;
+    : `<label class="b">📷 ${has ? 'New gate photo' : 'Gate photo'}<input type="file" accept="image/*" data-photo-for="${esc(cid)}" hidden></label>`;
 }
 function fitPhoto(file, maxSide){
   return new Promise((resolve, reject) => {
@@ -2973,7 +3107,7 @@ document.addEventListener('change', async e => {
     await keepPhoto(path, blob);
     // taken from a job's screen: that job's history gets the line (18)
     const from = topPanel(), jobId = from && from.kind === 'job' && db.jobs[from.id] && db.jobs[from.id].customer_id === cid ? from.id : null;
-    const op = write('set_customer_photo', {p_customer: cid, p_path: path, p_job: jobId}, 'House photo — ' + (cust.full_name || ''), [cid, jobId].filter(Boolean), db => {
+    const op = write('set_customer_photo', {p_customer: cid, p_path: path, p_job: jobId}, 'Gate photo — ' + (cust.full_name || ''), [cid, jobId].filter(Boolean), db => {
       if (db.customers[cid]) db.customers[cid].photo_path = path;
       Object.values(db.jobs).forEach(j => { if (j.customer_id === cid && j.customer) j.customer.photo_path = path; });
     });
@@ -3019,14 +3153,9 @@ function drawNumbers(){
 /* ---------------------------------------------------------------- technician
    No assignment (2026-09-26): every technician sees every job on the schedule. */
 function drawTech(){
-  const days = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['all', 'Upcoming'], ['done', 'Done']];
-  const v = days.some(d => d[0] === ui.techDay) ? ui.techDay : 'today';
-  const n = k => k === 'done' ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
-  const rows = jobList(v), unseen = unseenCounts().jobs;
+  const unseen = unseenCounts().jobs;
   // no bottom bar here, so the red number sits by the heading: jobs THIS technician has not opened
-  return pageHead('Jobs', 'tech', unseen ? `<span class="tech-new">${unseen} new</span>` : '') +
-    chips('techday', days.map(([k, t]) => [k, t, n(k)]), v) +
-    (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
+  return pageHead('Jobs', 'tech', unseen ? `<span class="tech-new">${unseen} new</span>` : '') + jobTabsHtml();
 }
 
 /* ---------------------------------------------------------------- customer */
@@ -3074,6 +3203,13 @@ function panelSettings(){
       <div class="lrow-main"><div class="menu-title">Ring customers again after ${infoBtn('gap')}</div></div>
       <div class="stepper"><button type="button" class="b" data-act="months" data-v="-1" aria-label="One month less" ${m <= 1 ? 'disabled' : ''}>−</button>
         <b>${m} mo</b><button type="button" class="b" data-act="months" data-v="1" aria-label="One month more" ${m >= 24 ? 'disabled' : ''}>+</button></div>
+    </div>
+    <div class="sec">Bookings from the page</div>
+    <div class="card row-between">
+      <div class="lrow-main"><div class="menu-title">Most jobs a morning or afternoon ${infoBtn('slotcap')}</div>
+        <div class="lrow-sub">${slotCap() ? 'A full one is refused on the booking page' : 'No limit'}</div></div>
+      <div class="stepper"><button type="button" class="b" data-act="slotcap" data-v="-1" aria-label="One fewer" ${slotCap() <= 0 ? 'disabled' : ''}>−</button>
+        <b>${slotCap() || '—'}</b><button type="button" class="b" data-act="slotcap" data-v="1" aria-label="One more" ${slotCap() >= 50 ? 'disabled' : ''}>+</button></div>
     </div>` : ''}
 
     <div class="sec">This phone</div>
@@ -3270,8 +3406,10 @@ const ACTIONS = {
       j.unit_type = [...new Set(units.map(u => u.type))].length === 1 ? units[0].type : 'Mixed';
       j.unit_brand = units[0].brand || null; j.unit_model = units[0].model || null; j.notes = details.notes || null;
       const cu = details.customer, row = db.customers[j.customer_id];
-      if (cu && row) Object.assign(row, {full_name: cu.full_name, contact: cu.contact, address: cu.address,
+      const put = r => Object.assign(r, {full_name: cu.full_name, contact: cu.contact, address: cu.address,
         landmark: cu.landmark || null, lat: cu.lat ? +cu.lat : null, lng: cu.lng ? +cu.lng : null});
+      if (cu && row) put(row);
+      if (cu && j.customer) put(j.customer);   // a technician's phone keeps the customer on the job
     });
     // the day goes through schedule_job, which keeps its own clock (11)
     if (!p._noWhen && p.date && (p.date !== p._origDate || (p.slot || 'am') !== p._origSlot))
@@ -3323,7 +3461,16 @@ const ACTIONS = {
     }
     // this account has now seen it: its red number goes down, on this phone only
     const k = el.dataset.kind;
-    if (k === 'job') markSeen('jobs', id);
+    // opening it asks for its history afresh: a line another phone added without changing the
+    // row ("Seen · ZZ Tech") never reached a history this phone had already loaded (20)
+    if (['job', 'booking', 'jobstatus', 'bookingstatus'].includes(k)) forgetStatus([id]);
+    if (k === 'job'){
+      // the first time THIS person opens it, the job's history says so: "👀 Seen · ZZ Tech" (20)
+      const j = db && db.jobs[id];
+      if (j && jobUnseen(j) && ['admin', 'technician'].includes(db.role) && (db.role === 'admin' || j.scheduled_on))
+        write('mark_job_seen', {p_job: id}, 'Seen — ' + (jobCust(j).full_name || 'job'), [id]);
+      markSeen('jobs', id);
+    }
     if (k === 'member') markSeen('users', id);
     if (k === 'customer') seenCheckup(id);
     openPanel({kind: k, id});
@@ -3499,6 +3646,26 @@ const ACTIONS = {
     toast('Price set to ' + peso(v) + ', the price list’s.');
   },
   nopin: (id, el) => showNoPin(el.dataset.href, el.dataset.landmark),
+  onway: id => {   // idea 1 (19)
+    const j = db.jobs[id]; if (!j || j.on_way_at) return;
+    write('set_on_way', {p_job: id}, 'On the way — ' + (jobCust(j).full_name || 'job'), [id], () => { j.on_way_at = new Date().toISOString(); });
+    toast('The customer sees you are on the way.');
+  },
+  showpricestech: (id, el) => {   // L5
+    const on = el.dataset.v === 'true';
+    if (!!((db.settings || {}).show_prices_tech) === on) return;
+    write('set_shop_setting', {p_key: 'show_prices_tech', p_value: on}, on ? 'Show prices to technicians' : 'Hide prices from technicians',
+      ['show_prices_tech'], db => { db.settings = {...(db.settings || {}), show_prices_tech: on}; });
+  },
+  slotcap: (id, el) => {   // idea 3: most jobs a morning / afternoon, 0 = no limit
+    const n = Math.min(50, Math.max(0, slotCap() + Number(el.dataset.v)));
+    write('set_shop_setting', {p_key: 'slot_capacity', p_value: n}, n ? 'At most ' + n + ' job' + (n === 1 ? '' : 's') + ' a morning or afternoon' : 'No limit on jobs a morning',
+      ['slot_capacity'], db => { db.settings = {...(db.settings || {}), slot_capacity: n}; });
+  },
+  sharereceipt: id => shareReceipt(id),
+  custmap: () => customersMap(),
+  routemap: (id, el) => routeMap(el.dataset.v),
+  mapgo: (id, el) => mapGo(el.dataset.kind, id),
   usewant: id => {   // R1: the job gets the day the customer asked for, one tap
     const j = db.jobs[id], w = j && wantOf(j); if (!w || w.past) return;
     write('schedule_job', {p_job: id, p_date: w.on, p_slot: w.slot, p_decided_at: null},
@@ -3807,6 +3974,8 @@ bookForm.addEventListener('submit', async e => {
     s._msgOk = false;
     s._msg = err instanceof Refused && err.human ? err.message
       : 'Your booking was NOT sent — we could not reach the booking system. Please try again in a minute, or ' + ringUs() + '.';
+    // idea 3: a full morning or afternoon — the day box goes red with the answer under it
+    if (err instanceof Refused && err.human && /is full/.test(err.message)){ s._sending = false; bkShow('pub', s, [['date', err.message]]); return; }
   } finally {
     s._sending = false;
     if (s === pubBook) drawPubCart();   // a failure keeps everything typed, and says why
@@ -3897,8 +4066,96 @@ function loadMapLib(){
   });
   return mapLib;
 }
+/* The markers a map to LOOK at puts down; gone when it closes or turns back into a picker. */
+let mapMarks = [];
+const clearMarks = () => { mapMarks.forEach(m => m.remove()); mapMarks = []; };
+async function mapReady(start, zoom){
+  const msg = $('#mapMsg');
+  msg.hidden = false; msg.textContent = 'Loading the map…';
+  try { await loadMapLib(); }
+  catch (e) { msg.textContent = 'The map needs internet. Close this and use the list instead.'; return false; }
+  const at = start || BACOLOD;
+  if (!mapObj){
+    mapObj = new maplibregl.Map({container: 'mapCanvas', style: 'https://tiles.openfreemap.org/styles/liberty',
+      center: [at.lng, at.lat], zoom, attributionControl: {compact: true}});
+    mapObj.on('load', () => { msg.hidden = true; });
+    mapObj.on('error', () => { msg.hidden = false; msg.textContent = 'Part of the map did not load. Check the signal.'; });
+  } else {
+    mapObj.resize(); mapObj.jumpTo({center: [at.lng, at.lat], zoom}); msg.hidden = true;
+  }
+  return true;
+}
+/* A map to look at: [{lat, lng, label, cls, title, onTap}], and HTML for under it. */
+async function openMapView(title, sub, points, below){
+  const sheet = $('#mapSheet');
+  sheet.classList.add('view');
+  $('#mapTitle').textContent = title; $('#mapSub').textContent = sub;
+  $('#mapList').innerHTML = below || '';
+  sheet.hidden = false; document.body.classList.add('locked');
+  clearMarks();
+  if (!await mapReady(points[0] || null, 13)) return;
+  points.forEach(pt => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'map-mark ' + (pt.cls || ''); el.title = pt.title || '';
+    el.innerHTML = `<b>${esc(pt.label)}</b><span aria-hidden="true">${pt.icon || '🏠'}</span>`;
+    el.addEventListener('click', ev => { ev.stopPropagation(); if (pt.onTap) pt.onTap(); });
+    mapMarks.push(new maplibregl.Marker({element: el, anchor: 'bottom'}).setLngLat([pt.lng, pt.lat]).addTo(mapObj));
+  });
+  if (points.length > 1){
+    const b = new maplibregl.LngLatBounds();
+    points.forEach(pt => b.extend([pt.lng, pt.lat]));
+    mapObj.fitBounds(b, {padding: 70, maxZoom: 16, duration: 0});
+  } else if (points.length === 1) mapObj.jumpTo({center: [points[0].lng, points[0].lat], zoom: 16});
+}
+/* From the map to a screen: the map closes first, or it would cover the screen. */
+function mapGo(kind, id){
+  closeMapPick(); openPanel({kind, id});
+  if (kind === 'customer') seenCheckup(id);
+  if (kind === 'job') markSeen('jobs', id);
+}
+const daysSince = ymd => Math.max(0, Math.round((new Date(manilaDate(0) + 'T00:00:00Z') - new Date(ymd + 'T00:00:00Z')) / 864e5));
+const mapRow = (kind, id, title, sub, lead) => `<div class="lrow" role="button" tabindex="0" data-act="mapgo" data-kind="${kind}" data-id="${esc(id)}">
+    <div class="avatar">${esc(lead)}</div><div class="lrow-main"><div class="lrow-title">${esc(title)}</div>
+    <div class="lrow-sub">${esc(sub)}</div></div></div>`;
+/* L1 (Guile, 2026-09-27): every pinned customer, a 🏠 with the days since their last finished
+   job ("17" = 17 days ago). Red once their check-up is due — the map is the call list too.
+   Nobody unpinned goes missing quietly: they are listed under the map. */
+function customersMap(){
+  const today = manilaDate(0), pts = [], none = [];
+  for (const c of Object.values(db.customers)){
+    if (c.full_name === '(removed)') continue;
+    if (c.lat == null || c.lng == null){ none.push(c); continue; }
+    const k = checkupOf(c), days = k ? daysSince(manilaDay(k.last.done_at)) : null;
+    const due = k && !k.busy && k.due <= today && !(c.checkup_snooze && c.checkup_snooze > today);
+    pts.push({lat: +c.lat, lng: +c.lng, label: days == null ? '–' : String(days), cls: due ? 'due' : days == null ? 'never' : '',
+      title: c.full_name + (days == null ? ' — no finished job yet' : ' — last visit ' + days + ' day' + (days === 1 ? '' : 's') + ' ago'),
+      onTap: () => mapGo('customer', c.id)});
+  }
+  const legend = `<div class="map-legend"><span><i style="background:#5b6b7b"></i>days since the last visit</span>
+    <span><i style="background:#d64545"></i>check-up due</span><span><i style="background:#3b82f6"></i>no finished job yet</span></div>`;
+  const list = none.length
+    ? `<div class="fieldlabel">${none.length} not on the map — no pin yet. Pin them with ✏️ Edit on their job.</div>` +
+      none.sort((a, b) => a.full_name.localeCompare(b.full_name)).map(c => mapRow('customer', c.id, c.full_name, c.address || '', initials(c.full_name))).join('')
+    : pts.length ? '' : '<p class="hint">No customers yet.</p>';
+  openMapView('Customers on the map', pts.length + ' pinned · the number is days since the last visit', pts, legend + list);
+}
+/* Idea 2: the day's route — numbered stops on the map, the same order as the list. */
+function routeMap(day){
+  const stops = routeStops(day), pts = [];
+  stops.forEach((j, i) => {
+    const c = jobCust(j);
+    if (c.lat != null && c.lng != null) pts.push({lat: +c.lat, lng: +c.lng, label: String(i + 1), cls: 'stop', icon: '📍',
+      title: (i + 1) + '. ' + (c.full_name || '') + ' — ' + (j.slot || '').toUpperCase(), onTap: () => mapGo('job', j.id)});
+  });
+  const list = stops.map((j, i) => { const c = jobCust(j);
+    return mapRow('job', j.id, (c.full_name || 'Job'), (j.slot || '').toUpperCase() + ' · ' + place(c) + (c.lat == null ? ' · no pin — Google Maps finds the address' : ''), String(i + 1)); }).join('')
+    + `<a class="b primary wide" target="_blank" rel="noopener" href="${esc(routeUrl(stops))}">Open in Google Maps</a>`;
+  openMapView((day === 'today' ? 'Today' : 'Tomorrow') + '’s route', stops.length + ' stop' + (stops.length === 1 ? '' : 's') + ', morning first', pts, list);
+}
 async function openMapPick(start, onPick){
   const sheet = $('#mapSheet'), msg = $('#mapMsg');
+  sheet.classList.remove('view'); clearMarks();
+  $('#mapTitle').textContent = 'Pick the house'; $('#mapSub').textContent = 'Move the map until the pin is on the roof';
   mapPickCb = onPick;
   sheet.hidden = false; document.body.classList.add('locked');
   msg.hidden = false; msg.textContent = 'Loading the map…';
@@ -3914,7 +4171,7 @@ async function openMapPick(start, onPick){
     mapObj.resize(); mapObj.jumpTo({center: [at.lng, at.lat], zoom}); msg.hidden = true;
   }
 }
-function closeMapPick(){ $('#mapSheet').hidden = true; lockBody(); }
+function closeMapPick(){ $('#mapSheet').hidden = true; clearMarks(); lockBody(); }
 $('#mapBack').addEventListener('click', closeMapPick);
 $('#mapUse').addEventListener('click', () => {
   if (!mapObj) return;
