@@ -791,7 +791,7 @@
   <div class="info-card" role="alertdialog" aria-labelledby="infoTitle">
     <div class="info-title" id="infoTitle"></div>
     <p class="info-text" id="infoText"></p>
-    <div class="info-ok"><button type="button" class="b primary" id="infoOk" data-act="infook">OK</button></div>
+    <div class="info-ok"><a class="b" id="infoLink" target="_blank" rel="noopener" hidden></a><button type="button" class="b primary" id="infoOk" data-act="infook">OK</button></div>
   </div>
 </div>
 
@@ -860,7 +860,13 @@ async function authFetch(path, body, token){
   } catch (e) { throw new Unreachable('offline'); }
   const b = await r.json().catch(() => ({}));
   if (r.status >= 500) throw new Unreachable('http ' + r.status);
-  if (!r.ok) throw new Refused(b.error_description || b.msg || b.message || 'That did not work.', true);
+  if (!r.ok){
+    const e = new Refused(b.error_description || b.msg || b.message || 'That did not work.', true);
+    // The sign-in itself is gone (not a rate limit, not a hiccup): only this ends a session.
+    e.dead = r.status !== 429 && /refresh_token|invalid_grant|session_not_found|user_not_found|user_banned/i
+      .test([b.error_code, b.code, b.error].filter(Boolean).join(' '));
+    throw e;
+  }
   return b;
 }
 
@@ -872,16 +878,38 @@ function keepSession(b){
   lsSet('ws_session', session);
 }
 
+/* The saved sign-in stays until Log out (Guile, 2026-09-27: "save the login"). It was lost
+   three ways: every call that found the token old refreshed it AT ONCE, with the same
+   one-use refresh token; a refusal of ANY kind (a rate limit too) signed the phone out; and
+   that sign-out deleted the saved session under every other tab of the same address. Now
+   one refresh at a time, a tab takes a token another tab already refreshed, and only a
+   sign-in the server says is gone ends it. */
+let tokenBusy = null;
 async function token(){
   if (!session) return null;
   if (Date.now() > session.expires_at - 60000){
-    try { keepSession(await authFetch('/token?grant_type=refresh_token', {refresh_token: session.refresh_token})); }
-    catch (e) {
-      if (e instanceof Refused){ signedOut('Your sign-in ran out. Please sign in again.'); return null; }
-      throw e;   // offline: keep the old token; the queue waits
-    }
+    if (!tokenBusy) tokenBusy = refreshSession().finally(() => { tokenBusy = null; });
+    if (!await tokenBusy) return null;
   }
-  return session.access_token;
+  return session && session.access_token;
+}
+const newerSaved = () => {
+  const s = lsGet('ws_session', null);
+  return s && session && s.uid === session.uid && s.refresh_token !== session.refresh_token ? s : null;
+};
+async function refreshSession(){
+  const saved = newerSaved();
+  if (saved && Date.now() < saved.expires_at - 60000){ session = saved; return true; }
+  try {
+    keepSession(await authFetch('/token?grant_type=refresh_token', {refresh_token: session.refresh_token}));
+    return true;
+  } catch (e) {
+    if (!(e instanceof Refused)) throw e;   // offline: keep the old token; the queue waits
+    const other = newerSaved();             // another tab won the race: its token is the live one
+    if (other){ session = other; return true; }
+    if (e.dead){ signedOut('Your sign-in ran out. Please sign in again.'); return false; }
+    throw new Unreachable('sign-in refresh: ' + e.message);   // try again later, still signed in
+  }
 }
 
 async function rpc(fn, args, useSession = true){
@@ -925,7 +953,8 @@ function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, booking
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
    for rows it already had. 3 (2026-09-26): no assignment — a technician's phone now holds
    every scheduled job, jobs carry status_by, customers carry checkup_snooze. */
-const REPAIR_ID = 4;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+const REPAIR_ID = 5;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+                       // 5: a customer's booking carries its job's aircons (17)
 function loadLocal(){
   db = lsGet(dbKey(), null) || emptyDb();
   if (db.repair !== REPAIR_ID){ db.cursor = null; db.repair = REPAIR_ID; }
@@ -1023,6 +1052,17 @@ async function pull(){
     return;
   }
   online = true; lastPullOk = new Date();
+  if (db.role && res.role && db.role !== res.role){
+    // The account's role changed (Users, or switched off / on). What this phone holds was
+    // for the old role: a switched-off technician kept every customer's name, number and
+    // address, and a customer made technician got 1 of the 4 scheduled jobs — only what
+    // had changed since (scenario test, 2026-09-27). Start again from a full copy; the
+    // queue stays, and the server judges it under the new role.
+    db = {...emptyDb(), role: res.role};
+    session.role = res.role; lsSet('ws_session', session);
+    forgetStatus(); saveLocal();
+    return pull();
+  }
   const busy = new Set(queue.flatMap(o => o.touches));
   const before = {bookings: {...db.bookings}, customers: {...db.customers}, jobs: {...db.jobs}};
   if (db.cursor === null){           // a full copy: anything not in it is gone
@@ -1447,7 +1487,7 @@ const priceWords = (services, type, count) => {
   const p = priceFor(services, type, count);
   return p != null ? peso(p) : !type ? 'Needs the aircon type' : 'A service has no ' + type + ' price yet';
 };
-const peso0 = n => '₱' + Number(n).toLocaleString('en-PH', {maximumFractionDigits: 2});
+const peso0 = n => (Number(n) < 0 ? '−' : '') + '₱' + Math.abs(Number(n)).toLocaleString('en-PH', {maximumFractionDigits: 2});
 const svcList = arr => (arr || []).map(svcLabel).join(', ');
 const unsentFor = id => queue.some(o => o.touches.includes(id));
 const unsentPill = id => unsentFor(id) ? ' <span class="pill unsent">not sent</span>' : '';
@@ -1459,7 +1499,8 @@ const personName = uid => { const t = db.team[uid]; return t ? (t.display_name |
 const whoPressed = j => !j.status_by ? null : j.status_by === session.uid ? 'you'
   : (j.status_by_name || personName(j.status_by) || 'someone');
 const shortDate = ymd => ymd ? new Date(ymd + 'T00:00:00').toLocaleDateString('en-PH', {day: 'numeric', month: 'short'}) : '';
-const peso = n => '₱' + Number(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+// −₱1,600.00, never ₱-1,600.00 (the receipt's adjustment, scenario test 2026-09-27)
+const peso = n => (Number(n) < 0 ? '−' : '') + '₱' + Math.abs(Number(n)).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const aircon = x => [x.unit_type ? x.unit_type + (x.unit_count > 1 ? ' × ' + x.unit_count : '') : '',
                      x.unit_brand, x.unit_model].filter(Boolean).join(' · ');
 /* − 1 + : how many aircons, 1 to 20 (14). */
@@ -1485,9 +1526,20 @@ const editBtn = (kind, id) => `<button type="button" class="b edit-btn" data-act
 function callBtn(n){ return digits(n).length >= 7 ? `<a class="b" href="tel:${esc(digits(n))}">📞 Call</a>` : ''; }
 function mapBtn(c){
   if (!c || !(c.address || c.lat != null) || c.address === '(removed)') return '';
-  const q = c.lat != null && c.lng != null ? c.lat + ',' + c.lng
-          : [c.address, c.landmark, 'Bacolod'].filter(Boolean).join(', ');
-  return `<a class="b" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}">🗺️ Map</a>`;
+  const pinned = c.lat != null && c.lng != null;
+  const q = pinned ? c.lat + ',' + c.lng : [c.address, c.landmark, 'Bacolod'].filter(Boolean).join(', ');
+  const href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
+  if (pinned) return `<a class="b" target="_blank" rel="noopener" href="${href}">🗺️ Map</a>`;
+  // No pin: say so first (Guile, 2026-09-27) — a search for the address stops at the street
+  return `<button type="button" class="b" data-act="nopin" data-href="${esc(href)}" data-landmark="${esc(c.landmark || '')}">🗺️ Map</button>`;
+}
+function showNoPin(href, landmark){
+  $('#infoTitle').textContent = 'No pin on the map';
+  $('#infoText').textContent = 'The customer did not pin a map. Map can only search the address, so it may stop at the street, not the house.'
+    + (landmark ? '\n\nLandmark: ' + landmark : '\n\nThere is no landmark either — ring them to ask.');
+  const a = $('#infoLink'); a.href = href; a.textContent = 'Search the address'; a.hidden = false;
+  $('#infoBox').hidden = false;
+  $('#infoOk').focus();
 }
 function menuRow(kind, id, icon, title, sub, cls){
   return `<button type="button" class="menu-row ${cls || ''}" data-act="open" data-kind="${kind}" data-id="${esc(id || '')}">
@@ -1545,6 +1597,7 @@ function showInfo(k){
   const it = INFO[k]; if (!it) return;
   $('#infoTitle').textContent = it[0];
   $('#infoText').textContent = typeof it[1] === 'function' ? it[1]() : it[1];
+  $('#infoLink').hidden = true;
   $('#infoBox').hidden = false;
   $('#infoOk').focus();
 }
@@ -1913,7 +1966,9 @@ function headline(d){
   if (j && j.status === 'in_progress') return ['', 'The technician is on it'];
   if (j && j.scheduled_on) return ['', 'Scheduled for ' + niceDate(j.scheduled_on) + ', ' + slotWord(j.slot)];
   if (j) return ['', 'A job — no day set yet'];   // the office made it (a call, or accepted): nobody is waiting to ring
-  if (b && b.status === 'accepted') return ['', 'Accepted — the office will set the day'];
+  // Track my booking knows only the booking (trust-boundary.md): "will set the day" was
+  // still said there with the job scheduled, started, even done (scenario test, 2026-09-27)
+  if (b && b.status === 'accepted') return ['', d.track ? 'Accepted by the office' : 'Accepted — the office will set the day'];
   return ['', 'Waiting for the office to ring'];
 }
 /* ---- Full status everywhere (Guile, 2026-09-27: "there should be always a full status
@@ -2370,9 +2425,24 @@ function panelJob(p){
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons</div>
     ${cartHtml('view', unitsOf(j), {pf: tech ? null : officePrice, missing: 'Not every service has a price yet'})}
+    ${tech ? '' : listPriceNote(j)}
     <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>
     ${menu}
     ${statusBlockHtml('job', j.id)}`};
+}
+/* The job's price is frozen; the list above adds up today's aircons. When the two differ —
+   an aircon added to a running job, say — the screen showed ₱1,800 and ₱3,300 with nothing
+   between them (scenario test, 2026-09-27). Say so, and offer the list's in one tap. */
+const listNow = j => unitsPrice(unitsOf(j), officePrice);
+function listPriceNote(j){
+  const l = listNow(j);
+  if (l == null || !['booked', 'scheduled', 'in_progress', 'done'].includes(j.status)) return '';
+  if (j.price != null && Math.abs(Number(j.price) - l) < 0.01) return '';
+  // one span: .inline-note is a flex row, and each <b> on its own became a spaced-out piece
+  return `<div class="inline-note"><span>${j.price != null
+      ? `The price list says <b>${esc(peso(l))}</b> for these aircons; this job’s price is <b>${esc(peso(j.price))}</b>.`
+      : `This job has no price yet; the price list says <b>${esc(peso(l))}</b>.`}</span>
+    <button type="button" class="b" data-act="uselist" data-id="${esc(j.id)}">Use ${esc(peso(l))}</button></div>`;
 }
 function panelSchedule(p){
   const j = db.jobs[p.id];
@@ -2545,9 +2615,14 @@ function panelEditJob(p){
       units: unitsOf(j).map(u => ({...u, services: [...u.services]})), notes: j.notes || '',
       date: j.scheduled_on || '', slot: j.slot || 'am', _origDate: j.scheduled_on || '', _origSlot: j.slot || 'am',
       _noWhen: ['done', 'cancelled'].includes(j.status),
-      _removed: removed ? 'This customer’s details were removed on request, so only the job itself can change.' : '',
-      _priceNote: j.price != null ? 'The price stays ' + peso(j.price) + ' — change it with Set the price.' : ''});
+      _removed: removed ? 'This customer’s details were removed on request, so only the job itself can change.' : ''});
   }
+  // asked again on every draw: adding an aircon moves the list's total, never the job's price
+  const l = unitsPrice(p.units || [], officePrice);
+  p._priceNote = j.price == null ? ''
+    : l != null && Math.abs(l - Number(j.price)) >= 0.01
+      ? 'The job’s price stays ' + peso(j.price) + ' — the price list says ' + peso(l) + ' for these aircons. After saving, tap “Use ' + peso(l) + '” on the job, or Change the price.'
+      : 'The price stays ' + peso(j.price) + ' — change it with Change the price.';
   return {title: 'Edit the job', sub: p.full_name || 'Job', body: heroFormHtml('edit', p, bookFormHtml('panel', p))};
 }
 
@@ -2606,7 +2681,10 @@ function panelMember(p){
       ${kv('Joined', esc(t.created_at ? new Date(t.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : '—'))}
       ${kv('Last seen', esc(timeAgo(t.last_sign_in_at)))}
     </div>
-    ${me ? '<p class="hint">This is you. Another admin changes your role; nobody can switch themselves off.</p>' : `
+    ${me ? `<p class="hint">This is you. Another admin changes your role; nobody can switch themselves off.
+      Your name is what technicians and customers see on the steps you take.</p>
+    <label>Name <input data-pf="name" maxlength="60" value="${esc(name)}" placeholder="e.g. Guile"></label>
+    <div class="stack"><button type="button" class="b primary wide" data-act="setrole" data-id="${esc(t.id)}">Save my name</button></div>` : `
     <div class="fieldlabel">What they can do ${infoBtn('roles')}</div>
     <div class="stack tight">${ROLE_CHOICES.map(([k, title]) =>
       `<button type="button" class="role-choice${role === k ? ' active' : ''}" data-act="pset" data-f="role" data-v="${k}">
@@ -2877,10 +2955,12 @@ function drawTech(){
 function drawMine(){
   const mine = Object.values(db.bookings).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
   // the same status line and bars as the office's screens (ui.md, Reuse)
+  // once there is a job, ITS aircons: the office may have added one (17)
+  const unitsNow = b => b.job && Array.isArray(b.job.units) && b.job.units.length ? b.job.units : unitsOf(b);
   return mine.length ? `<div class="list">${mine.map(b => `<div class="lrow col" data-row="${esc(b.id)}">
       <div class="lrow-top"><div class="lrow-main">
-        <div class="lrow-title">${esc(unitsLine(unitsOf(b)) || svcList(b.services))}${unsentPill(b.id)}</div>
-        <div class="lrow-sub">${esc(svcList(b.services))}</div></div>
+        <div class="lrow-title">${esc(unitsLine(unitsNow(b)) || svcList(b.services))}${unsentPill(b.id)}</div>
+        <div class="lrow-sub">${esc(svcList(unionServices(unitsNow(b))) || svcList(b.services))}</div></div>
         <div class="lrow-side">${pill(b.job ? b.job.status : b.status, b.ref)}</div></div>
       <div class="mine-steps">${stepsHtml({booking: b, job: b.job || null})}</div>
       <div class="actions">
@@ -3011,7 +3091,9 @@ function val(k){ const el = $(`[data-k="${CSS.escape(k)}"]`); return el ? (el.ty
 function parsePrice(s){
   const t = String(s || '').trim().replace(/^₱\s*/, '');
   if (!/^(\d{1,3}(,\d{3})+|\d+)(\.\d{1,2})?$/.test(t)) return null;
-  return Number(t.replace(/,/g, ''));
+  const n = Number(t.replace(/,/g, ''));
+  // the database refuses more than this, and a refused price sat as "Not sent" for ever
+  return n <= 99999999 ? n : null;
 }
 function goTab(tab){ ui.tab = tab; saveUi(); stack = []; render(); window.scrollTo({top: 0}); }
 
@@ -3327,6 +3409,13 @@ const ACTIONS = {
       });
     closePanel();
   },
+  uselist: id => {
+    const j = db.jobs[id]; if (!j) return;
+    const v = listNow(j); if (v == null) return;
+    write('set_job_price', {p_job: id, p_price: v, p_decided_at: null}, 'Price ' + peso(v), [id], () => { j.price = v; });
+    toast('Price set to ' + peso(v) + ', the price list’s.');
+  },
+  nopin: (id, el) => showNoPin(el.dataset.href, el.dataset.landmark),
   price: id => {
     const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
     const v = parsePrice(p.price != null ? p.price : j.price);
@@ -3391,8 +3480,9 @@ const ACTIONS = {
     });
     closePanel();
   },
-  mycancel: id => {
+  mycancel: (id, el) => {
     const b = db.bookings[id]; if (!b) return;
+    if (!confirmTwice(el, 'Tap again to cancel it')) return;   // one stray tap cancelled it
     write('cancel_my_booking', {p_ref: b.ref}, 'Cancel ' + b.ref, [id], () => { b.status = 'cancelled'; });
   },
 };
@@ -3639,7 +3729,7 @@ try {
 
 const STATUS_WORDS = {
   new:       'Received. We have not rung you yet — we will, to agree a time.',
-  accepted:  'Accepted. We will ring you to confirm the time.',
+  accepted:  'Accepted. For the day and where the job is now, ' + ringUs() + ' — or make an account: it shows every step.',
   rejected:  'We could not take this booking. Please ' + ringUs() + '.',
   cancelled: 'Cancelled.',
 };
@@ -3647,6 +3737,7 @@ const STATUS_WORDS = {
 trackForm.addEventListener('submit', async e => {
   e.preventDefault();
   const msg = $('#trackMsg'), btn = trackForm.querySelector('button');
+  $('#trackSteps').innerHTML = '';   // never the last lookup's bars under this one's error
   if (!trackForm.code.value.trim() || trackForm.contact.value.replace(/\D/g, '').length < 7){
     say(msg, false, 'Enter your reference code and the number you booked with.');
     return;
@@ -3658,7 +3749,7 @@ trackForm.addEventListener('submit', async e => {
     if (!res.ok){ say(msg, false, res.message); return; }
     // the same line and bars as everywhere else — from what a stranger may be told (the
     // booking's own status: trust-boundary.md), so it goes as far as Accepted
-    $('#trackSteps').innerHTML = `<div class="track-steps">${stepsHtml({booking: {status: res.status}, job: null})}</div>`;
+    $('#trackSteps').innerHTML = `<div class="track-steps">${stepsHtml({booking: {status: res.status}, job: null, track: true})}</div>`;
     say(msg, res.status !== 'rejected' && res.status !== 'cancelled',
       res.ref + ' — ' + (STATUS_WORDS[res.status] || res.status) +
       ' You asked for ' + niceDate(res.preferred_on) + ', ' + slotWord(res.slot) + '.');
