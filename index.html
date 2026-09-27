@@ -492,6 +492,16 @@
   .cal-day.shut{background:#d64545;border-color:#d64545;color:#fff;opacity:1}
   .cal-day.weekly{background:var(--surface-alt);text-decoration:line-through}
   .cal-nav{display:flex;align-items:center;gap:8px}
+  /* 📅 Regular check (24) */
+  .plan-every{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}   /* 3 × 2 at every width */
+  .plan-every .tab-btn{min-width:0;min-height:40px;justify-content:center;text-align:center}
+  .plan-date{margin-top:10px}
+  .plan-dates{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;font-size:14px;font-weight:600}
+  .plan-dates span{padding:4px 10px;border-radius:999px;background:var(--surface-alt)}
+  .plan-dates span.first{background:var(--primary);color:#fff}
+  .plan-dates i{font-style:normal;color:var(--ink-soft)}
+  .plan-now{font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-left:6px}
+  .plan-now.due{color:var(--bad)}
   .wd-row{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px}   /* one row at 375px */
   .wd-row .tab-btn{min-width:0;padding:8px 0;justify-content:center;text-align:center}
   .cal-nav .b{min-height:34px;padding:4px 12px}
@@ -1672,8 +1682,7 @@ const INFO = {
   inbox: ['Inbox', 'Bookings customers made on the page. Accept one to make them a customer, then make the job. A call you take yourself goes through “+ Book a job” instead.'],
   jobs: ['Jobs', 'The schedule. Every technician sees every job that has a day — there is no assigning. The job remembers who pressed Start and Done.'],
   people: ['Customers', 'Everyone the shop has worked for. Tap one for their history, or to book them again.'],
-  checkups: ['Check-ups', () => { const m = checkupMonths(), w = m + ' month' + (m === 1 ? '' : 's');
-    return 'Customers whose last finished job was ' + w + ' ago or more, with nothing booked. Ring them. “Not now” hides them for another ' + w + '. Change the gap in ⚙️ Settings.'; }],
+  checkups: ['Check-ups', 'Customers whose regular check has come — set on each customer: Customers → tap them → 📅 Regular check (every month, 2, 3, 6 months or yearly, from a date you choose). Ring them, or Book it. ✓ Done moves them to their next date. Nobody with a job already booked shows here. At the top: jobs done a week ago, to ask “is it working well?”.'],
   team: ['Users', 'Anyone can make an account, and starts as a customer. Tap a person to make them a technician or an admin. “Says they work here” means they ticked that box when they signed up — it gives them nothing on its own.'],
   admin: ['Admin', 'Only admins see this tab. The price list and the services the booking page offers, the receipt, and the three numbers the app was built to answer.'],
   showprices: ['Show prices', 'Off: customers never see a price; you tell them on the call.\n\nOn: once a customer picks the aircon type and the services, the booking page shows the total from this list. If a service has no price for their aircon type, it says you will tell them on the call.'],
@@ -2306,31 +2315,37 @@ function panelStatus(p){
 }
 
 /* ---------------------------------------------------------------- the check-up call list
-   Decided 2026-09-26: a customer is due N months after their last Done job; N is the
-   owner's, in Settings. Somebody with work already booked is not due — the call would be
-   about a job they already have. "Not now" hides them until checkup_snooze. */
+   Guile, 2026-09-27 (24): a customer is checked on a REGULAR CHECK the office sets on them —
+   every 1, 2, 3, 6 or 12 months, from a chosen date. The old rule (N months after the last
+   finished job, set in Settings) is gone. Somebody with work already booked is not due: the
+   call would be about a job they already have. A job finished on or after the check date
+   counts as that check. */
 const slotCap = () => Math.min(50, Math.max(0, parseInt(((db && db.settings) || {}).slot_capacity, 10) || 0));
 const checkupMonths = () => Math.min(24, Math.max(1, parseInt(((db && db.settings) || {}).checkup_months, 10) || 1));
-/* "Check every 27th" (23, Guile 2026-09-27): a customer with a check day is due on that day
-   of every month instead — a 31st is the last day of a shorter month. */
 const ord = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
-function checkDayIn(ym, day){   // 'YYYY-MM' → that month's check date
+function checkDayIn(ym, day){   // 'YYYY-MM' → that month's check date; a 31st is a short month's last day
   const [y, m] = ym.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return ym + '-' + String(Math.min(day, last)).padStart(2, '0');
 }
 const monthOf = (ymd, delta) => { const [y, m] = ymd.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + delta, 1)).toISOString().slice(0, 7); };
-function monthlyDue(day){ const t = manilaDate(0), here = checkDayIn(t.slice(0, 7), day); return here <= t ? here : checkDayIn(monthOf(t, -1), day); }
-function nextCheck(day, after){   // the next check date strictly after `after` (default: today)
-  const t = after || manilaDate(0), here = checkDayIn(t.slice(0, 7), day);
-  return here > t ? here : checkDayIn(monthOf(t, 1), day);
-}
+const addEvery = (ymd, every, day) => checkDayIn(monthOf(ymd, every), day || Number(ymd.slice(8, 10)));
+const EVERY = [[1, 'Monthly'], [2, '2 months'], [3, '3 months'], [6, '6 months'], [12, 'Yearly']];
+const everyWord = n => n === 1 ? 'every month' : n === 12 ? 'every year' : 'every ' + n + ' months';
 function checkupOf(c){
+  if (!c.check_every || !c.check_next) return null;
   const js = jobsOf(c.id);
   const last = js.filter(j => j.status === 'done' && j.done_at).sort(byDoneDesc)[0];
   const busy = js.some(j => ['booked', 'scheduled', 'in_progress'].includes(j.status));
-  if (c.check_day) return {last, monthly: true, day: c.check_day, due: monthlyDue(c.check_day), busy};
-  if (!last) return null;
-  return {last, due: addMonths(manilaDay(last.done_at), checkupMonths()), busy};
+  const day = c.check_day || Number(c.check_next.slice(8, 10));
+  let due = c.check_next;
+  if (last) for (let i = 0; i < 60 && due <= manilaDay(last.done_at); i++) due = addEvery(due, c.check_every, day);
+  return {last, due, busy, every: c.check_every, day};
+}
+/* After ✓ Done: the first check date after today. */
+function checkAfterToday(k){
+  let n = k.due; const t = manilaDate(0);
+  for (let i = 0; i < 60 && n <= t; i++) n = addEvery(n, k.every, k.day);
+  return n;
 }
 function checkups(){
   const today = manilaDate(0), out = [];
@@ -2338,8 +2353,6 @@ function checkups(){
     if (c.full_name === '(removed)') continue;
     const k = checkupOf(c);
     if (!k || k.busy || k.due > today) continue;
-    if (c.checkup_snooze && c.checkup_snooze > today) continue;
-    if (k.monthly && k.last && manilaDay(k.last.done_at) >= k.due) continue;   // this month's visit is done
     out.push({c, ...k});
   }
   return out.sort((a, b) => a.due.localeCompare(b.due));
@@ -2760,12 +2773,8 @@ function panelCustomer(p){
   const jobs = jobsOf(c.id).sort(byTime).reverse();
   const bookings = Object.values(db.bookings).filter(b => b.customer_id === c.id).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
   const k = checkupOf(c), today = manilaDate(0);
-  const snoozed = c.checkup_snooze && c.checkup_snooze > today;
-  const cu = k && k.monthly ? 'Every ' + ord(k.day) + ' — next ' + niceDate(snoozed ? c.checkup_snooze : nextCheck(k.day, addDays(today, -1)))
-    : !k ? 'After their first finished job'
-    : k.busy ? 'Not while a job is booked'
-    : snoozed ? 'Not now — until ' + niceDate(c.checkup_snooze)
-    : k.due <= today ? 'Due since ' + niceDate(k.due) : 'Due ' + niceDate(k.due);
+  const cu = !k ? '' : k.busy && k.due <= today ? 'Due — but a job is already booked'
+    : k.due <= today ? 'Due now — in Check-ups' : 'Next ' + niceDate(k.due);
   const removed = c.full_name === '(removed)';
   return {title: c.full_name, sub: c.contact, body: `
     <div class="card" data-row="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
@@ -2773,12 +2782,12 @@ function panelCustomer(p){
       ${kv('Number', esc(c.contact))}
       ${kv('Address', esc(c.address))}
       ${kv('Landmark', esc(c.landmark || ''))}
-      ${kv('Check-up', esc(cu) + (snoozed && !c.check_day ? ` <button type="button" class="b" data-act="putback" data-id="${esc(c.id)}">Put back</button>` : ''))}
-      ${removed ? '' : kv('Check every', checkDaySelect('checkday', c.check_day, `data-checkday="${esc(c.id)}"`))}
       ${kv('Customer since', esc(c.created_at ? new Date(c.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : ''))}
       <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${removed ? '' : photoBtn(c.id, c.photo_path)}</div>
     </div>
-    ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>`}
+    ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>
+    <div class="sec">📅 Regular check${cu ? ` <span class="plan-now${k && k.due <= today ? ' due' : ''}">${esc(cu)}</span>` : ''}</div>
+    <div class="card">${checkPlanHtml(c.id, c.check_every, c.check_next, c.check_day)}</div>`}
     ${airconHistoryHtml(c.id)}
     <div class="sec">Jobs</div>
     ${jobs.length ? `<div class="list">${jobs.map(jobRow).join('')}</div>` : empty('No jobs yet.')}
@@ -2868,11 +2877,11 @@ function followupHtml(){
 }
 function drawCheckups(){
   const list = checkups(), today = manilaDate(0);
-  // a monthly customer waiting for their day was not put off — not counted (23)
-  const hidden = Object.values(db.customers).filter(c => !c.check_day && c.checkup_snooze && c.checkup_snooze > today).length;
+  const planned = Object.values(db.customers).filter(c => c.check_every && c.check_next).length;
   return followupHtml() + (followups().length ? '<div class="sec">📅 Check-ups due</div>' : '') +
     (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.')) +
-    (hidden ? `<p class="count" style="margin-top:10px">${hidden} put off with “Not now”.</p>` : '');
+    `<p class="count" style="margin-top:10px">${planned ? planned + ' customer' + (planned === 1 ? ' has' : 's have') + ' a regular check.'
+      : 'Nobody has a regular check yet.'} Set one on the customer: Customers → tap them → 📅 Regular check.</p>`;
 }
 function checkupRow(k){
   const {c, last} = k, doneDay = last ? manilaDay(last.done_at) : null;
@@ -2880,22 +2889,35 @@ function checkupRow(k){
     <div class="lrow-top" role="button" tabindex="0" data-act="open" data-kind="customer" data-id="${esc(c.id)}">
       <div class="avatar">${esc(initials(c.full_name))}</div>
       <div class="lrow-main"><div class="lrow-title">${newDot(checkupUnseen(k))}${esc(c.full_name)}${unsentPill(c.id)}</div>
-        ${k.monthly ? `<div class="lrow-sub"><b>📆 Every ${esc(ord(k.day))}</b> · ${k.due === manilaDate(0) ? 'today' : 'since ' + esc(shortDate(k.due))}</div>` : ''}
+        <div class="lrow-sub"><b>📅 Check ${esc(everyWord(k.every))}</b> · ${k.due === manilaDate(0) ? 'due today' : 'due since ' + esc(shortDate(k.due))}</div>
         ${doneDay ? `<div class="lrow-sub">Last job ${esc(shortDate(doneDay))} · ${esc(daysAgo(doneDay))}</div>` : '<div class="lrow-sub">No job yet</div>'}
         ${(o => o ? `<div class="lrow-sub">Longest since: ${esc(o.h.name)}${o.h.meta ? ' (' + esc(o.h.meta) + ')' : ''} — ${esc(daysAgo(o.d))}</div>` : '')(oldestClean(c.id))}
         <div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
     </div>
     <div class="actions">${callBtn(c.contact)}
       <button type="button" class="b primary" data-act="book" data-id="${esc(c.id)}" data-svc="checkup">Book it</button>
-      <button type="button" class="b" data-act="later" data-id="${esc(c.id)}">${k.monthly ? '✓ Done — next ' + esc(shortDate(nextCheck(k.day))) : 'Not now'}</button></div>
+      <button type="button" class="b" data-act="later" data-id="${esc(c.id)}">✓ Done — next ${esc(shortDate(checkAfterToday(k)))}</button></div>
   </div>`;
 }
 
-/* "Check every …": nothing, or a day of the month. */
-function checkDaySelect(k, v, attrs){
-  const opts = ['<option value="">— not every month</option>'];
-  for (let d = 1; d <= 31; d++) opts.push(`<option value="${d}"${Number(v) === d ? ' selected' : ''}>${ord(d)} of every month${d > 28 ? ' (or the last day)' : ''}</option>`);
-  return `<select class="checkday" data-pf="${k}" ${attrs || ''} aria-label="Check every">${opts.join('')}</select>`;
+/* 📅 Regular check (24): how often in one tap, then the first date; the next dates are
+   spelled out so the owner sees what he set. `target` is a customer's id, or 'new' for the
+   Add customer form. */
+function checkPlanHtml(target, every, next, day){
+  const on = !!(every && next), t = manilaDate(0);
+  const chips = [[0, 'Off'], ...EVERY].map(([n, w]) =>
+    `<button type="button" class="tab-btn${(every || 0) === n || (!on && n === 0) ? ' active' : ''}" data-act="ckevery" data-id="${esc(target)}" data-v="${n}">${w}</button>`).join('');
+  let then = '';
+  if (on){ const d = day || Number(next.slice(8, 10)), ds = [next]; for (let i = 0; i < 3; i++) ds.push(addEvery(ds[ds.length - 1], every, d));
+    then = `<div class="plan-dates">${ds.map((x, i) => `<span${i ? '' : ' class="first"'}>${esc(shortDate(x))}</span>`).join('<i>→</i>')}<i>…</i></div>`; }
+  return `<div class="plan">
+      <div class="tabbar tight plan-every">${chips}</div>
+      ${on ? `<label class="plan-date">${target === 'new' ? 'First check on' : 'Next check on'}
+          <input type="date" data-ckdate="${esc(target)}" value="${esc(next)}" min="${t}"></label>
+        ${then}
+        <p class="hint">They show in Check-ups on each date — ${esc(everyWord(every))}, on the ${esc(ord(day || Number(next.slice(8, 10))))}.</p>`
+      : '<p class="hint">Off: they never come up in Check-ups. Tap how often to start.</p>'}
+    </div>`;
 }
 /* Add customer (Guile, 2026-09-27): a customer file on its own — no aircon, no job. */
 function panelAddCust(p){
@@ -2907,10 +2929,18 @@ function panelAddCust(p){
     + bkInput('panel', p, 'landmark', 'Landmark', '— optional', 'maxlength="200" autocomplete="off" placeholder="beside the chapel, blue gate…"')
     + bkLocHtml('panel', p);
   return {title: 'Add customer', sub: 'A customer file — no job', body: `<div class="card">${who}
-      <label>Check every <span class="opt">— optional; on that day they show in Check-ups</span>
-        ${checkDaySelect('check_day', p.check_day)}</label>
+      <div class="fieldlabel">📅 Regular check <span class="opt">— optional</span></div>
+      ${checkPlanHtml('new', p.ck_every, p.ck_next, p.ck_day)}
       <div class="stack"><button type="button" class="b primary wide" data-act="saveaddcust">Save the customer</button></div>
       <div class="msg${p._msg ? ' show ' + (p._msgOk ? 'ok' : 'err') : ''}" aria-live="polite">${esc(p._msg || '')}</div></div>`};
+}
+
+function saveCheck(c, every, next, day, done){
+  write('set_customer_check', {p_customer: c.id, p_every: every, p_next: next, p_day: every ? day : null},
+    every ? (done ? 'Checked — ' : 'Regular check — ') + c.full_name + ', next ' + shortDate(next) : 'No regular check — ' + c.full_name, [c.id], () => {
+      c.check_every = every; c.check_next = every ? next : null; c.check_day = every ? day : null;
+    });
+  toast(every ? (done ? 'Done. ' : '') + 'Next check ' + niceDate(next) + ' — ' + everyWord(every) + '.' : 'No regular check.');
 }
 
 /* ---------------------------------------------------------------- the owner books a call */
@@ -3484,13 +3514,7 @@ function panelSettings(){
     <div class="segment">${[['system', 'Like the phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, t]) =>
       `<button type="button" class="${theme === k ? 'active' : ''}" data-act="theme" data-v="${k}">${t}</button>`).join('')}</div>
 
-    ${role === 'admin' ? `<div class="sec">Check-up calls</div>
-    <div class="card row-between">
-      <div class="lrow-main"><div class="menu-title">Ring customers again after ${infoBtn('gap')}</div></div>
-      <div class="stepper"><button type="button" class="b" data-act="months" data-v="-1" aria-label="One month less" ${m <= 1 ? 'disabled' : ''}>−</button>
-        <b>${m} mo</b><button type="button" class="b" data-act="months" data-v="1" aria-label="One month more" ${m >= 24 ? 'disabled' : ''}>+</button></div>
-    </div>
-    <div class="sec">Bookings from the page</div>
+    ${role === 'admin' ? `<div class="sec">Bookings from the page</div>
     <div class="card row-between">
       <div class="lrow-main"><div class="menu-title">Most jobs a morning or afternoon ${infoBtn('slotcap')}</div>
         <div class="lrow-sub">${slotCap() ? 'A full one is refused on the booking page' : 'No limit'}</div></div>
@@ -3807,7 +3831,7 @@ const ACTIONS = {
   back: () => closePanel(),
   settings: () => openPanel({kind: 'settings'}),
   newbook: () => openBook(null, []),
-  addcust: () => openPanel({kind: 'addcust', mode: 'new', full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', check_day: ''}),
+  addcust: () => openPanel({kind: 'addcust', mode: 'new', full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', ck_every: 0, ck_next: '', ck_day: null}),
   saveaddcust: () => {
     const p = topPanel(); if (!p || p.kind !== 'addcust') return;
     const bad = [];
@@ -3817,24 +3841,32 @@ const ACTIONS = {
     if (bad.length) return bkShow('panel', p, bad);
     const same = Object.values(db.customers).find(c => digits(c.contact) === digits(p.contact));
     if (same && p._dup !== same.full_name){ p._dup = same.full_name; render(); return; }
-    const id = uuid(), day = parseInt(p.check_day, 10) || null;
+    const id = uuid(), on = !!(p.ck_every && p.ck_next);
     const d = {full_name: p.full_name.trim(), contact: p.contact.trim(), address: p.address.trim(),
-      landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null, check_day: day};
+      landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null,
+      check_every: on ? p.ck_every : null, check_next: on ? p.ck_next : null, check_day: on ? (p.ck_day || Number(p.ck_next.slice(8, 10))) : null};
     write('add_customer', {p_id: id, p_details: d}, 'Add customer — ' + d.full_name, [id], db => {
-      db.customers[id] = {id, ...d, landmark: d.landmark || null, checkup_snooze: day ? nextCheck(day, addDays(manilaDate(0), -1)) : null,
-        created_at: new Date().toISOString()};
+      db.customers[id] = {id, ...d, landmark: d.landmark || null, created_at: new Date().toISOString()};
     });
     closePanel();
-    toast(d.full_name + ' added' + (day ? ' — checked every ' + ord(day) + '.' : '.'));
+    toast(d.full_name + ' added' + (on ? ' — checked ' + everyWord(d.check_every) + ', first ' + niceDate(d.check_next) + '.' : '.'));
   },
-  setcheck: (id, el) => {   // the customer's "Check every" box: saved as soon as it changes
-    const c = db.customers[id]; if (!c) return;
-    const day = parseInt(el.value, 10) || null;
-    if ((c.check_day || null) === day) return;
-    write('set_customer_check', {p_customer: id, p_day: day}, day ? 'Check ' + c.full_name + ' every ' + ord(day) : 'No monthly check — ' + c.full_name, [id], () => {
-      c.check_day = day; c.checkup_snooze = day ? nextCheck(day, addDays(manilaDate(0), -1)) : null;
-    });
-    toast(day ? 'Checked every ' + ord(day) + ' — next ' + niceDate(nextCheck(day, addDays(manilaDate(0), -1))) + '.' : 'No monthly check.');
+  // 📅 Regular check: how often (0 = off). A customer's is saved at once; the new form's on Save.
+  ckevery: (id, el) => {
+    const n = Number(el.dataset.v) || 0, t = manilaDate(0);
+    if (id === 'new'){ const p = topPanel(); if (!p) return;
+      p.ck_every = n; if (n && !p.ck_next){ p.ck_day = Number(t.slice(8, 10)); p.ck_next = addEvery(t, n, p.ck_day); }
+      render(); return; }
+    const c = db.customers[id]; if (!c || (c.check_every || 0) === n) return;
+    // turning it on: the first check one period from today, on today's day — the date is one tap to change
+    const day = n ? (c.check_next ? c.check_day : Number(t.slice(8, 10))) : null;
+    const next = n ? (c.check_next && c.check_next >= t ? c.check_next : addEvery(t, n, day)) : null;
+    saveCheck(c, n || null, next, day);
+  },
+  later: id => {   // ✓ Done in Check-ups: on to the following check date
+    const c = db.customers[id], k = c && checkupOf(c); if (!k) return;
+    seenCheckup(id);
+    saveCheck(c, k.every, checkAfterToday(k), k.day, true);
   },
   book: (id, el) => { if (id) seenCheckup(id); openBook(id, el.dataset.svc && serviceLabels[el.dataset.svc] ? [el.dataset.svc] : []); },
   /* A choice inside a panel: kept on the panel itself, so it survives every redraw. */
@@ -4080,17 +4112,6 @@ const ACTIONS = {
       if (j._prev && j._prev.length){ j.status = j._prev.pop(); j.status_by = session.uid; if (j.status !== 'done') j.done_at = null; }
     });
   },
-  later: id => {
-    const c = db.customers[id]; if (!c) return;
-    seenCheckup(id);
-    // a monthly customer comes back on their next check day; the others after the usual gap
-    const until = c.check_day ? nextCheck(c.check_day) : addMonths(manilaDate(0), checkupMonths());
-    write('checkup_later', {p_customer: id, p_until: until}, 'Check-up later — ' + c.full_name, [id], () => { c.checkup_snooze = until; });
-  },
-  putback: id => {
-    const c = db.customers[id]; if (!c) return;
-    write('checkup_later', {p_customer: id, p_until: null}, 'Check-up list — ' + c.full_name, [id], () => { c.checkup_snooze = null; });
-  },
   forget: id => {
     const c = db.customers[id], p = topPanel(); if (!c) return;
     if (!(p && p.ok)){ notice('Tick the box first — deleting cannot be undone.', true); return; }
@@ -4147,7 +4168,12 @@ document.addEventListener('keydown', e => {
 document.addEventListener('input', e => {
   const t = e.target, f = t.dataset && t.dataset.pf;
   if (t.dataset && t.dataset.ued && unitEd){ unitEd.unit[t.dataset.ued] = t.value; return; }
-  if (t.dataset && t.dataset.checkday){ ACTIONS.setcheck(t.dataset.checkday, t); return; }   // 23
+  if (t.dataset && t.dataset.ckdate){   // 📅 the check date (24)
+    const v = t.value, id = t.dataset.ckdate; if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v < manilaDate(0)) return;
+    if (id === 'new'){ const p = topPanel(); if (p){ p.ck_next = v; p.ck_day = Number(v.slice(8, 10)); t.blur(); render(); } return; }
+    const c = db.customers[id]; if (c && c.check_every && c.check_next !== v){ t.blur(); saveCheck(c, c.check_every, v, Number(v.slice(8, 10))); }
+    return;
+  }
   // THE booking form: every box writes to its form's state, and typing clears its red
   if (t.dataset && t.dataset.bk){
     const ctx = t.dataset.cart, s = bkState(ctx); if (!s) return;
@@ -4505,7 +4531,7 @@ function customersMap(){
     if (c.full_name === '(removed)') continue;
     if (c.lat == null || c.lng == null){ none.push(c); continue; }
     const k = checkupOf(c), days = k && k.last ? daysSince(manilaDay(k.last.done_at)) : null;
-    const due = k && !k.busy && k.due <= today && !(c.checkup_snooze && c.checkup_snooze > today);
+    const due = k && !k.busy && k.due <= today;
     pts.push({lat: +c.lat, lng: +c.lng, label: days == null ? '–' : String(days), cls: due ? 'due' : days == null ? 'never' : '',
       title: c.full_name + (days == null ? ' — no finished job yet' : ' — last visit ' + days + ' day' + (days === 1 ? '' : 's') + ' ago'),
       onTap: () => mapGo('customer', c.id)});
