@@ -912,7 +912,7 @@ async function refreshSession(){
   }
 }
 
-async function rpc(fn, args, useSession = true){
+async function rpc(fn, args, useSession = true, retried = false){
   const t = useSession ? await token() : null;
   let r;
   try {
@@ -926,6 +926,14 @@ async function rpc(fn, args, useSession = true){
   const body = await r.json().catch(() => null);
   if (r.ok) return body;
   const code = body && body.code;
+  // The server's clock says the sign-in ran out while this phone's clock says it has not —
+  // a phone whose clock jumped (set by hand, or corrected by the network) kept sending the
+  // old token and every write came back "JWT expired", for good (measured 2026-09-27 with a
+  // faked clock). Refresh once and ask again.
+  if (r.status === 401 && useSession && session && !retried && /jwt expired/i.test((body && body.message) || '')){
+    session.expires_at = 0;
+    return rpc(fn, args, useSession, true);
+  }
   // A refusal the database words for people is a refusal, whatever the HTTP number: the
   // rate limit (53400) arrives as a 500, and was shown as "could not reach the booking
   // system" (scenario test, 2026-09-27) — and a queued write would have retried it for ever.
@@ -954,8 +962,10 @@ function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, booking
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
    for rows it already had. 3 (2026-09-26): no assignment — a technician's phone now holds
    every scheduled job, jobs carry status_by, customers carry checkup_snooze. */
-const REPAIR_ID = 5;   // 4: customers carry photo_path; a technician's jobs carry customer_id
+const REPAIR_ID = 6;   // 4: customers carry photo_path; a technician's jobs carry customer_id
                        // 5: a customer's booking carries its job's aircons (17)
+                       // 6: the test data was deleted in the SQL editor (2026-09-27); a phone
+                       //    keeps deleted jobs and customers until it takes a full copy
 function loadLocal(){
   db = lsGet(dbKey(), null) || emptyDb();
   if (db.repair !== REPAIR_ID){ db.cursor = null; db.repair = REPAIR_ID; }
@@ -2539,7 +2549,8 @@ function custList(){
 function custListHtml(){
   const list = custList();
   return `<p class="count">${list.length} customer${list.length === 1 ? '' : 's'}</p>` +
-    (list.length ? `<div class="list">${list.map(custRow).join('')}</div>` : empty('Nobody matches that.'));
+    (list.length ? `<div class="list">${list.map(custRow).join('')}</div>`
+                 : empty((ui.search || '').trim() ? 'Nobody matches that.' : 'No customers yet.'));
 }
 function drawPeople(){
   return `<input type="search" class="find" id="custSearch" placeholder="🔎 Name, number or address" value="${esc(ui.search || '')}" autocomplete="off">
@@ -2894,10 +2905,16 @@ async function hashOf(blob){
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
   return [...h.slice(0, 16)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
-async function storage(method, path, body){
+async function storage(method, path, body, retried){
   const t = await token();
-  return fetch(SUPABASE_URL + '/storage/v1/object/' + (method === 'GET' ? 'authenticated/' : '') + 'house-photos/' + path, {
+  const r = await fetch(SUPABASE_URL + '/storage/v1/object/' + (method === 'GET' ? 'authenticated/' : '') + 'house-photos/' + path, {
     method, headers: {apikey: SUPABASE_KEY, Authorization: 'Bearer ' + t, ...(body ? {'Content-Type': 'image/jpeg'} : {})}, body});
+  // the same clock jump as rpc(): an expired token is refreshed once and the call asked again
+  if (!retried && session && [400, 401, 403].includes(r.status)){
+    const text = await r.clone().text().catch(() => '');
+    if (/jwt expired|"exp" claim|token is expired/i.test(text)){ session.expires_at = 0; return storage(method, path, body, true); }
+  }
+  return r;
 }
 const photoUrls = {}, photoWant = new Set(), photoQueue = [];
 let photoActive = 0;
