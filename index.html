@@ -254,6 +254,7 @@
   .b.wide{width:100%;min-height:44px;font-size:15px}
   .b:disabled{cursor:default;opacity:.45}
   .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .actions .edit-btn{border-color:var(--primary);color:var(--primary);font-weight:700}
   .actions.fill .b{flex:1 1 auto;min-height:42px;font-size:14.5px}
   .stack{display:flex;flex-direction:column;gap:8px;margin-top:14px}
   .stack.tight{margin-top:0}
@@ -444,6 +445,14 @@
   .st-total .muted{align-self:center;font-size:12.5px;font-weight:400;text-align:right}
   .st-copy{width:100%;margin:12px 0 0}
   .tl-what b{font-weight:700}
+  .new-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--primary);margin-right:7px;vertical-align:1px}
+  .tech-new{margin-left:8px;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;background:#E0352B;color:#fff;vertical-align:middle}
+  .mine-steps{margin-top:10px}
+  .track-steps{margin-top:12px}
+  .mine-steps .steps{margin-bottom:0}
+  .mini-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;margin-top:8px}
+  .mini-steps span{height:3px;border-radius:2px;background:var(--border)}
+  .mini-steps span.on{background:var(--primary)}
   .tl-row{display:flex;gap:10px;padding:8px 0;border-bottom:1px dashed var(--border)}
   .tl-row:last-child{border-bottom:none}
   .tl-icon{flex:none;width:22px;text-align:center;font-size:14px;line-height:1.5}
@@ -533,6 +542,7 @@
   body.locked{overflow:hidden}
   .sheet{position:fixed;inset:0;background:var(--bg);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
   .sheet-inner{max-width:660px;margin:0 auto;padding:0 16px 40px}
+  .sheet.wide .sheet-inner{max-width:1112px}   /* Book a job / Edit: the customer's page's width */
   .sheet-top{margin-bottom:12px}
   .sheet-title{text-transform:none;letter-spacing:0;font-size:16px}
   .sheet.small{background:rgba(8,14,22,.5);display:flex;align-items:flex-end;justify-content:center;overflow:hidden}
@@ -572,8 +582,9 @@
     justify-content:center;color:var(--primary);font-size:18px;font-weight:700;opacity:0;pointer-events:none;
     transform:translate(-50%,0)}
   .pull-ring.settle{transition:transform .2s ease,opacity .2s ease}
-  .pull-ring.ready span{transform:rotate(180deg)}
-  .pull-ring span{transition:transform .15s ease;display:block}
+  /* ↻ turns with the finger (Guile: "the rotating icon, not an arrow"), spins while busy */
+  .pull-ring span{display:block;line-height:1;font-size:20px}
+  .pull-ring.ready{border-color:var(--primary)}
   .pull-ring.busy span{animation:ws-spin .8s linear infinite}
   /* Updates and What's new (SukiRun's cards) */
   .card.update{border-color:var(--primary);border-width:1.5px}
@@ -584,7 +595,12 @@
   .update-bar span{display:block;height:100%;background:var(--primary)}
   .update-note{font-size:12.5px;color:var(--ink-soft);margin-top:8px}
   .update-note.bad{color:var(--bad)}
-  .news{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 14px}
+  .news{padding:4px 6px 4px 14px}
+  .news-head{display:flex;align-items:center;gap:6px}
+  .news-chev{display:inline-block;font-size:11px;color:var(--ink-soft);margin-right:4px;transition:transform .15s ease}
+  .news.open .news-chev{transform:rotate(90deg)}
+  .news-body{padding:0 8px 10px 0}
+  .news-date{font-size:12px;color:var(--ink-soft);margin:2px 0 4px}
   .news-open{flex:1;min-width:0;width:auto;margin:0;padding:8px 0;background:none;border:0;color:var(--ink);
     text-align:left;font-size:14px;font-weight:600}
   .news-x{flex:none;width:36px;height:36px;min-height:0;margin:0;padding:0;border-radius:50%;background:transparent;
@@ -667,12 +683,7 @@
     <!-- The Travelista look (Guile's sample, 2026-09-27), our own code: the photo behind the
          top, the words on it, the form in a white card overlapping it. -->
     <section class="hero">
-      <div class="hero-text">
-        <p class="hero-kicker">Aircon cleaning · repair · installation<span class="hero-where"> · Bacolod</span></p>
-        <h1>Book an aircon job</h1>
-        <p class="lede" id="lede">No account needed. We ring you back to agree a time.</p>
-        <a class="hero-call" id="heroCall" href="tel:">📞 Rather talk? Call us</a>
-      </div>
+      <div class="hero-text" id="heroText"><!-- heroTextHtml('pub') — shared with Book a job --></div>
       <div class="hero-card">
 
     <section class="panel done" id="done" hidden aria-live="polite">
@@ -720,6 +731,7 @@
       </div>
       <button type="submit" class="ghost">Check it</button>
       <div class="msg" id="trackMsg" aria-live="polite"></div>
+      <div id="trackSteps"></div>
       <p class="hint" id="registerNudge">Make an account to see all your bookings in one
         place, even on a new phone. <a href="#" id="registerLink">Make an account</a></p>
     </form>
@@ -741,7 +753,7 @@
 <div id="panels"></div>
 <!-- A refresh says what it did (SukiRun, 2026-09-22), on this one line at the bottom. -->
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<div class="pull-ring" id="pullRing" aria-hidden="true"><span>↓</span></div>
+<div class="pull-ring" id="pullRing" aria-hidden="true"><span>↻</span></div>
 <!-- The aircon window (15): "Window #2" — what it needs, brand and model. Small, not a screen. -->
 <div class="unit-back" id="unitSheet" hidden><div class="unit-card" role="dialog" aria-modal="true"></div></div>
 <!-- The page's cart (15): the bar at the bottom, and the summary it opens. -->
@@ -885,8 +897,12 @@ async function rpc(fn, args, useSession = true){
   } catch (e) { throw new Unreachable('offline'); }
   const body = await r.json().catch(() => null);
   if (r.ok) return body;
-  if (r.status >= 500) throw new Unreachable('http ' + r.status);
   const code = body && body.code;
+  // A refusal the database words for people is a refusal, whatever the HTTP number: the
+  // rate limit (53400) arrives as a 500, and was shown as "could not reach the booking
+  // system" (scenario test, 2026-09-27) — and a queued write would have retried it for ever.
+  if (HUMAN_CODES.includes(code)) throw new Refused(body.message || 'Refused.', true);
+  if (r.status >= 500) throw new Unreachable('http ' + r.status);
   throw new Refused((body && body.message) || 'Refused.', HUMAN_CODES.includes(code));
 }
 
@@ -931,12 +947,15 @@ function notice(text, bad){
 }
 
 /* A write: apply it here, queue it, try to send. It always "succeeds" on the phone. */
-function write(fn, args, label, touches, applyLocal){
+function write(fn, args, label, touches, applyLocal, after){
   const op = {op_id: uuid(), fn, args: {...args}, label, at: new Date().toISOString(),
               touches: touches || [], state: 'pending'};
+  // "after": this write only makes sense if that one lands (Accept → its job → its price)
+  if (after) op.after = after;
   op.args.p_op_id = op.op_id;
   if ('p_decided_at' in op.args) op.args.p_decided_at = op.at;
   try { applyLocal && applyLocal(db, op); } catch (e) { console.error(e); }
+  forgetStatus(op.touches);   // its history has a new line coming
   queue.push(op);
   saveLocal();
   render();
@@ -944,6 +963,16 @@ function write(fn, args, label, touches, applyLocal){
   return op;
 }
 
+/* A write that was refused takes the writes that depended on it with it, unsent — Accept
+   refused ("already accepted on another phone") used to send its job anyway, which was
+   refused too, and a job that exists nowhere stayed on the phone (scenario test,
+   2026-09-27). Their rows go with the full fresh copy the refusal asks for. */
+function dropAfter(opId){
+  const gone = queue.filter(o => o.after === opId);
+  if (!gone.length) return;
+  queue = queue.filter(o => !gone.includes(o));
+  gone.forEach(o => dropAfter(o.op_id));
+}
 let flushing = false, flushAgain = false;
 async function flush(){
   if (!session) return;
@@ -952,11 +981,13 @@ async function flush(){
   let lost = false;
   try {
     for (const op of queue.filter(o => o.state === 'pending')){
+      if (!queue.includes(op)) continue;   // dropped with the write it depended on
       try {
         const res = await rpc(op.fn, op.args);
         if (res && res.ok === false){
           lost = true;
           notice(op.label + ' — ' + ((res.messages || []).join(' ') || res.message || 'not kept.'), false);
+          dropAfter(op.op_id);
         }
         queue = queue.filter(o => o !== op);
         if (op.cleanup_photo && !(res && res.ok === false)) deletePhotoFile(op.cleanup_photo);
@@ -967,6 +998,7 @@ async function flush(){
         // hid a missing-parameter bug on 2026-09-26. The public page never reaches here.
         op.error = e.human ? e.message : 'The server refused it: ' + e.message;
         lost = true;
+        dropAfter(op.op_id);
       }
       saveLocal();
     }
@@ -1008,6 +1040,9 @@ async function pull(){
   if (res.services) db.services = res.services; // the price list, sent whole (admin only)
   if (db.role !== res.role){ db.role = res.role; session.role = res.role; lsSet('ws_session', session); }
   pullStats = diffStats(before, db);
+  // something changed, or a history failed to load earlier: ask again on the next draw
+  if (pullStats.bookings || pullStats.jobs || pullStats.updated || pullStats.removed) forgetStatus();
+  else Object.keys(statusLive).forEach(k => { if (statusLive[k].error) delete statusLive[k]; });
   saveLocal();
   render();
 }
@@ -1079,9 +1114,7 @@ function render(){
   $('#techView').hidden = blocked || role !== 'technician';
   $('#customerView').hidden = role !== 'customer';
   $('#registerNudge').hidden = !!session;
-  $('#lede').textContent = role === 'customer'
-    ? 'Book another job below. We ring you back to agree a time.'
-    : 'No account needed. We ring you back to agree a time.';
+  $('#heroText').innerHTML = heroTextHtml('pub');   // the shared photo top's words
   const nav = !blocked && role === 'admin' && !!db;
   $('#bottomNav').hidden = !nav;
   if (nav) drawNav();
@@ -1165,7 +1198,7 @@ async function refreshNow(){
     const failed = () => queue.filter(o => o.state === 'failed').length;
     const waited = pending(), failedBefore = failed();
     // An open Full status is read from the server, so it is asked again too.
-    for (const p of stack) if (p.kind === 'bookingstatus' || p.kind === 'jobstatus'){ p.data = null; p.error = null; }
+    forgetStatus();   // every "what has happened" on screen is asked again
     pullStats = null;
     await flush();
     const nowFailed = failed() - failedBefore, sent = Math.max(0, waited - pending() - nowFailed);
@@ -1206,6 +1239,7 @@ function pullDraw(d){
   r.style.transform = `translate(-50%, ${Math.min(d, PULL_MAX)}px)`;
   r.style.opacity = String(Math.min(1, d / 36));
   r.classList.toggle('ready', d >= PULL_GO);
+  $('span', r).style.transform = `rotate(${Math.round(d * 4)}deg)`;   // one turn by the time it is ready
 }
 function pullHide(){
   const r = $('#pullRing');
@@ -1232,6 +1266,7 @@ document.addEventListener('touchend', async () => {
   pullG = null;
   if (!go){ pullHide(); return; }
   const r = $('#pullRing');
+  $('span', r).style.transform = '';   // the spin animation takes over
   r.classList.add('settle', 'busy'); r.classList.remove('ready');
   r.style.transform = `translate(-50%, ${PULL_GO}px)`; r.style.opacity = '1';
   try { await refreshNow(); } finally { pullHide(); }
@@ -1351,15 +1386,28 @@ function updateCardHtml(inSettings){
   if (s.error) h += `<div class="update-note bad">${esc(s.error)}</div>`;
   return inSettings ? h : `<div class="card update">${h}</div>`;
 }
-/* One line after an update: "What's new in 0.1.1". Tap it for About; × and it is gone for
-   this version. A brand-new install has nothing new, so it only records the number. */
+/* One line after an update: "What's new in 0.1.1". Tapping it opens the change log right
+   there, like Suki's (Guile, 2026-09-27: "a dropdown, not the About section"); Got it or ×
+   and it is gone for this version. A brand-new install has nothing new, so it only records
+   the number. Settings → About still lists the same notes. */
+let newsOpen = false;
 function newsHtml(){
   if (!session || !BUILD.versionCode || !BUILD.notes.length) return '';
   const seen = lsGet('ws_seen_build', null);
   if (seen === BUILD.versionCode) return '';
   if (seen === null){ lsSet('ws_seen_build', BUILD.versionCode); return ''; }
-  return `<div class="card news"><button type="button" class="news-open" data-act="news">✨ What’s new in Winter Air ${esc(BUILD.versionName)} ›</button>
-    <button type="button" class="news-x" data-act="newsseen" aria-label="Close">×</button></div>`;
+  return `<div class="card news${newsOpen ? ' open' : ''}">
+    <div class="news-head">
+      <button type="button" class="news-open" data-act="news" aria-expanded="${newsOpen}">
+        <span class="news-chev" aria-hidden="true">▶</span> ✨ What’s new in Winter Air ${esc(BUILD.versionName)}</button>
+      <button type="button" class="news-x" data-act="newsseen" aria-label="Close">×</button>
+    </div>
+    ${newsOpen ? `<div class="news-body">
+      ${BUILD.releasedAt ? `<div class="news-date">${esc(BUILD.releasedAt)}</div>` : ''}
+      <ul class="notes-list">${BUILD.notes.map(n => `<li>${mdLite(n)}</li>`).join('')}</ul>
+      <div class="actions"><button type="button" class="b" data-act="newsseen">Got it</button></div>
+    </div>` : ''}
+  </div>`;
 }
 function aboutHtml(){
   return `<div class="sec" id="aboutSec">About</div>
@@ -1431,6 +1479,9 @@ const empty = t => `<div class="empty-state">${esc(t)}</div>`;
 /* SukiRun's tab strip: small pills with a count, the chosen one filled in. */
 const chips = (act, items, current) => `<div class="tabbar">${items.map(([k, t, n]) =>
   `<button type="button" class="tab-btn${current === k ? ' active' : ''}" data-act="${act}" data-v="${esc(k)}">${esc(t)}${n ? ' (' + n + ')' : ''}</button>`).join('')}</div>`;
+/* ✏️ Edit — one button, the same on the booking and the job: opens the customer's whole
+   booking form on the customer's photo (ui.md, Reuse). */
+const editBtn = (kind, id) => `<button type="button" class="b edit-btn" data-act="open" data-kind="${kind}" data-id="${esc(id)}">✏️ Edit</button>`;
 function callBtn(n){ return digits(n).length >= 7 ? `<a class="b" href="tel:${esc(digits(n))}">📞 Call</a>` : ''; }
 function mapBtn(c){
   if (!c || !(c.address || c.lat != null) || c.address === '(removed)') return '';
@@ -1661,25 +1712,28 @@ function bkAirconsHtml(ctx, s, label){
         : {editable: true, pf: officePrice, missing: 'Not every service has a price yet'})}` : ''}
     </div>`;
 }
-function bkWhenHtml(ctx, s){
+/* The day and the time. opts.notYet: offer "Not yet" (the office, a job with no day yet);
+   opts.slot: always ask morning or afternoon. Schedule, Book a job, Edit and the page. */
+function bkWhenHtml(ctx, s, opts){
   const pub = ctx === 'pub', today = manilaDate(0), d = s.date || '';
-  const chips = [...(pub ? [] : [['', 'Not yet']]), [today, 'Today'], [addDays(today, 1), 'Tomorrow'],
+  opts = {notYet: !pub, slot: pub, ...(opts || {})};
+  const chips = [...(opts.notYet ? [['', 'Not yet']] : []), [today, 'Today'], [addDays(today, 1), 'Tomorrow'],
     [addDays(today, 2), niceDate(addDays(today, 2))]];
   const chip = (f, v, t, on) => `<button type="button" class="tab-btn${on ? ' active' : ''}" data-act="bkset" data-cart="${ctx}" data-f="${f}" data-v="${v}">${esc(t)}</button>`;
   return `<div class="bk-sec${bkCls(s, 'date')}" data-bkf="date">
-      <div class="fieldlabel">${pub ? 'Preferred date' : 'When <span class="opt">— or leave it for later</span>'}</div>
+      <div class="fieldlabel">${pub ? 'Preferred date' : opts.notYet ? 'When <span class="opt">— or leave it for later</span>' : 'Day'}</div>
       <div class="tabbar tight">${chips.map(([v, t]) => chip('date', v, t, d === v)).join('')}</div>
       <input type="date" data-bk="date" data-cart="${ctx}" value="${esc(d)}" min="${today}"${pub ? ` max="${manilaDate(120)}"` : ''} aria-label="Another day">
       ${bkWhy(s, 'date')}
     </div>
-    ${pub || d ? `<div class="fieldlabel">Morning or afternoon</div>
+    ${opts.slot || d ? `<div class="fieldlabel">Morning or afternoon</div>
       <div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
         `<button type="button" class="${(s.slot || 'am') === k ? 'active' : ''}" data-act="bkset" data-cart="${ctx}" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>` : ''}`;
 }
 function bookFormHtml(ctx, s){
-  const pub = ctx === 'pub', w = BK_WORDS[ctx], existing = !pub && s.mode === 'existing';
+  const pub = ctx === 'pub', w = BK_WORDS[ctx], existing = !pub && s.mode === 'existing', edit = s.mode === 'edit';
   let who = '';
-  if (!pub) who = `<div class="segment">${[['new', 'New customer'], ['existing', 'Customer files']].map(([k, t]) =>
+  if (!pub && !edit) who = `<div class="segment">${[['new', 'New customer'], ['existing', 'Customer files']].map(([k, t]) =>
       `<button type="button" class="${s.mode === k ? 'active' : ''}" data-act="pset" data-f="mode" data-v="${k}">${t}</button>`).join('')}</div>`;
   if (existing){
     const c = db.customers[s.customer_id];
@@ -1689,17 +1743,25 @@ function bookFormHtml(ctx, s){
           <button type="button" class="b" data-act="pset" data-f="customer_id" data-v="">Change</button></div>`
       : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name or number" value="${esc(s.q || '')}" autocomplete="off">
           <div class="list" id="bookMatches">${bookMatches(s)}</div>`}${bkWhy(s, 'customer')}</div>`;
-  } else {
+  } else if (!s._removed){   // a customer whose details were removed on request stays removed
     who += bkInput(ctx, s, 'full_name', w.name, '', `maxlength="120" autocomplete="${w.auto[0]}"`)
       + bkInput(ctx, s, 'contact', 'Contact number', '', `inputmode="tel" maxlength="30" autocomplete="${w.auto[1]}" placeholder="09XX XXX XXXX"`)
-      + (pub ? '' : `<div id="bookSame">${bookSame(s)}</div>`)
+      + (pub || edit ? '' : `<div id="bookSame">${bookSame(s)}</div>`)   // only a NEW customer can be a duplicate
       + bkInput(ctx, s, 'address', 'Address', '', `maxlength="300" autocomplete="${pub ? 'street-address' : 'off'}" placeholder="Street, barangay, city"`)
       + bkInput(ctx, s, 'landmark', 'Landmark', '— optional, but it is how we find you', `maxlength="200" autocomplete="off" placeholder="beside the chapel, blue gate…"`)
       + `<div class="hint">In Bacolod this matters more than the address. Please fill it in.</div>`
       + bkLocHtml(ctx, s);
   }
   const n = (s._bad && Object.keys(s._bad).length) || 0;
-  return who + bkAirconsHtml(ctx, s) + bkWhenHtml(ctx, s) + `
+  // Editing a job: the day only while the job is still open, and a word about the price,
+  // which is frozen onto the job and changed by hand (docs/scope.md).
+  // editing a booking asks the day like the page does; editing a job like the office does
+  const when = edit ? (s._noWhen ? '' : bkWhenHtml(ctx, s, s._needDate ? {notYet: false, slot: true} : {notYet: !s._origDate}))
+                    : bkWhenHtml(ctx, s);
+  const priceNote = edit && s._priceNote ? `<p class="hint">${esc(s._priceNote)}</p>` : '';
+  const send = pub ? 'Send the booking' : edit ? 'Save changes' : 'Book it';
+  const act = pub ? '' : edit ? ` data-act="${s._saveAct || 'savejob'}" data-id="${esc(s.id || '')}"` : ' data-act="savebook"';
+  return who + (s._removed ? `<p class="hint">${esc(s._removed)}</p>` : '') + bkAirconsHtml(ctx, s) + priceNote + when + `
     <label>Anything else <span class="opt">— optional</span>
       <textarea data-bk="notes" data-cart="${ctx}" maxlength="1000" placeholder="${esc(w.notes)}">${esc(s.notes || '')}</textarea></label>
     ${pub ? `<!-- The honeypot. Hidden from people, filled in by bots. See book_job(). -->
@@ -1707,23 +1769,46 @@ function bookFormHtml(ctx, s){
       <!-- RA 10173. Wording shown to the owner and approved (TODO.md, D). -->
       <label class="tick bk-sec${bkCls(s, 'consent')}" data-bkf="consent"><input type="checkbox" data-bk="consent" data-cart="pub"${s.consent ? ' checked' : ''}>
         <span>${esc(PRIVACY_TEXT())}</span></label>${bkWhy(s, 'consent')}` : ''}
-    <button type="${pub ? 'submit' : 'button'}" class="bk-send${n && s._shake ? ' shake' : ''}"${pub ? '' : ' data-act="savebook"'}${s._sending ? ' disabled' : ''}>${
-      s._sending ? 'Sending…' : pub ? 'Send the booking' : 'Book it'}</button>
+    <button type="${pub ? 'submit' : 'button'}" class="bk-send${n && s._shake ? ' shake' : ''}"${act}${s._sending ? ' disabled' : ''}>${
+      s._sending ? 'Sending…' : send}</button>
     <div class="msg${s._msg ? ' show ' + (s._msgOk ? 'ok' : 'err') : ''}"${pub ? ' id="bookMsg"' : ''} aria-live="polite">${esc(s._msg || '')}</div>`;
 }
+/* The photo top's words — the customer's page and the office's Book a job and Edit draw the
+   SAME ones (docs/rules/ui.md, Reuse): the office sees what the customer sees. Only the lead
+   line says who is holding the phone; the call button is the customer's alone. */
+function heroTextHtml(ctx, s){
+  const lede = ctx === 'pub'
+    ? `<p class="lede" id="lede">${session && ((db && db.role) || session.role) === 'customer'
+        ? 'Book another job below. We ring you back to agree a time.' : 'No account needed. We ring you back to agree a time.'}</p>`
+    : ctx === 'edit'
+      ? `<p class="lede">${esc((s && s.full_name) || 'The job')} — what the customer booked. Change it here.</p>`
+      : '<p class="lede">The customer’s own page, as they see it — for a call you took yourself.</p>';
+  return `<p class="hero-kicker">Aircon cleaning · repair · installation<span class="hero-where"> · Bacolod</span></p>
+    <h1>${ctx === 'edit' ? (s && s._saveAct === 'editbooking' ? 'Edit the booking' : 'Edit the job') : 'Book an aircon job'}</h1>
+    ${lede}
+    ${ctx === 'pub' ? `<a class="hero-call" href="tel:${esc(digits(SHOP_PHONE))}">📞 Rather talk? ${esc(SHOP_PHONE)}</a>` : ''}`;
+}
+/* A booking form on the photo — Book a job and Edit the job, the customer's page's shape. */
+const heroFormHtml = (ctx, s, form) => `<section class="hero">
+    <div class="hero-text">${heroTextHtml(ctx, s)}</div>
+    <div class="hero-card"><div class="panel bk-form">${form}</div></div>
+  </section>`;
+
 /* What is missing, as [field, what to do] — the same rules for a stranger and the office. */
 function bookProblems(ctx, s){
   const pub = ctx === 'pub', out = [], today = manilaDate(0);
   if (!pub && s.mode === 'existing'){
     if (!db.customers[s.customer_id]) out.push(['customer', 'Choose the customer from the list — or tap New customer.']);
-  } else {
+  } else if (!s._removed){
     if ((s.full_name || '').trim().length < 2) out.push(['full_name', pub ? 'Please give your name.' : 'Type the customer’s name.']);
     if (digits(s.contact).length < 7) out.push(['contact', pub ? 'Please give a number we can ring — at least 7 digits.' : 'Type a contact number — at least 7 digits.']);
     if ((s.address || '').trim().length < 4) out.push(['address', pub ? 'Please give the address.' : 'Type the address.']);
   }
   if (!cartUnits(ctx).length) out.push(['units', pub ? 'Add your aircon — tap its type: Window, Split, Floor-mounted or Cassette.' : 'Add at least one aircon — tap its type.']);
-  if (pub && !s.date) out.push(['date', 'Please choose a date.']);
-  else if (s.date && s.date < today) out.push(['date', 'That day has already passed.']);
+  // an edit is only asked about the day when the day was changed: a job done last week is fine
+  const dayMoved = s.mode !== 'edit' || s.date !== (s._origDate || '');
+  if ((pub || s._needDate) && !s.date) out.push(['date', pub ? 'Please choose a date.' : 'Choose the day they want.']);
+  else if (dayMoved && s.date && s.date < today) out.push(['date', 'That day has already passed.']);
   else if (pub && s.date > manilaDate(120)) out.push(['date', 'That is too far ahead. Please pick a date within the next few months.']);
   if (pub && !s.consent) out.push(['consent', 'Please tick the box to say you have read how we keep your details.']);
   return out;
@@ -1827,9 +1912,50 @@ function headline(d){
   if (j && j.status === 'done') return ['good', 'Done' + (j.done_at ? ' — ' + new Date(j.done_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short'}) : '')];
   if (j && j.status === 'in_progress') return ['', 'The technician is on it'];
   if (j && j.scheduled_on) return ['', 'Scheduled for ' + niceDate(j.scheduled_on) + ', ' + slotWord(j.slot)];
+  if (j) return ['', 'A job — no day set yet'];   // the office made it (a call, or accepted): nobody is waiting to ring
   if (b && b.status === 'accepted') return ['', 'Accepted — the office will set the day'];
   return ['', 'Waiting for the office to ring'];
 }
+/* ---- Full status everywhere (Guile, 2026-09-27: "there should be always a full status
+   everywhere"). Three shared pieces, drawn on every booking and job, for every role:
+     stepsHtml(d)            the line and the five bars — from this phone's own copy
+     statusBlockHtml(k, id)  what has happened, with who and when — live from full_status
+     miniSteps(d)            the bars again, thin, on a list row
+   The history is fetched once per booking or job and kept in statusLive; a write that
+   touches it, a pull that changed something, or ↻ drops it so the next draw asks again. */
+const statusLive = {};
+const statusKey = (kind, id) => (kind === 'job' ? 'j:' : 'b:') + id;
+function liveStatus(kind, id){
+  const key = statusKey(kind, id);
+  let e = statusLive[key];
+  if (!e){
+    e = statusLive[key] = {loading: true, data: null, error: ''};
+    rpc('full_status', kind === 'job' ? {p_job: id} : {p_booking: id})
+      .then(d => { e.data = d; e.error = ''; })
+      .catch(err => { e.error = err instanceof Unreachable ? 'What has happened shows when there is signal.' : err.message; })
+      .finally(() => { e.loading = false; render(); });
+  }
+  return e;
+}
+function forgetStatus(ids){
+  if (!ids){ Object.keys(statusLive).forEach(k => delete statusLive[k]); return; }
+  ids.forEach(id => { delete statusLive['j:' + id]; delete statusLive['b:' + id]; });
+}
+function statusBlockHtml(kind, id){
+  const e = liveStatus(kind, id);
+  return `<div class="st-label">🕒 What has happened to it</div>` +
+    (e.data ? timelineHtml(e.data.events || [])
+     : e.error ? `<p class="hint">${esc(e.error)}</p>` : '<div class="cart-empty">Loading what has happened…</div>');
+}
+/* The five bars, thin, under a list row. Picture only. */
+function miniSteps(d){
+  const [tone] = headline(d), at = stepAt(d);
+  return tone === 'bad' ? '' : `<div class="mini-steps" aria-hidden="true">${STEP_NAMES.map((n, i) =>
+    `<span class="${i <= at ? 'on' : ''}"></span>`).join('')}</div>`;
+}
+/* The booking a job came from, when this phone has it. */
+const bookingOfJob = j => (j && j.booking_id && db.bookings[j.booking_id]) || null;
+
 /* "Waiting for the office to ring" and the five bars. Picture only — nothing to tap. */
 function stepsHtml(d){
   const [tone, head] = headline(d), at = stepAt(d);
@@ -1847,6 +1973,24 @@ function unitDiff(before, after){
   return out;
 }
 /* [icon, what, changes, who] — who is drawn bold after the words, as on Suki's screen. */
+/* An edit, field by field: [what, was, now]. A booking and a job write the same shape (16);
+   an older line holds the aircons alone, as a list (15). */
+function editChanges(ch){
+  const b0 = ch.before, a0 = ch.after;
+  if (Array.isArray(b0) || Array.isArray(a0)) return unitDiff(b0, a0);
+  const b = b0 || {}, a = a0 || {}, out = [];
+  if ('units' in a) out.push(...unitDiff(b.units, a.units));
+  if (a.customer){
+    const cb = b.customer || {}, ca = a.customer;
+    [['full_name', 'Name'], ['contact', 'Number'], ['address', 'Address'], ['landmark', 'Landmark']].forEach(([k, w]) => {
+      if ((cb[k] || '') !== (ca[k] || '')) out.push([w, cb[k] || '', ca[k] || '(none)']); });
+    if (!!cb.pinned !== !!ca.pinned) out.push(['Pin', cb.pinned ? 'set' : '', ca.pinned ? 'set' : 'removed']);
+  }
+  const day = w => w && w.on ? niceDate(w.on) + ' ' + String(w.slot || '').toUpperCase() : '';
+  if (a.wanted) out.push(['Wanted', day(b.wanted), day(a.wanted)]);
+  if ('notes' in a) out.push(['Notes', b.notes || '', a.notes || '(none)']);
+  return out;
+}
 function eventRow(e){
   const by = e.by || '', ch = e.changes || {}, before = ch.before || {}, after = ch.after || {};
   const lab = s => STATUS_LABEL[s] || s || '—';
@@ -1857,7 +2001,8 @@ function eventRow(e){
     case 'rejected':  return ['⛔', 'Rejected', null, by];
     case 'cancelled': return ['🚫', 'Cancelled', null, by];
     case 'claimed':   return ['🔗', 'Added to the customer’s account'];
-    case 'edited':    return ['✏️', 'Edited', unitDiff(ch.before, ch.after), by];
+    case 'edited':    return ['✏️', 'Edited', editChanges(ch), by];
+    case 'job_edit':  return ['✏️', 'Edited', editChanges(ch), by];
     case 'job_created': return ['🛠️', 'Job made', null, by];
     case 'job_schedule': return ['📅', 'Scheduled', [['Day',
       before.scheduled_on ? niceDate(before.scheduled_on) + ' ' + String(before.slot || '').toUpperCase() : '',
@@ -1884,15 +2029,12 @@ function timelineHtml(events){
     </span></div>`; }).join('')}</div>`;
 }
 function panelStatus(p){
-  if (!p.data && !p.loading && !p.error){
-    p.loading = true;
-    rpc('full_status', p.kind === 'jobstatus' ? {p_job: p.id} : {p_booking: p.id})
-      .then(d => { p.data = d; }).catch(e => { p.error = e instanceof Unreachable ? 'Full status needs signal. Try again when you are online.' : e.message; })
-      .finally(() => { p.loading = false; render(); });
-  }
-  if (p.loading && !p.data) return {title: 'Full status', body: '<div class="cart-empty">Loading…</div>'};
-  if (p.error) return {title: 'Full status', body: empty(p.error)};
-  const d = p.data, b = d.booking, j = d.job, who = d.customer || b || {};
+  // the same live copy every other screen's status block uses
+  const e = liveStatus(p.kind === 'jobstatus' ? 'job' : 'booking', p.id);
+  if (!e.data && !e.error) return {title: 'Full status', body: '<div class="cart-empty">Loading…</div>'};
+  if (!e.data) return {title: 'Full status', body: empty(e.error === 'What has happened shows when there is signal.'
+    ? 'Full status needs signal. Try again when you are online.' : e.error)};
+  const d = e.data, b = d.booking, j = d.job, who = d.customer || b || {};
   const units = (j && j.units && j.units.length ? j.units : b && b.units) || [];
   const pf = d.role === 'admin' ? officePrice : d.role === 'customer' && d.show_price ? pagePrice() : null;
   const [tone, head] = headline(d), stopped = tone === 'bad';
@@ -1962,6 +2104,66 @@ function checkups(){
 /* ---------------------------------------------------------------- admin */
 const newBookings = () => Object.values(db.bookings).filter(b => b.status === 'new');
 
+/* ---------------------------------------------------------------- the red numbers
+   Guile, 2026-09-27. Each list's number is what THIS account on THIS phone has not opened
+   yet — kept on the phone (ws_seen_<uid>), never sent: two technicians each have their own.
+   The one exception is the Inbox, which the whole office shares: a booking any admin has
+   opened is seen (seen_at, 15). A number of 0 draws no circle at all.
+     Jobs       an open job not opened here yet — a new one after Accept counts
+     Check-ups  a customer due, not opened here since they came due
+     Users      an account not opened here yet — somebody who just registered
+   The very first time, everything already on the phone counts as seen, so the numbers
+   start at 0 instead of at every job the shop ever had. */
+const seenKey = () => 'ws_seen_' + (session ? session.uid : '');
+function seenStore(){
+  if (!session || !db || db.cursor == null) return null;   // not pulled yet: nothing to compare
+  let s = lsGet(seenKey(), null);
+  if (!s){
+    s = {jobs: {}, users: {}, checkups: {}};
+    Object.keys(db.jobs).forEach(id => { s.jobs[id] = 1; });
+    Object.keys(db.team).forEach(id => { s.users[id] = 1; });
+    checkups().forEach(k => { s.checkups[k.c.id] = k.due; });
+    lsSet(seenKey(), s);
+  }
+  return s;
+}
+function markSeen(kind, id, value){
+  const s = seenStore(); if (!s || !id) return;
+  if (s[kind][id] === (value || 1)) return;
+  s[kind][id] = value || 1;
+  lsSet(seenKey(), s);
+}
+const isOpenJob = j => !['done', 'cancelled'].includes(j.status);
+const jobUnseen = j => { const s = seenStore(); return !!s && isOpenJob(j) && !s.jobs[j.id]; };
+const userUnseen = t => { const s = seenStore(); return !!s && t.id !== session.uid && !s.users[t.id]; };
+const checkupUnseen = k => { const s = seenStore(); return !!s && s.checkups[k.c.id] !== k.due; };
+function unseenCounts(){
+  return {
+    inbox: newBookings().filter(b => !b.seen_at).length,   // shared by the office (15)
+    jobs: Object.values(db.jobs).filter(jobUnseen).length,
+    checkups: db.role === 'admin' ? checkups().filter(checkupUnseen).length : 0,
+    team: db.role === 'admin' ? Object.values(db.team).filter(userUnseen).length : 0,
+  };
+}
+/* The job for an accepted booking — Accept and Make the job both. "after": the Accept it
+   depends on, when there is one. Returns {jid, op}. */
+function makeJobFor(b, cid, after){
+  const jid = uuid();
+  const op = write('create_job', {p_id: jid, p_customer: cid, p_booking: b.id}, 'New job for ' + b.full_name, [jid, b.id], db => {
+    db.jobs[jid] = {id: jid, customer_id: cid, booking_id: b.id, services: b.services, status: 'booked',
+      unit_type: b.unit_type, unit_brand: b.unit_brand, unit_model: b.unit_model, notes: b.notes,
+      scheduled_on: null, slot: b.slot, unit_count: b.unit_count || 1, units: unitsOf(b),
+      price: unitsPrice(unitsOf(b), officePrice), created_at: new Date().toISOString()};
+  }, after);
+  return {jid, op};
+}
+function seenCheckup(cid){
+  const k = checkups().find(x => x.c.id === cid);
+  if (k) markSeen('checkups', cid, k.due);
+}
+/* The blue dot on a row this account has not opened. */
+const newDot = on => on ? '<span class="new-dot" title="New — not opened yet" aria-label="new"></span>' : '';
+
 /* SukiRun's stat strip: four numbers, each one a way in. One row, even on a phone. */
 function drawStats(){
   const jobs = Object.values(db.jobs), today = manilaDate(0);
@@ -1981,12 +2183,14 @@ function drawStats(){
 const ADMIN_TABS = [['inbox', 'inbox', 'Inbox'], ['jobs', 'jobs', 'Jobs'], ['people', 'customers', 'Customers'],
                     ['checkups', 'checkups', 'Check-ups'], ['team', 'users', 'Users'], ['admin', 'admin', 'Admin']];
 const ADMIN_HEAD = {inbox: 'Inbox', jobs: 'Jobs', people: 'Customers', checkups: 'Check-ups', team: 'Users', admin: 'Admin'};
-const pageHead = (title, k) => `<div class="page-head"><h1>${esc(title)}</h1>${infoBtn(k)}</div>`;
+const pageHead = (title, k, extra) => `<div class="page-head"><h1>${esc(title)}</h1>${extra || ''}${infoBtn(k)}</div>`;
 function drawNav(){
-  const n = {inbox: newBookings().length, checkups: checkups().length};
+  const n = unseenCounts();
+  // One red thing only: the number. The envelope no longer swaps to one with its own red
+  // dot (it did, and the two read as one confusing blob — Guile, 2026-09-27).
   $('#bottomNav').innerHTML = ADMIN_TABS.map(([k, icon, label]) =>
     `<button type="button" data-act="tab" data-v="${k}" aria-current="${ui.tab === k}">
-       <span class="nav-ico">${ico(k === 'inbox' && n.inbox ? 'inbox-new' : icon, icon === 'customers' ? 'mono' : '')}${n[k] ? `<span class="nav-badge">${n[k]}</span>` : ''}</span><span class="nav-word">${label}</span></button>`).join('');
+       <span class="nav-ico">${ico(icon, icon === 'customers' ? 'mono' : '')}${n[k] ? `<span class="nav-badge">${n[k] > 99 ? '99+' : n[k]}</span>` : ''}</span><span class="nav-word">${label}</span></button>`).join('');
 }
 function drawAdmin(){
   if (ui.tab === 'numbers') ui.tab = 'admin';
@@ -2000,15 +2204,16 @@ function drawAdmin(){
 function drawInbox(){
   const all = Object.values(db.bookings);
   const jobbed = new Set(Object.values(db.jobs).map(j => j.booking_id).filter(Boolean));
+  // No "Needs a job" (Guile, 2026-09-27): Accept makes the job in the same tap, so a
+  // booking never waits between the two. One accepted before that, still without a job,
+  // stays under New with its "Make the job" button, so nothing is lost.
   const lists = {
-    new: all.filter(b => b.status === 'new'),
-    accepted: all.filter(b => b.status === 'accepted' && !jobbed.has(b.id)),
+    new: all.filter(b => b.status === 'new' || (b.status === 'accepted' && !jobbed.has(b.id))),
     closed: all.filter(b => ['rejected', 'cancelled'].includes(b.status)),
   };
   const v = lists[ui.inbox] ? ui.inbox : 'new';
   const rows = lists[v].sort((a, b) => a.created_at < b.created_at ? 1 : -1);
-  return chips('inbox', [['new', 'New', lists.new.length], ['accepted', 'Needs a job', lists.accepted.length],
-                         ['closed', 'Rejected / cancelled']], v) +
+  return chips('inbox', [['new', 'New', lists.new.length], ['closed', 'Rejected / cancelled']], v) +
     (rows.length ? `<div class="list">${rows.map(bookingRow).join('')}</div>`
                  : empty(v === 'new' ? 'No new bookings.' : 'Nothing here.'));
 }
@@ -2016,9 +2221,10 @@ function bookingRow(b){
   return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="booking" data-id="${esc(b.id)}" data-stamp="${esc(b.updated_at || '')}">
     <div class="avatar">${esc(initials(b.full_name))}</div>
     <div class="lrow-main">
-      <div class="lrow-title">${esc(b.full_name)}${unsentPill(b.id)}</div>
+      <div class="lrow-title">${newDot(b.status === 'new' && !b.seen_at)}${esc(b.full_name)}${unsentPill(b.id)}</div>
       <div class="lrow-sub">${esc(unitsLine(unitsOf(b)))} — ${esc(svcList(b.services))}</div>
       <div class="lrow-sub">Wants ${esc(shortDate(b.preferred_on))} ${esc((b.slot || '').toUpperCase())} · ${esc(b.address)}</div>
+      ${miniSteps({booking: b, job: Object.values(db.jobs).find(j => j.booking_id === b.id) || null})}
     </div>
     <div class="lrow-side">${pill(b.status, b.ref)}<span class="lrow-price">${esc(unitsPrice(unitsOf(b), officePrice) != null ? peso0(unitsPrice(unitsOf(b), officePrice)) : '₱ ?')}</span>
       <span class="lrow-time">${esc(timeAgo(b.created_at))}</span></div>
@@ -2030,6 +2236,7 @@ function panelBooking(p){
   const same = b.contact && b.status === 'new'
     ? Object.values(db.customers).filter(c => digits(c.contact) === digits(b.contact)) : [];
   const job = Object.values(db.jobs).find(j => j.booking_id === b.id);
+  const listPrice = unitsPrice(unitsOf(b), officePrice);
   let acts = '';
   if (b.status === 'new'){
     acts = `<button type="button" class="b primary wide" data-act="accept" data-id="${esc(b.id)}">Accept — new customer</button>
@@ -2050,25 +2257,32 @@ function panelBooking(p){
       ${kv('Landmark', esc(b.landmark || ''))}
       ${kv('Notes', b.notes ? esc(b.notes) : '')}
       ${kv('Why rejected', esc(b.reject_reason || ''))}
-      <div class="actions">${callBtn(b.contact)}${mapBtn(b)}</div>
+      <div class="actions">${callBtn(b.contact)}${mapBtn(b)}${['new', 'accepted'].includes(b.status) && !job ? editBtn('editbooking', b.id) : ''}</div>
     </div>
     <div class="sec">🛒 Aircons</div>
     ${cartHtml('view', unitsOf(b), {pf: officePrice, missing: 'Not every service has a price yet'})}
     <div class="menu">
-      ${['new', 'accepted'].includes(b.status) && !job ? menuRow('editbooking', b.id, '✏️', 'Aircons and services', 'Change them after the call') : ''}
-      ${menuRow('bookingstatus', b.id, ico('status'), 'Full status', 'Every step — who and when')}
+      ${menuRow('bookingstatus', b.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}
     </div>
     ${same.length ? `<p class="hint">Same number as ${same.map(c => esc(c.full_name) + ' (' + esc(c.address) + ')').join('; ')} — accept as the same customer so their history stays in one place.</p>` : ''}
-    <div class="stack">${acts}</div>`};
+    ${b.status === 'new' ? `<label>Price for the job <span class="opt">— optional${listPrice != null ? '; the price list says ' + esc(peso(listPrice)) : ''}</span>
+      <input data-pf="price" inputmode="decimal" maxlength="14" value="${esc(p.price || '')}" placeholder="${listPrice != null ? esc(String(listPrice)) : 'e.g. 1500'}" autocomplete="off"></label>
+      <p class="hint">Accept makes the customer and the job in one go, with this price${listPrice != null ? ' — or the price list’s, left blank' : ''}.</p>` : ''}
+    <div class="stack">${acts}</div>
+    ${statusBlockHtml('booking', b.id)}`};
 }
+/* Edit a booking: the customer's whole form on the customer's photo, filled in from the
+   booking — name to "anything else" (ui.md, Reuse). */
 function panelEditBooking(p){
   const b = db.bookings[p.id];
   if (!b) return {title: 'Edit', body: empty('This booking is no longer on this phone.')};
-  if (!p.units) p.units = unitsOf(b).map(u => ({...u, services: [...u.services]}));
-  // The aircon part of THE booking form (bkAirconsHtml), in the same card.
-  return {title: 'Aircons and services', sub: b.full_name + ' · ' + b.ref, info: 'editbooking', body: `
-    <div class="panel bk-form">${bkAirconsHtml('panel', p, 'Add an aircon')}
-      <button type="button" class="bk-send" data-act="editbooking" data-id="${esc(b.id)}">Save</button></div>`};
+  if (!p._init) Object.assign(p, {_init: true, mode: 'edit', _saveAct: 'editbooking', _needDate: true,
+    full_name: b.full_name || '', contact: b.contact || '', address: b.address || '', landmark: b.landmark || '',
+    lat: b.lat != null ? String(b.lat) : '', lng: b.lng != null ? String(b.lng) : '',
+    units: unitsOf(b).map(u => ({...u, services: [...u.services]})), notes: b.notes || '',
+    date: b.preferred_on || '', slot: b.slot || 'am', _origDate: b.preferred_on || ''});
+  return {title: 'Edit the booking', sub: b.full_name + ' · ' + b.ref, info: 'editbooking',
+    body: heroFormHtml('edit', p, bookFormHtml('panel', p))};
 }
 function panelReject(p){
   const b = db.bookings[p.id];
@@ -2109,9 +2323,10 @@ function jobRow(j){
       ? `<b>${esc((j.slot || '').toUpperCase())}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
       : '<b>—</b><span>no date</span>'}</div>
     <div class="lrow-main">
-      <div class="lrow-title">${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
+      <div class="lrow-title">${newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
       <div class="lrow-sub">${esc(svcList(j.services))}</div>
       <div class="lrow-sub">${esc(place(c))}</div>
+      ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
     <div class="lrow-side">${statusPill(j.status)}</div>
   </div>`;
@@ -2130,15 +2345,15 @@ function panelJob(p){
   if (canUndo) acts.push(`<button type="button" class="b" data-act="undo" data-id="${esc(j.id)}">↶ Undo last step</button>`);
   const by = whoPressed(j);
   const cid = j.customer_id, photo = c.photo_path;
+  // No "Change the time" row: ✏️ Edit changes the day with everything else (Guile, 2026-09-27)
   const menu = tech ? '' : `<div class="menu">
-      ${open ? menuRow('schedule', j.id, '📅', j.scheduled_on ? 'Change the time' : 'Schedule it',
-                       j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet') : ''}
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
       ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'Customer’s history', c.full_name) : ''}
       ${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print on A4')}
       ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
     </div>`;
   return {title: c.full_name || 'Job', sub: svcList(j.services), body: `
+    ${stepsHtml({booking: bookingOfJob(j), job: j})}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo ? housePhoto(photo) : ''}
       ${kv('Status', statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
@@ -2150,29 +2365,23 @@ function panelJob(p){
       ${tech ? '' : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
       ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
-      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}</div>
+      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${tech ? '' : editBtn('editjob', j.id)}</div>
     </div>
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons</div>
     ${cartHtml('view', unitsOf(j), {pf: tech ? null : officePrice, missing: 'Not every service has a price yet'})}
-    <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'Every step — who and when')}</div>
-    ${menu}`};
+    <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>
+    ${menu}
+    ${statusBlockHtml('job', j.id)}`};
 }
 function panelSchedule(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Schedule', body: empty('This job is no longer on this phone.')};
-  const d = p.date != null ? p.date : (j.scheduled_on || '');
-  const s = p.slot || j.slot || 'am';
-  const today = manilaDate(0), quick = [0, 1, 2, 3].map(n => addDays(today, n));
+  if (p.date == null){ p.date = j.scheduled_on || ''; p.slot = j.slot || 'am'; }
   const word = j.scheduled_on ? 'Change the time' : 'Schedule it';
+  // the booking form's own day-and-time piece (ui.md, Reuse)
   return {title: word, sub: jobCust(j).full_name, body: `
-    <div class="fieldlabel">Day</div>
-    <div class="tabbar tight">${quick.map((q, i) => `<button type="button" class="tab-btn${d === q ? ' active' : ''}" data-act="pset" data-f="date" data-v="${q}">${
-      i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : esc(niceDate(q))}</button>`).join('')}</div>
-    <input type="date" data-pf="date" value="${esc(d)}" min="${today}" aria-label="Another day">
-    <div class="fieldlabel">Time</div>
-    <div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
-      `<button type="button" class="${s === k ? 'active' : ''}" data-act="pset" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>
+    ${bkWhenHtml('panel', p, {notYet: false, slot: true})}
     <div class="stack"><button type="button" class="b primary wide" data-act="schedule" data-id="${esc(j.id)}">${word}</button></div>`, info: 'schedule'};
 }
 function panelPrice(p){
@@ -2276,12 +2485,12 @@ function drawCheckups(){
   return (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.')) +
     (hidden ? `<p class="count" style="margin-top:10px">${hidden} put off with “Not now”.</p>` : '');
 }
-function checkupRow({c, last}){
-  const doneDay = manilaDay(last.done_at);
+function checkupRow(k){
+  const {c, last} = k, doneDay = manilaDay(last.done_at);
   return `<div class="lrow col" data-row="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
     <div class="lrow-top" role="button" tabindex="0" data-act="open" data-kind="customer" data-id="${esc(c.id)}">
       <div class="avatar">${esc(initials(c.full_name))}</div>
-      <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}${unsentPill(c.id)}</div>
+      <div class="lrow-main"><div class="lrow-title">${newDot(checkupUnseen(k))}${esc(c.full_name)}${unsentPill(c.id)}</div>
         <div class="lrow-sub">Last job ${esc(shortDate(doneDay))} · ${esc(daysAgo(doneDay))}</div>
         <div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
     </div>
@@ -2323,7 +2532,23 @@ function bookSame(p){
 /* The customer's form, word for word, in the same card — the ONE builder (bookFormHtml). */
 function panelBook(p){
   return {title: 'Book a job', sub: 'A call you took yourself', info: 'book',
-    body: `<div class="panel bk-form">${bookFormHtml('panel', p)}</div>`};
+    body: heroFormHtml('panel', p, bookFormHtml('panel', p))};
+}
+/* Edit the job: the same form, the same photo, filled in from the job and its customer. */
+function panelEditJob(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Edit the job', body: empty('This job is no longer on this phone.')};
+  if (!p._init){
+    const c = jobCust(j), removed = !c.id || c.full_name === '(removed)';
+    Object.assign(p, {_init: true, mode: 'edit', full_name: c.full_name || '', contact: c.contact || '',
+      address: c.address || '', landmark: c.landmark || '', lat: c.lat != null ? String(c.lat) : '', lng: c.lng != null ? String(c.lng) : '',
+      units: unitsOf(j).map(u => ({...u, services: [...u.services]})), notes: j.notes || '',
+      date: j.scheduled_on || '', slot: j.slot || 'am', _origDate: j.scheduled_on || '', _origSlot: j.slot || 'am',
+      _noWhen: ['done', 'cancelled'].includes(j.status),
+      _removed: removed ? 'This customer’s details were removed on request, so only the job itself can change.' : '',
+      _priceNote: j.price != null ? 'The price stays ' + peso(j.price) + ' — change it with Set the price.' : ''});
+  }
+  return {title: 'Edit the job', sub: p.full_name || 'Job', body: heroFormHtml('edit', p, bookFormHtml('panel', p))};
 }
 
 /* ---------------------------------------------------------------- team (SukiRun's Admin → Team) */
@@ -2356,7 +2581,7 @@ function teamRow(t){
   const off = t.active === false, waits = t.signup_kind === 'employee' && t.role === 'customer';
   return `<div class="lrow${off ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="member" data-id="${esc(t.id)}" data-stamp="${esc(t.updated_at || '')}">
     <div class="avatar">${esc(initials(t.display_name || t.email))}</div>
-    <div class="lrow-main"><div class="lrow-title">${esc(t.display_name || (t.email || '').split('@')[0])}${unsentPill(t.id)}</div>
+    <div class="lrow-main"><div class="lrow-title">${newDot(userUnseen(t))}${esc(t.display_name || (t.email || '').split('@')[0])}${unsentPill(t.id)}</div>
       <div class="lrow-sub">${esc(t.email || '')}</div></div>
     <div class="lrow-side">${rolePill(t.role)}
       ${t.id === session.uid ? '<span class="lrow-time">you</span>' : ''}
@@ -2641,8 +2866,9 @@ function drawTech(){
   const days = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['all', 'Upcoming'], ['done', 'Done']];
   const v = days.some(d => d[0] === ui.techDay) ? ui.techDay : 'today';
   const n = k => k === 'done' ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
-  const rows = jobList(v);
-  return pageHead('Jobs', 'tech') +
+  const rows = jobList(v), unseen = unseenCounts().jobs;
+  // no bottom bar here, so the red number sits by the heading: jobs THIS technician has not opened
+  return pageHead('Jobs', 'tech', unseen ? `<span class="tech-new">${unseen} new</span>` : '') +
     chips('techday', days.map(([k, t]) => [k, t, n(k)]), v) +
     (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
 }
@@ -2650,21 +2876,13 @@ function drawTech(){
 /* ---------------------------------------------------------------- customer */
 function drawMine(){
   const mine = Object.values(db.bookings).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
-  const words = b => {
-    const j = b.job;
-    if (j && j.status === 'done') return 'Done. Thank you!';
-    if (j && j.status === 'in_progress') return 'The technician is on it.';
-    if (j && j.status === 'cancelled') return 'Cancelled by the shop.';
-    if (j && j.scheduled_on) return 'Scheduled for ' + niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) + '.';
-    return {new: 'Received. We will ring you to agree a time.', accepted: 'Accepted. We will confirm the time with you.',
-            rejected: 'We could not take this booking. Please ' + ringUs() + '.', cancelled: 'Cancelled.'}[b.status] || b.status;
-  };
+  // the same status line and bars as the office's screens (ui.md, Reuse)
   return mine.length ? `<div class="list">${mine.map(b => `<div class="lrow col" data-row="${esc(b.id)}">
       <div class="lrow-top"><div class="lrow-main">
         <div class="lrow-title">${esc(unitsLine(unitsOf(b)) || svcList(b.services))}${unsentPill(b.id)}</div>
-        <div class="lrow-sub">${esc(svcList(b.services))}</div>
-        <div class="lrow-sub">${esc(words(b))}</div></div>
+        <div class="lrow-sub">${esc(svcList(b.services))}</div></div>
         <div class="lrow-side">${pill(b.job ? b.job.status : b.status, b.ref)}</div></div>
+      <div class="mine-steps">${stepsHtml({booking: b, job: b.job || null})}</div>
       <div class="actions">
         <button type="button" class="b" data-act="open" data-kind="bookingstatus" data-id="${esc(b.id)}">${ico('status')} Full status</button>
         ${b.status === 'new' ? `<button type="button" class="b danger" data-act="mycancel" data-id="${esc(b.id)}">Cancel this booking</button>` : ''}
@@ -2726,8 +2944,10 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   editbooking: panelEditBooking, service: panelService, receipt: panelReceipt,
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
-  book: panelBook, settings: panelSettings};
+  book: panelBook, editjob: panelEditJob, settings: panelSettings};
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy']);
+// the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
+const WIDE = new Set(['book', 'editjob', 'editbooking']);
 const topPanel = () => stack[stack.length - 1];
 function openPanel(p){
   stack.push(p);
@@ -2768,7 +2988,7 @@ function drawPanels(){
       el = fresh;
       el.dataset.key = key;
     }
-    el.className = 'sheet' + (SMALL.has(p.kind) ? ' small' : '');
+    el.className = 'sheet' + (SMALL.has(p.kind) ? ' small' : '') + (WIDE.has(p.kind) ? ' wide' : '');
     el.style.zIndex = String(40 + i * 2);   // on top of the one below it, by depth (ui.md)
     let out = null;
     keepTyping($('.sheet-body', el), () => {
@@ -2831,11 +3051,7 @@ const ACTIONS = {
     if (!upd.found && !upd.error && !had) toast('You already have the newest version.');
   },
   newsseen: () => { lsSet('ws_seen_build', BUILD.versionCode); render(); },
-  news: () => {
-    lsSet('ws_seen_build', BUILD.versionCode);
-    openPanel({kind: 'settings'});
-    setTimeout(() => { const a = $('#aboutSec'); if (a) a.scrollIntoView({block: 'start'}); }, 50);
-  },
+  news: () => { newsOpen = !newsOpen; render(); },   // opens in place — the change log, right there
   info: (id, el) => showInfo(el.dataset.v),
   infook: () => hideInfo(),
   logout: (id, el) => logOut(el),
@@ -2861,15 +3077,48 @@ const ACTIONS = {
     if (window.AndroidBridge && window.AndroidBridge.print) window.AndroidBridge.print('Receipt');
     else window.print();
   },
+  // Edit the booking / Edit the job: THE booking form's checks, then one write each (16)
   editbooking: id => {
     const b = db.bookings[id], p = topPanel(); if (!b || !p) return;
-    if (!(p.units || []).length){ bkShow('panel', p, [['units', 'Add at least one aircon — tap its type. Nothing was changed.']]); return; }
+    const bad = bookProblems('panel', p);
+    if (bad.length) return bkShow('panel', p, bad);
     const units = p.units.map(u => ({...u, services: [...u.services]}));
-    write('edit_booking', {p_booking: id, p_units: units}, 'Edit ' + b.ref, [id], () => {
+    const details = {full_name: p.full_name.trim(), contact: p.contact.trim(), address: p.address.trim(),
+      landmark: (p.landmark || '').trim(), lat: p.lat || '', lng: p.lng || '', preferred_on: p.date, slot: p.slot || 'am',
+      notes: (p.notes || '').trim()};
+    write('edit_booking', {p_booking: id, p_units: units, p_details: details}, 'Edit ' + b.ref, [id], () => {
       b.units = units; b.services = unionServices(units); b.unit_count = units.length;
       b.unit_type = [...new Set(units.map(u => u.type))].length === 1 ? units[0].type : 'Mixed';
+      Object.assign(b, {full_name: details.full_name, contact: details.contact, address: details.address,
+        landmark: details.landmark || null, lat: p.lat ? +p.lat : null, lng: p.lng ? +p.lng : null,
+        preferred_on: details.preferred_on, slot: details.slot, notes: details.notes || null});
     });
     closePanel();
+    toast('Saved — ' + b.ref);
+  },
+  savejob: id => {
+    const j = db.jobs[id], p = topPanel(); if (!j || !p || p.kind !== 'editjob') return;
+    const bad = bookProblems('panel', p);
+    if (bad.length) return bkShow('panel', p, bad);
+    const c = jobCust(j), units = p.units.map(u => ({...u, services: [...u.services]}));
+    const details = {units, notes: (p.notes || '').trim()};
+    if (!p._removed) details.customer = {full_name: p.full_name.trim(), contact: p.contact.trim(), address: p.address.trim(),
+      landmark: (p.landmark || '').trim(), lat: p.lat || '', lng: p.lng || ''};
+    const name = (details.customer && details.customer.full_name) || c.full_name || 'job';
+    write('edit_job', {p_job: id, p_details: details}, 'Edit — ' + name, [id, j.customer_id].filter(Boolean), db => {
+      j.units = units; j.services = unionServices(units); j.unit_count = units.length;
+      j.unit_type = [...new Set(units.map(u => u.type))].length === 1 ? units[0].type : 'Mixed';
+      j.unit_brand = units[0].brand || null; j.unit_model = units[0].model || null; j.notes = details.notes || null;
+      const cu = details.customer, row = db.customers[j.customer_id];
+      if (cu && row) Object.assign(row, {full_name: cu.full_name, contact: cu.contact, address: cu.address,
+        landmark: cu.landmark || null, lat: cu.lat ? +cu.lat : null, lng: cu.lng ? +cu.lng : null});
+    });
+    // the day goes through schedule_job, which keeps its own clock (11)
+    if (!p._noWhen && p.date && (p.date !== p._origDate || (p.slot || 'am') !== p._origSlot))
+      write('schedule_job', {p_job: id, p_date: p.date, p_slot: p.slot || 'am', p_decided_at: null},
+        'Schedule — ' + name, [id], () => { j.scheduled_on = p.date; j.slot = p.slot || 'am'; if (j.status === 'booked') j.status = 'scheduled'; });
+    closePanel();
+    toast('Saved — ' + name);
   },
   saveservice: () => {
     const p = topPanel(); if (!p || p.kind !== 'service') return;
@@ -2912,7 +3161,12 @@ const ACTIONS = {
       b.seen_at = new Date().toISOString();
       write('mark_seen', {p_booking: id}, 'Seen ' + b.ref, [id]);
     }
-    openPanel({kind: el.dataset.kind, id});
+    // this account has now seen it: its red number goes down, on this phone only
+    const k = el.dataset.kind;
+    if (k === 'job') markSeen('jobs', id);
+    if (k === 'member') markSeen('users', id);
+    if (k === 'customer') seenCheckup(id);
+    openPanel({kind: k, id});
   },
   // ---- the aircon cart (15)
   unitnew: (id, el) => {
@@ -2955,7 +3209,7 @@ const ACTIONS = {
   back: () => closePanel(),
   settings: () => openPanel({kind: 'settings'}),
   newbook: () => openBook(null, []),
-  book: (id, el) => openBook(id, el.dataset.svc && serviceLabels[el.dataset.svc] ? [el.dataset.svc] : []),
+  book: (id, el) => { if (id) seenCheckup(id); openBook(id, el.dataset.svc && serviceLabels[el.dataset.svc] ? [el.dataset.svc] : []); },
   /* A choice inside a panel: kept on the panel itself, so it survives every redraw. */
   pset: (id, el) => {
     const p = topPanel(); if (!p) return;
@@ -3003,15 +3257,26 @@ const ACTIONS = {
     closePanel();
   },
 
+  // Accept = the customer AND the job, in one tap (Guile, 2026-09-27: no "Needs a job"),
+  // with the price the owner typed first, if he typed one. Back to the Inbox afterwards: the
+  // new job is a red number on Jobs until he opens it.
   accept: (id, el) => {
-    const b = db.bookings[id]; if (!b || b.status !== 'new') return;
+    const b = db.bookings[id], p = topPanel(); if (!b || b.status !== 'new') return;
+    const typed = String((p && p.price) || '').trim(), price = typed ? parsePrice(typed) : null;
+    if (typed && price == null){ notice('Type the price in numbers, like 1500 or 1,500.50. Nothing was accepted.', true); return; }
     const link = el.dataset.link || null, cid = link || uuid();
-    write('accept_booking', {p_booking: id, p_link_to: link, p_customer_id: link ? null : cid},
+    const acc = write('accept_booking', {p_booking: id, p_link_to: link, p_customer_id: link ? null : cid},
       'Accept ' + b.ref, [id, cid], db => {
         b.status = 'accepted'; b.customer_id = cid; b.handled_at = b.handled_at || new Date().toISOString();
         if (!link) db.customers[cid] = {id: cid, full_name: b.full_name, contact: b.contact, address: b.address,
           landmark: b.landmark, lat: b.lat, lng: b.lng, from_booking: b.id, created_at: new Date().toISOString()};
       });
+    // the job only if the Accept lands; the price only if the job does (dropAfter)
+    const {jid, op} = makeJobFor(b, cid, acc.op_id);
+    if (price != null) write('set_job_price', {p_job: jid, p_price: price, p_decided_at: null}, 'Price ' + peso(price), [jid],
+      db => { if (db.jobs[jid]) db.jobs[jid].price = price; }, op.op_id);
+    closePanel();
+    toast('Accepted — the job is waiting in Jobs.');
   },
   reject: id => {
     const b = db.bookings[id], p = topPanel(); if (!b) return;
@@ -3020,15 +3285,10 @@ const ACTIONS = {
     });
     closePanel();
   },
-  makejob: id => {
+  makejob: id => {   // a booking accepted before Accept made its job (older ones)
     const b = db.bookings[id]; if (!b) return;
-    const jid = uuid();
-    write('create_job', {p_id: jid, p_customer: b.customer_id, p_booking: b.id}, 'New job for ' + b.full_name, [jid, id], db => {
-      db.jobs[jid] = {id: jid, customer_id: b.customer_id, booking_id: b.id, services: b.services, status: 'booked',
-        unit_type: b.unit_type, unit_brand: b.unit_brand, unit_model: b.unit_model, notes: b.notes,
-        scheduled_on: null, slot: b.slot, unit_count: b.unit_count || 1, units: unitsOf(b),
-        price: unitsPrice(unitsOf(b), officePrice), created_at: new Date().toISOString()};
-    });
+    const {jid} = makeJobFor(b, b.customer_id);
+    markSeen('jobs', jid);
     replacePanel({kind: 'job', id: jid});
   },
   savebook: () => {
@@ -3053,6 +3313,7 @@ const ACTIONS = {
         scheduled_on: details.date, slot: details.slot, status: details.date ? 'scheduled' : 'booked',
         status_by: session.uid, price: unitsPrice(units, officePrice), created_at: now};
     });
+    markSeen('jobs', jid);   // made here and opened here: not "new" to the one who made it
     replacePanel({kind: 'job', id: jid});
   },
   schedule: id => {
@@ -3100,6 +3361,7 @@ const ACTIONS = {
   },
   later: id => {
     const c = db.customers[id]; if (!c) return;
+    seenCheckup(id);
     const until = addMonths(manilaDate(0), checkupMonths());
     write('checkup_later', {p_customer: id, p_until: until}, 'Check-up later — ' + c.full_name, [id], () => { c.checkup_snooze = until; });
   },
@@ -3301,8 +3563,6 @@ function say(el, ok, text){
 
 const bookForm = $('#bookForm');
 
-$('#heroCall').href = 'tel:' + digits(SHOP_PHONE);
-$('#heroCall').textContent = '📞 Rather talk? ' + SHOP_PHONE;
 
 /* The service list comes from the database, not from an array in here. Prices come with
    it only while the owner shows them (13). */
@@ -3393,8 +3653,12 @@ trackForm.addEventListener('submit', async e => {
   }
   btn.disabled = true;
   try {
+    $('#trackSteps').innerHTML = '';
     const res = await rpc('check_booking', {code: trackForm.code.value, contact: trackForm.contact.value}, false);
     if (!res.ok){ say(msg, false, res.message); return; }
+    // the same line and bars as everywhere else — from what a stranger may be told (the
+    // booking's own status: trust-boundary.md), so it goes as far as Accepted
+    $('#trackSteps').innerHTML = `<div class="track-steps">${stepsHtml({booking: {status: res.status}, job: null})}</div>`;
     say(msg, res.status !== 'rejected' && res.status !== 'cancelled',
       res.ref + ' — ' + (STATUS_WORDS[res.status] || res.status) +
       ' You asked for ' + niceDate(res.preferred_on) + ', ' + slotWord(res.slot) + '.');
