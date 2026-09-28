@@ -395,13 +395,13 @@
   .qt-scale{width:794px;transform-origin:0 0}
   .quote{position:relative;width:794px;min-height:1123px;box-sizing:border-box;padding:46px 58px 40px;background:#fff;color:#000;
     font-family:Cambria,'Noto Serif','Droid Serif',Georgia,'Times New Roman',serif;font-size:14.5px;line-height:1.32}
-  .qt-head{position:relative;min-height:124px}
-  .qt-logo{position:absolute;left:0;top:25px;width:161px;height:auto}
-  .qt-qr{position:absolute;right:0;top:11px;width:98px;height:98px}
-  .qt-lh{position:relative;text-align:center;font-size:14px;line-height:1.3}
-  .qt-name{font-weight:700;font-size:17.5px;margin-bottom:4px}
-  .qt-tag{font-style:italic;font-family:'Monotype Corsiva','URW Chancery L','Apple Chancery',cursive;font-size:15px;margin-bottom:6px}
-  .qt-s{font-size:13px}
+  .qt-head{display:grid;grid-template-columns:172px minmax(0,1fr) 108px;align-items:center;gap:8px}
+  .qt-logo{display:block;width:172px;height:auto}
+  .qt-qr{display:block;width:108px;height:108px}
+  .qt-lh{text-align:center;text-wrap:balance;overflow-wrap:anywhere}
+  .qt-name{font-weight:700;font-size:18.5px}
+  .qt-tag{font-style:italic;font-family:'Monotype Corsiva','URW Chancery L','Apple Chancery',cursive;font-size:16px}
+  .qt-s{font-size:13.5px}
   .qt-date{margin-top:26px}
   .qt-to{margin-top:16px;white-space:pre-line}
   .qt-subj{margin-top:16px;font-weight:700}
