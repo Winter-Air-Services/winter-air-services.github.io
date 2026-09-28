@@ -67,6 +67,26 @@
   .hero::before{content:"";position:absolute;left:0;right:0;top:0;height:300px;z-index:-1;
     background:linear-gradient(180deg,rgba(6,18,34,.62),rgba(6,18,34,.40) 55%,rgba(6,18,34,.70)),
       url(img/hero-phone.jpg) center/cover}
+  /* The owner's own photos (30, TODO 16), fading one into the next over the photo above; the
+     same darkening on top, so the words read the same on any photo. */
+  .hero-photos{position:absolute;left:0;right:0;top:0;height:300px;z-index:-1;overflow:hidden;background:#0b1a2c}
+  .hero-photos > i{position:absolute;inset:0;background:center/cover no-repeat;opacity:0;transition:opacity 1.6s ease}
+  .hero-photos > i.on{opacity:1}
+  .hero-photos::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(180deg,rgba(6,18,34,.62),rgba(6,18,34,.40) 55%,rgba(6,18,34,.70))}
+  .hero.has-photos::before{display:none}
+  @media (prefers-reduced-motion:reduce){ .hero-photos > i{transition:none} }
+  .pp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:6px 0 10px}
+  .pp-item img{display:block;width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:var(--radius-sm);background:var(--surface-alt)}
+  .pp-item .b{width:100%;margin-top:6px}
+  .pp-crop{position:relative;aspect-ratio:2/1;overflow:hidden;border-radius:var(--radius-sm);background:#0b1a2c;
+    touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+  .pp-crop img{position:absolute;max-width:none;height:auto;pointer-events:none}
+  .pp-phone{position:absolute;top:0;bottom:0;left:18.75%;width:62.5%;border:2px dashed rgba(255,255,255,.95);
+    outline:1px solid rgba(0,0,0,.35);pointer-events:none}
+  .pp-phone span{position:absolute;left:6px;bottom:6px;font-size:11.5px;font-weight:600;color:#fff;background:rgba(0,0,0,.5);padding:2px 7px;border-radius:6px}
+  .pp-zoom{margin-top:12px}
+  .pp-zoom input{width:100%}
   .hero-text{color:#fff;margin-bottom:18px}
   .hero-kicker{margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
   .hero h1{color:#fff;font-size:28px;line-height:1.15;margin:0 0 6px}
@@ -84,6 +104,8 @@
       padding:64px max(16px, calc(50vw - 540px)) 0}
     .hero::before{height:520px;
       background:linear-gradient(90deg,rgba(6,18,34,.72),rgba(6,18,34,.35) 70%),url(img/hero-1600.jpg) center/cover}
+    .hero-photos{height:520px}
+    .hero-photos::after{background:linear-gradient(90deg,rgba(6,18,34,.72),rgba(6,18,34,.35) 70%)}
     /* row 1 ends where the photo ends (520 - 64 padding), so the left column's cards start below it */
     .hero-text{padding-top:84px;margin:0;min-height:456px;grid-column:1;grid-row:1}
     .hero-card{grid-column:2;grid-row:1 / span 2}
@@ -174,8 +196,12 @@
   .topbar-title{font-weight:800;font-size:clamp(15px,4.2vw,18px);letter-spacing:.02em;
     text-transform:uppercase;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .topbar-sub{font-size:12.5px;color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  /* The logo tile, not the wide logo: its navy "WINTER" vanishes on the dark theme. */
-  .brand-ico{flex:none;width:36px;height:36px;border-radius:9px}
+  /* The owner's own logo (TODO 14, 2026-09-28), see-through on both themes. Its blue "WA" is
+     1.68 : 1 on the dark theme (10.7 : 1 on white): a white plate there was not wanted (Guile),
+     so on dark a thin white outline carries the letters instead. */
+  .brand-ico{flex:none;height:44px;width:auto;aspect-ratio:900/458}
+  :root[data-theme="dark"] .brand-ico{filter:drop-shadow(0 0 .6px #fff) drop-shadow(0 0 .6px #fff)}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .brand-ico{filter:drop-shadow(0 0 .6px #fff) drop-shadow(0 0 .6px #fff)} }
   .btn-back:not([hidden]) ~ .brand-ico{display:none}
   .topbar-right{display:flex;align-items:center;gap:8px;flex:none}
   .topbar-right button{width:auto;margin:0;min-height:40px;padding:8px 14px;font-size:15px}
@@ -742,9 +768,10 @@
   <header class="topbar">
     <div class="topbar-left">
       <button type="button" class="btn-back" id="backBtn" hidden>&larr; <span id="backLabel">Back</span></button>
-      <img class="brand-ico" src="icons/logo-icon.png" alt="" aria-hidden="true">
+      <img class="brand-ico" src="img/winter-air-logo.png" alt="Winter Air">
       <div style="min-width:0">
-        <div class="topbar-title">Winter Air Services</div>
+        <!-- the logo says WINTER AIR; the whole name did not fit beside it at 375 px (180 px needed, 148 there) -->
+        <div class="topbar-title">Services</div>
         <div class="topbar-sub" id="topSub">Book an aircon job</div>
       </div>
     </div>
@@ -1167,6 +1194,9 @@ async function flush(){
         // it came back without the new line and stayed that way ("Seen" missing, 2026-09-27)
         forgetStatus(op.touches);
         if (op.cleanup_photo && !(res && res.ok === false)) deletePhotoFile(op.cleanup_photo);
+        // a page photo taken off the list: its file goes too (30)
+        if (op.fn === 'set_page_photos' && res && Array.isArray(res.gone))
+          res.gone.forEach(p => storage('DELETE', p, null, false, 'page-photos').catch(() => {}));
       } catch (e) {
         if (e instanceof Unreachable){ online = false; break; }
         op.state = 'failed';
@@ -1231,7 +1261,12 @@ async function pull(){
   for (const id of res.removed_customers || []) if (!busy.has(id)) delete db.customers[id];   // 22
   db.cursor = res.cursor || db.cursor;
   if (res.profile) db.profile = res.profile;   // name and the "I work here" claim
-  if (res.settings) db.settings = res.settings; // the shop's own settings (admin only)
+  if (res.settings){   // the shop's own settings (admin only)
+    // the page photos: not while a change to them is still on its way (the appliance race, 27)
+    const keep = queue.some(o => o.fn === 'set_page_photos') && db.settings ? db.settings.page_photos : undefined;
+    db.settings = res.settings;
+    if (keep !== undefined) db.settings.page_photos = keep;
+  }
   if (res.services) db.services = res.services; // the price list, sent whole (admin only)
   // the appliance list, every role (27) — not while a change to it is still on its way: two
   // quick "↑ Earlier" taps moved it one place, the second read from a copy pulled in between
@@ -1320,6 +1355,7 @@ function render(){
   $('#customerView').hidden = role !== 'customer';
   $('#registerNudge').hidden = !!session;
   $('#heroText').innerHTML = heroTextHtml('pub');   // the shared photo top's words
+  drawHeroPhotos();   // and the owner's photos behind them (30)
   const nav = !blocked && role === 'admin' && !!db;
   $('#bottomNav').hidden = !nav;
   if (nav) drawNav();
@@ -1779,7 +1815,8 @@ const INFO = {
   service: ['A service', 'A price for each aircon type. Leave a type empty if the shop does not do it for that type — a booking with that type then shows no price until you set one. Customers never see prices.'],
   editbooking: ['After the call', 'Change what they need and which aircon they have. The price shows as soon as every service has a price for that aircon type. It is frozen onto the job when you make it.'],
   types: ['Aircon & Other Appliances', 'What a customer taps on the booking page — Window, Split, a chiller, a freezer… — in this order. Add one with its name, the services it offers (a freezer is not “installed” like a split) and a picture — one of ours, or ＋ Your own PNG; its prices go in Services & prices. A new service starts on every appliance — untick it where it does not belong.\n\nRemove takes it off the booking page only. Jobs that already have it keep it, and so do its prices; Bring it back puts it all back. Renaming changes the name everywhere, old jobs too.'],
-  quote: ['Quotation', 'The shop’s own quotation, made from this booking: the lines start as the customer’s aircons at the price list’s prices, and every word, Qty and price is yours to change. The page on top is exactly the paper.\n\nSave keeps it on the booking. Print or save as PDF: on the phone, pick “Save as PDF” in the print screen, then send the file on Messenger.\n\nSigned by the customer on the Conforme line, it is your agreement. Accept, left blank, takes its TOTAL as the job’s price.'],
+  pagephotos: ['Page photos', 'The photos at the top of the booking page — the first thing a customer sees. Add up to six; with two or more the page fades from one to the next every 6 seconds, on its own. With none, the page shows its own photo.\n\nAnyone who opens the page can see these photos: never a customer’s house, a face or a plate number without their say-so. The phone makes each photo smaller before sending, so the page stays quick on mobile data. Remove deletes the photo for good.'],
+  quote: ['Quotation', 'The shop’s own quotation, made from this booking: the lines start as the customer’s aircons at the price list’s prices, and every word, Qty and price is yours to change. The page on top is exactly the paper.\n\nSave keeps it on the booking. Send as PDF: in the app, the quotation goes as a PDF file straight to Messenger, Viber, email, Bluetooth or Drive — pick one. Print or save as PDF: the print screen, for paper.\n\nSigned by the customer on the Conforme line, it is your agreement. Accept, left blank, takes its TOTAL as the job’s price.'],
   quoteshop: ['Letterhead and signer', 'The lines at the top of every quotation, and the name under the signature. Blank lines are left out. Kept on the server for admins only, not in the public page.'],
   quotenote: ['The usual note', 'Every new quotation starts with this Note; change it on one quotation without changing it here. Each line is one ➢ point. A line that starts with a space is indented under the one above, like a price that belongs to it.'],
   quotesig: ['Signature', 'A photo of the signature on white paper: the white is taken out and the ink kept. It prints on every quotation.\n\nIt is kept on the server for admins only — never on the public page, never on a technician’s phone. Remove it and the quotation leaves the space to sign by hand.'],
@@ -2081,8 +2118,45 @@ function heroTextHtml(ctx, s){
     ${ctx === 'pub' ? `<a class="hero-call" href="tel:${esc(digits(SHOP_PHONE))}">📞 Rather talk? ${esc(SHOP_PHONE)}</a>` : ''}
     ${ctx === 'pub' && pubShop.facebook_url ? `<a class="hero-call fb" href="${esc(pubShop.facebook_url)}" target="_blank" rel="noopener">💬 Message us on Facebook</a>` : ''}`;
 }
+/* The page's photos (30, TODO 16): the owner's own, in his order, fading from one to the next
+   every 6 s; none = the built-in photo, one = no fading. Public Storage addresses (the bucket
+   is public and read-only to strangers, supabase/30). Only the photo on show and the next one
+   are fetched — six at once would be ~2 MB on mobile data. The office sees the same (ui.md). */
+const PAGE_PHOTO_BASE = SUPABASE_URL + '/storage/v1/object/public/page-photos/';
+function pagePhotos(){
+  const l = db && db.role === 'admin' && db.settings && Array.isArray(db.settings.page_photos) ? db.settings.page_photos : pubShop.page_photos;
+  return Array.isArray(l) ? l.filter(p => /^page\/[0-9a-f]{16,64}\.jpg$/.test(p)) : [];
+}
+let heroIdx = 0;
+function heroPhotosHtml(){
+  const l = pagePhotos();
+  if (!l.length) return '';
+  const on = heroIdx % l.length, next = (on + 1) % l.length;
+  return `<div class="hero-photos" aria-hidden="true" data-photos="${esc(l.join(','))}">${l.map((p, i) =>
+    `<i data-src="${esc(PAGE_PHOTO_BASE + p)}"${i === on ? ' class="on"' : ''}${i === on || i === next ? ` style="background-image:url('${esc(PAGE_PHOTO_BASE + p)}')"` : ''}></i>`).join('')}</div>`;
+}
+// the customer's page: its photo top is in the HTML, so the photos go in (or change) here
+function drawHeroPhotos(){
+  const sec = $('#publicView > .hero');
+  if (!sec) return;
+  const old = sec.querySelector(':scope > .hero-photos'), l = pagePhotos();
+  if ((old ? old.dataset.photos : '') === l.join(',')) return;
+  if (old) old.remove();
+  sec.classList.toggle('has-photos', l.length > 0);
+  if (l.length) sec.insertAdjacentHTML('afterbegin', heroPhotosHtml());
+}
+setInterval(() => {
+  const l = pagePhotos();
+  if (l.length < 2 || document.hidden) return;
+  heroIdx = (heroIdx + 1) % l.length;
+  const next = (heroIdx + 1) % l.length;
+  $$('.hero-photos').forEach(box => [...box.children].forEach((el, i) => {
+    if ((i === heroIdx || i === next) && !el.style.backgroundImage) el.style.backgroundImage = `url('${el.dataset.src}')`;
+    el.classList.toggle('on', i === heroIdx);
+  }));
+}, 6000);
 /* A booking form on the photo — Book a job and Edit the job, the customer's page's shape. */
-const heroFormHtml = (ctx, s, form) => `<section class="hero">
+const heroFormHtml = (ctx, s, form) => `<section class="hero${pagePhotos().length ? ' has-photos' : ''}">${heroPhotosHtml()}
     <div class="hero-text">${heroTextHtml(ctx, s)}</div>
     <div class="hero-card"><div class="panel bk-form">${form}</div></div>
   </section>`;
@@ -2717,14 +2791,15 @@ function routeBar(day){
     <a class="b primary" target="_blank" rel="noopener" href="${esc(routeUrl(stops))}">Open in Google Maps</a>
     ${stops.length > 10 ? '<span class="hint">Google Maps takes the first 10.</span>' : ''}</div>`;
 }
-/* The money badge (Guile, 2026-09-28: "very important on the eyes of the owner"): a done job
-   says Not paid in red until the office marks it; GCash in blue; cash or other, Paid in green.
-   A job paid before it is done shows it too. The office only — a technician is never sent it. */
+/* The money badge (Guile, 2026-09-28: "very important on the eyes of the owner"): every open
+   job — Not scheduled, Scheduled, In progress, Done — says Not paid in red until the office
+   marks it (TODO 12, option A); GCash in blue; cash or other, Paid in green. The office only —
+   a technician is never sent it. */
 function paidPill(j){
   if (!db || db.role !== 'admin' || !j || j.status === 'cancelled') return '';
   if (j.paid_method === 'gcash') return pill('gcash', 'GCash');
   if (j.paid_method) return pill('paid', 'Paid');
-  return j.status === 'done' ? pill('unpaid', 'Not paid') : '';
+  return pill('unpaid', 'Not paid');
 }
 function jobRow(j){
   const c = jobCust(j);
@@ -2916,11 +2991,8 @@ function panelCustomer(p){
     ${airconHistoryHtml(c.id)}
     <div class="sec">Jobs</div>
     ${jobs.length ? `<div class="list">${jobs.map(jobRow).join('')}</div>` : empty('No jobs yet.')}
-    <div class="sec">Bookings from the page</div>
-    ${bookings.length ? `<div class="list">${bookings.map(b => `<div class="lrow flat">
-        <div class="lrow-main"><div class="lrow-title">${esc(svcList(b.services))}</div>
-          <div class="lrow-sub">${esc(new Date(b.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}))}</div></div>
-        <div class="lrow-side">${pill(b.status, b.ref)}</div></div>`).join('')}</div>` : empty('None.')}
+    <div class="sec">Bookings</div>
+    ${bookings.length ? `<div class="list">${bookings.map(bookingRow).join('')}</div>` : empty('None.')}
     <div class="menu">${menuRow('forget', c.id, '🗑️', 'Delete this customer', 'With their bookings and jobs. Cannot be undone.', 'is-danger')}</div>`};
 }
 function panelForget(p){
@@ -3202,10 +3274,10 @@ function panelMember(p){
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
   const secs = [['services', 'Services & prices'], ['types', 'Appliances'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['receipt', 'Receipt'], ['quote', 'Quotation'], ['numbers', 'Numbers']];
+    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['numbers', 'Numbers']];
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
-    ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, receipt: drawReceiptSample, quote: drawQuoteAdmin,
+    ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, receipt: drawReceiptSample, quote: drawQuoteAdmin,
       numbers: drawNumbers})[v]();
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
@@ -3243,6 +3315,125 @@ function drawClosed(){
         <button type="button" class="b" data-act="closeddate" data-v="${esc(x.on)}">Open it</button></div>`).join('')}</div>` : ''}`;
 }
 /* Ideas 6 and 8: the shop's GCash for the receipt, and its Facebook page for the booking page. */
+/* Admin → Page photos (30, TODO 16): he adds and removes the photos at the top of the booking
+   page. The phone shrinks each to 1600 px before sending; six at most. Needs signal to add. */
+let pagePhotoBusy = false;
+function drawPagePhotos(){
+  const l = pagePhotos();
+  return `<div class="card">
+    <div class="menu-title">The photos at the top of the booking page ${infoBtn('pagephotos')}</div>
+    ${l.length ? `<div class="pp-grid">${l.map((p, i) => `<div class="pp-item">
+        <img src="${esc(PAGE_PHOTO_BASE + p)}" alt="Page photo ${i + 1}" loading="lazy">
+        <button type="button" class="b danger" data-act="ppremove" data-id="${esc(p)}">Remove</button></div>`).join('')}</div>`
+      : '<p class="hint">None yet — the page shows its own photo.</p>'}
+    <div class="actions">${l.length >= 6 ? '<span class="hint">Six is the most — remove one to add another.</span>'
+      : pagePhotoBusy ? '<span class="b" aria-busy="true">Sending photo…</span>'
+      : `<label class="b primary">📷 Add a photo<input type="file" accept="image/*" data-page-photo hidden></label>`}</div>
+    <p class="hint">${l.length > 1 ? 'The page fades from one to the next every 6 seconds. ' : l.length ? 'Add another and the page fades from one to the next. ' : ''}Wide photos look best: the words sit over the left side.</p>
+  </div>`;
+}
+function setPagePhotos(list, label){
+  write('set_page_photos', {p_paths: list}, label, ['page_photos'],
+    db => { db.settings = {...(db.settings || {}), page_photos: list}; });
+  render(); drawHeroPhotos();
+}
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-page-photo]')) return;
+  const file = inp.files && inp.files[0];
+  inp.value = '';
+  if (!file || !session) return;
+  // first the crop screen (Guile, 2026-09-28: "crop it first, adjust it first")
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImg(url);
+    openPanel({kind: 'ppcrop', url, w: img.naturalWidth, h: img.naturalHeight, zoom: 1, cx: .5, cy: .5});
+  } catch (err) { URL.revokeObjectURL(url); notice('That file is not a picture.', true); }
+});
+const loadImg = src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('not a picture')); i.src = src; });
+/* Crop a page photo before it goes (Guile, 2026-09-28). The frame is 2 : 1 — a computer shows
+   the photo in a band of ~2.6 : 1 (1366 × 520) and a phone in ~1.25 : 1 (375 × 300), the middle
+   of the frame: the dashed box. Drag to move, the slider to zoom; "Use this photo" sends exactly
+   the frame, 1600 × 800 at most (~200–300 KB). Sizes are fractions of the frame, so a redraw or
+   a turned phone keeps the same crop. */
+function ppGeom(p){
+  const W = p.zoom * Math.max(1, (p.w / p.h) / 2), H = 2 * W / (p.w / p.h);   // image size, in frames
+  const at = v => Number.isFinite(v) ? v : .5;
+  const cx = Math.min(1 - 1 / (2 * W), Math.max(1 / (2 * W), at(p.cx))), cy = Math.min(1 - 1 / (2 * H), Math.max(1 / (2 * H), at(p.cy)));
+  return {W, H, cx, cy};
+}
+function ppStyle(p){
+  const g = ppGeom(p);
+  p.cx = g.cx; p.cy = g.cy;
+  return `width:${(g.W * 100).toFixed(3)}%;left:${((.5 - g.cx * g.W) * 100).toFixed(3)}%;top:${((.5 - g.cy * g.H) * 100).toFixed(3)}%`;
+}
+function panelPpcrop(p){
+  if (!p.url) return {title: 'Crop the photo', body: empty('Pick the photo again — Admin → Page photos.')};
+  return {title: 'Crop the photo', sub: 'Page photo', info: 'pagephotos', body: `
+    <div class="pp-crop" data-ppcrop><img src="${esc(p.url)}" alt="" draggable="false" style="${ppStyle(p)}">
+      <div class="pp-phone"><span>Phones show this part</span></div></div>
+    <label class="pp-zoom">Zoom <input type="range" min="1" max="4" step="0.01" value="${esc(p.zoom)}" data-ppzoom aria-label="Zoom"></label>
+    <p class="hint">Drag the photo to move it. Computers show the whole frame; phones show the dashed part — keep what matters inside it.</p>
+    <div class="stack">${pagePhotoBusy ? '<span class="b wide" aria-busy="true">Sending photo…</span>'
+      : '<button type="button" class="b primary wide" data-act="ppuse">Use this photo</button>'}</div>`};
+}
+let ppDrag = null;
+document.addEventListener('pointerdown', e => {
+  const box = e.target.closest && e.target.closest('[data-ppcrop]'), p = topPanel();
+  if (!box || !p || p.kind !== 'ppcrop') return;
+  ppDrag = {id: e.pointerId, x: e.clientX, y: e.clientY};
+  try { box.setPointerCapture(e.pointerId); } catch (err) {}
+  e.preventDefault();
+});
+document.addEventListener('pointermove', e => {
+  const p = topPanel();
+  if (!ppDrag || e.pointerId !== ppDrag.id || !p || p.kind !== 'ppcrop') return;
+  // the frame on screen NOW: a sync redraw mid-drag replaces it (measured: the old one, gone,
+  // measured 0 wide and the crop went NaN)
+  const box = $('[data-ppcrop]'), r = box && box.getBoundingClientRect(), g = ppGeom(p);
+  if (!r || !r.width) return;
+  p.cx -= (e.clientX - ppDrag.x) / (g.W * r.width);
+  p.cy -= (e.clientY - ppDrag.y) / (g.H * r.height);
+  ppDrag.x = e.clientX; ppDrag.y = e.clientY;
+  box.querySelector('img').setAttribute('style', ppStyle(p));
+});
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => { if (ppDrag && e.pointerId === ppDrag.id) ppDrag = null; }));
+document.addEventListener('input', e => {
+  const p = topPanel();
+  if (!e.target.matches || !e.target.matches('[data-ppzoom]') || !p || p.kind !== 'ppcrop') return;
+  p.zoom = Number(e.target.value) || 1;
+  const img = $('[data-ppcrop] img');
+  if (img) img.setAttribute('style', ppStyle(p));
+});
+async function usePagePhoto(){
+  const p = topPanel();
+  if (!p || p.kind !== 'ppcrop' || !p.url || pagePhotoBusy) return;
+  pagePhotoBusy = true; render();
+  try {
+    const img = await loadImg(p.url), g = ppGeom(p);
+    const sw = p.w / g.W, sh = p.h / g.H, sx = (g.cx - 1 / (2 * g.W)) * p.w, sy = (g.cy - 1 / (2 * g.H)) * p.h;
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(2, Math.min(1600, Math.round(sw))); cv.height = Math.round(cv.width / 2);
+    cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    const jpeg = q => new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('could not make the picture')), 'image/jpeg', q));
+    // the bucket takes 600 KB at most; a busy photo goes out a little softer
+    let blob = await jpeg(.72);
+    if (blob.size > 590000) blob = await jpeg(.55);
+    const path = 'page/' + await hashOf(blob) + '.jpg';
+    const r = await storage('POST', path, blob, false, 'page-photos');
+    if (!r.ok && r.status !== 409 && r.status !== 400){
+      const b = await r.json().catch(() => ({}));
+      throw new Error(b.message || b.error || 'HTTP ' + r.status);
+    }
+    if (r.status === 400){ const b = await r.json().catch(() => ({})); if (!/exist/i.test(b.message || b.error || '')) throw new Error(b.message || b.error || 'HTTP 400'); }
+    URL.revokeObjectURL(p.url); p.url = null;
+    closePanel();
+    setPagePhotos([...pagePhotos().filter(x => x !== path), path], 'Page photos — one added');
+  } catch (err) {
+    notice(err instanceof TypeError ? 'The photo needs signal to send. Nothing was saved — try again when there is signal.'
+                                    : 'The photo was not saved: ' + err.message, true);
+  } finally { pagePhotoBusy = false; render(); }
+}
 function drawShop(){
   const set = db.settings || {};
   const field = (k, label, ph, extra) => `<label>${label}<input data-k="shop_${k}" id="shop_${k}" value="${esc(set[k] || '')}" placeholder="${esc(ph)}" autocomplete="off" ${extra || ''}></label>`;
@@ -3607,7 +3798,10 @@ function panelQuote(p){
   const open = src.open, saved = src.saved, sub = src.name + ' · ' + src.ref;
   const said = saved ? esc('Saved ' + timeAgo(saved.saved_at) + (saved.saved_by_name ? ' by ' + saved.saved_by_name : '')) + unsentPill(src.row.id)
     : src.start ? 'From the booking’s quotation — not saved on the job yet' : 'Not saved yet';
-  const printBtn = `<button type="button" class="b${open ? '' : ' primary'} wide" data-act="printquote">🖨️ Print or save as PDF</button>`;
+  // Send as PDF (TODO 13): in the app, the paper as a file straight to the share sheet; on the
+  // website there is no file maker, so it opens the print screen like the button above it
+  const printBtn = `<button type="button" class="b${open ? '' : ' primary'} wide" data-act="printquote">🖨️ Print or save as PDF</button>
+    <button type="button" class="b wide" data-act="sharequote">📤 Send as PDF — Messenger, email…</button>`;
   if (!open) return {title: 'Quotation', sub, info: 'quote', body: `
     ${quoteBox(quoteView(p.q), 'quotePreview')}
     <p class="hint">${said}. The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.</p>
@@ -3771,11 +3965,21 @@ document.addEventListener('change', async e => {
 
 /* The printer, or Android's print screen (Save as PDF) — the job name becomes the PDF's
    file name. Waits for the pictures, or the logo can be missing from the paper. */
-async function printHtml(html, name){
+// The quotation on paper (print) or as a PDF file (share). Admin's sample has no booking.
+function quotePaper(share){
+  const p = topPanel(), src = p && p.q && quoteSrc(p);
+  if (!src) return printHtml(quoteHtml(quoteSample()), 'Quotation sample', share);
+  // what is on the paper is what is saved: a changed (or never saved) quotation saves first
+  if (src.open && (p.dirty || !src.saved) && !ACTIONS.savequote()) return;
+  printHtml(quoteHtml(quoteView(p.q)), 'Quotation ' + src.ref + ' ' + src.name, share);
+}
+async function printHtml(html, name, share){
   $('#printArea').innerHTML = html;
   await Promise.all($$('#printArea img').map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })));
-  // Inside the APK window.print() does nothing; Android's own print screen does the job.
-  if (window.AndroidBridge && window.AndroidBridge.print) window.AndroidBridge.print(name);
+  // Inside the APK window.print() does nothing; Android's own print screen does the job —
+  // or, to share, Android writes the same paper to a PDF file and opens the share sheet.
+  if (share && window.AndroidBridge && window.AndroidBridge.sharePdf) window.AndroidBridge.sharePdf(name);
+  else if (window.AndroidBridge && window.AndroidBridge.print) window.AndroidBridge.print(name);
   else window.print();
 }
 
@@ -3809,14 +4013,14 @@ async function hashOf(blob){
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
   return [...h.slice(0, 16)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
-async function storage(method, path, body, retried){
+async function storage(method, path, body, retried, bucket = 'house-photos'){
   const t = await token();
-  const r = await fetch(SUPABASE_URL + '/storage/v1/object/' + (method === 'GET' ? 'authenticated/' : '') + 'house-photos/' + path, {
+  const r = await fetch(SUPABASE_URL + '/storage/v1/object/' + (method === 'GET' ? 'authenticated/' : '') + bucket + '/' + path, {
     method, headers: {apikey: SUPABASE_KEY, Authorization: 'Bearer ' + t, ...(body ? {'Content-Type': 'image/jpeg'} : {})}, body});
   // the same clock jump as rpc(): an expired token is refreshed once and the call asked again
   if (!retried && session && [400, 401, 403].includes(r.status)){
     const text = await r.clone().text().catch(() => '');
-    if (/jwt expired|"exp" claim|token is expired/i.test(text)){ session.expires_at = 0; return storage(method, path, body, true); }
+    if (/jwt expired|"exp" claim|token is expired/i.test(text)){ session.expires_at = 0; return storage(method, path, body, true, bucket); }
   }
   return r;
 }
@@ -4060,7 +4264,7 @@ function panelSettings(){
    (docs/rules/ui.md). Android's own back button closes the top one (history). */
 let stack = [];
 const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, schedule: panelSchedule, price: panelPrice,
-  editbooking: panelEditBooking, service: panelService, receipt: panelReceipt, quote: panelQuote, jobquote: panelQuote, utype: panelUtype,
+  editbooking: panelEditBooking, service: panelService, receipt: panelReceipt, quote: panelQuote, jobquote: panelQuote, utype: panelUtype, ppcrop: panelPpcrop,
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust};
@@ -4233,6 +4437,8 @@ const ACTIONS = {
     closePanel();
     toast(on ? t.label + ' is back on the booking page.' : t.label + ' is off the booking page. Removed — tap it to bring it back.');
   },
+  ppuse: () => usePagePhoto(),
+  ppremove: id => setPagePhotos(pagePhotos().filter(p => p !== id), 'Page photos — one removed'),
   typemove: (id, el) => {
     const shown = activeTypes().slice(), i = shown.findIndex(x => x.key === id), j = i + Number(el.dataset.v);
     if (i < 0 || j < 0 || j >= shown.length) return;
@@ -4272,13 +4478,8 @@ const ACTIONS = {
     toast(src.job ? 'Quotation saved — the job’s price is now ' + peso(total) + '.' : 'Quotation saved.');
     return true;
   },
-  printquote: () => {
-    const p = topPanel(), src = p && p.q && quoteSrc(p);
-    if (!src) return printHtml(quoteHtml(quoteSample()), 'Quotation sample');
-    // what is on the paper is what is saved: a changed (or never saved) quotation saves first
-    if (src.open && (p.dirty || !src.saved) && !ACTIONS.savequote()) return;
-    printHtml(quoteHtml(quoteView(p.q)), 'Quotation ' + src.ref + ' ' + src.name);
-  },
+  printquote: () => quotePaper(false),
+  sharequote: () => quotePaper(true),
   savequoteshop: () => {
     const cur = (db.settings || {}).quote_shop || {}, v = {};
     ['name', 'tagline', 'address', 'contact', 'tin', 'signer', 'title'].forEach(k => { v[k] = (($('#qs_' + k) || {}).value || '').trim(); });
@@ -4972,7 +5173,7 @@ drawPubCart();   // THE booking form, drawn now by bookFormHtml('pub'); again wh
     Object.keys(serviceLabels).forEach(k => { delete serviceLabels[k]; });
     Object.keys(pubPrices).forEach(k => { delete pubPrices[k]; });
     rows.forEach(s => { serviceLabels[s.key] = s.label; pubPrices[s.key] = s.prices || null; });
-    if (rows[0] && rows[0].shop){ pubShop = rows[0].shop; lsSet('ws_shop', pubShop); }   // 21
+    if (rows[0] && rows[0].shop){ pubShop = rows[0].shop; lsSet('ws_shop', pubShop); drawHeroPhotos(); }   // 21, 30
     if (rows[0] && rows[0].shop && Array.isArray(rows[0].shop.types) && rows[0].shop.types.length){
       pubTypes = rows[0].shop.types; lsSet('ws_types', pubTypes);   // 27
     }
@@ -5261,6 +5462,8 @@ updateOnLaunch();
 
 /* Android's Back, inside the APK: close what is on top, then the login door. False means
    there is nowhere left to go, and the app may close. */
+// the APK could not make or send the quotation PDF (MainActivity.sharePdf)
+window.wsShareFailed = why => toast('The PDF did not go: ' + why + '. Print or save as PDF still works.', true);
 window.wsBack = () => {
   if (!$('#unitSheet').hidden){ unitEd = null; drawUnitSheet(); return true; }
   if (!$('#cartSheet').hidden){ $('#cartSheet').hidden = true; lockBody(); return true; }
