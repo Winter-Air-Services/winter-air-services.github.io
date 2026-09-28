@@ -4,7 +4,15 @@ window.WS_BUILD = {
  "versionCode": 15,
  "releasedAt": "2026-09-28",
  "notes": [
-  "**New pictures for Admin → Appliances:** Chiller is now the glass-door drinks chiller, and Freezer is a chest freezer. The big outdoor unit is still there, as \"Industrial chiller\"."
+  "**📄 Quotation.** On a new booking in the Inbox — and on a job until it is done — tap Quotation: the shop's own letter, with the page on top and the words below. Change the subject, each line (words, Qty, unit price) and the note. Save keeps it; Print or save as PDF makes the file to send on Messenger. Signed on the Conforme line, it is the agreement.",
+  "**The quotation is the price.** Accept, left blank, takes the quotation's total. On a job, saving the quotation changes the job's price, and the history says so.",
+  "**Admin → Quotation:** the letterhead, the signer, the usual note, and the signature (a photo of it on white paper — the white is taken out).",
+  "**The shop's own logo** on the quotation and the receipt.",
+  "**Book a job goes to the Inbox first,** marked \"By phone\": look it over, make the quotation, then Accept. From Customer files, Accept puts it on their file. The Numbers count the page's bookings only. A booking by phone can stay \"Not yet\" for a day.",
+  "**Aircon & Other Appliances.** Admin → Appliances: add a chiller, a freezer, a washing machine, a car aircon… with its picture (ours, or your own PNG), put them in order, rename them, Remove them (and bring them back). Tick the services each one offers — the booking page shows only those.",
+  "**Pictures for them:** a glass-door drinks chiller, a chest freezer, a washing machine, a car, and the big outdoor \"Industrial chiller\".",
+  "**Fixed:** the first tap after typing did nothing (type the address, tap Window) — it works on the first tap now.",
+  "**Faster booking page:** it downloads about a tenth of what it did."
  ],
  "updateUrl": "https://github.com/Winter-Air-Services/winter-air-services.github.io/releases/latest/download/update.json"
 };
