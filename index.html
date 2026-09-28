@@ -1650,7 +1650,10 @@ function aboutHtml(){
 const BUILTIN_TYPES = [{key: 'Window', label: 'Window', icon: 'ac-window'}, {key: 'Split', label: 'Split', icon: 'ac-split'},
   {key: 'Floor-mounted', label: 'Floor-mounted', icon: 'ac-floor'}, {key: 'Cassette', label: 'Cassette', icon: 'ac-cassette'}];
 // the pictures the owner can pick from (A3 adds his own PNG)
-const TYPE_ICONS = ['ac-window', 'ac-split', 'ac-floor', 'ac-cassette', 'chiller', 'freezer', 'washing-machine', 'car-aircon'];
+// chiller = the glass-door drinks chiller the owner meant (2026-09-28); the big outdoor unit
+// that was drawn first stays as industrial-chiller
+const TYPE_ICONS = ['ac-window', 'ac-split', 'ac-floor', 'ac-cassette', 'chiller', 'freezer', 'washing-machine', 'car-aircon',
+  'industrial-chiller'];
 let pubTypes = lsGet('ws_types', null);
 const typeRows = () => db && db.types && db.types.length ? db.types : pubTypes && pubTypes.length ? pubTypes : BUILTIN_TYPES;
 const activeTypes = () => typeRows().filter(t => t.active !== false);
