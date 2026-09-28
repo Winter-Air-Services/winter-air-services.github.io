@@ -2674,10 +2674,13 @@ function panelBooking(p){
   // Book a job from Customer files names the customer (26): Accept puts it on their file
   const mine = b.status === 'new' && b.for_customer && db.customers[b.for_customer];
   if (b.status === 'new'){
-    acts = (mine ? `<button type="button" class="b primary wide" data-act="accept" data-id="${esc(b.id)}" data-link="${esc(mine.id)}">Accept — on ${esc(mine.full_name)}’s file</button>` : '')
-      + `<button type="button" class="b${mine ? '' : ' primary'} wide" data-act="accept" data-id="${esc(b.id)}">Accept — new customer</button>
-      ${same.filter(c => !mine || c.id !== mine.id).map(c => `<button type="button" class="b wide" data-act="accept" data-id="${esc(b.id)}" data-link="${esc(c.id)}">Accept — same as ${esc(c.full_name)}</button>`).join('')}
-      <button type="button" class="b danger wide" data-act="open" data-kind="reject" data-id="${esc(b.id)}">Reject…</button>`;
+    /* Booked from a customer's file: ONE Accept, onto that file. With "Accept — new customer"
+       under it, the owner's first real one (Rj tan, 2026-09-28) went onto a second file of the
+       same person, his own file showed no job, and he booked it again. */
+    acts = (mine ? `<button type="button" class="b primary wide" data-act="accept" data-id="${esc(b.id)}" data-link="${esc(mine.id)}">Accept — on ${esc(mine.full_name)}’s file</button>`
+      : `<button type="button" class="b primary wide" data-act="accept" data-id="${esc(b.id)}">Accept — new customer</button>
+      ${same.map(c => `<button type="button" class="b wide" data-act="accept" data-id="${esc(b.id)}" data-link="${esc(c.id)}">Accept — same as ${esc(c.full_name)}</button>`).join('')}`)
+      + `<button type="button" class="b danger wide" data-act="open" data-kind="reject" data-id="${esc(b.id)}">Reject…</button>`;
   } else if (b.status === 'accepted' && !job){
     acts = `<button type="button" class="b primary wide" data-act="makejob" data-id="${esc(b.id)}">Make the job</button>`;
   } else if (job){
@@ -2704,13 +2707,13 @@ function panelBooking(p){
         : 'Make one to send — print it or save it as a PDF') : ''}
       ${menuRow('bookingstatus', b.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}
     </div>
-    ${same.length ?`<p class="hint">Same number as ${same.map(c => esc(c.full_name) + ' (' + esc(c.address) + ')').join('; ')} — accept as the same customer so their history stays in one place.</p>` : ''}
+    ${same.length && !mine ?`<p class="hint">Same number as ${same.map(c => esc(c.full_name) + ' (' + esc(c.address) + ')').join('; ')} — accept as the same customer so their history stays in one place.</p>` : ''}
     ${b.status === 'new' && b.quote ? `<label>Price for the job <span class="opt">— optional; the quotation says ${esc(peso(b.quote.total))}</span>
       <input data-pf="price" inputmode="decimal" maxlength="14" value="${esc(p.price || '')}" placeholder="${esc(String(b.quote.total))}" autocomplete="off"></label>
-      <p class="hint">Accept makes the customer and the job in one go, with this price — or the quotation’s, left blank.</p>`
+      <p class="hint">Accept makes ${mine ? 'the job on ' + esc(mine.full_name) + '’s file' : 'the customer and the job in one go'}, with this price — or the quotation’s, left blank.</p>`
     : b.status === 'new' ? `<label>Price for the job <span class="opt">— optional${listPrice != null ? '; the price list says ' + esc(peso(listPrice)) : ''}</span>
       <input data-pf="price" inputmode="decimal" maxlength="14" value="${esc(p.price || '')}" placeholder="${listPrice != null ? esc(String(listPrice)) : 'e.g. 1500'}" autocomplete="off"></label>
-      <p class="hint">Accept makes the customer and the job in one go, with this price${listPrice != null ? ' — or the price list’s, left blank' : ''}.</p>` : ''}
+      <p class="hint">Accept makes ${mine ? 'the job on ' + esc(mine.full_name) + '’s file' : 'the customer and the job in one go'}, with this price${listPrice != null ? ' — or the price list’s, left blank' : ''}.</p>` : ''}
     <div class="stack">${acts}</div>
     ${statusBlockHtml('booking', b.id)}`};
 }
