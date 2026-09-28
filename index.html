@@ -232,6 +232,10 @@
   .pill.scheduled,.pill.accepted{background:var(--st-sched-bg);color:var(--st-sched)}
   .pill.in_progress{background:var(--st-prog-bg);color:var(--st-prog)}
   .pill.done{background:var(--st-done-bg);color:var(--st-done)}
+  /* Paid / Not paid (2026-09-28): the first thing the owner looks for on a done job */
+  .pill.unpaid{background:var(--bad-bg);color:var(--bad)}
+  .pill.gcash{background:var(--st-sched-bg);color:var(--st-sched)}
+  .pill.paid{background:var(--good-bg);color:var(--good)}
   .pill.rejected,.pill.cancelled,.pill.off{background:var(--st-off-bg);color:var(--st-off)}
   .pill.unsent{background:var(--warn-bg);color:var(--warn)}
   .pill.kind{background:var(--st-sched-bg);color:var(--st-sched)}
@@ -391,9 +395,11 @@
   .qt-scale{width:794px;transform-origin:0 0}
   .quote{position:relative;width:794px;min-height:1123px;box-sizing:border-box;padding:46px 58px 40px;background:#fff;color:#000;
     font-family:Cambria,'Noto Serif','Droid Serif',Georgia,'Times New Roman',serif;font-size:14.5px;line-height:1.32}
-  .qt-head{display:grid;grid-template-columns:172px 1fr;align-items:center;gap:4px}
+  .qt-head{display:grid;grid-template-columns:172px 1fr 108px;align-items:center;gap:4px}
+  .qt-qr{display:block;width:108px;height:108px}
   .qt-logo{display:block;width:172px;height:auto}
-  .qt-lh{text-align:center}
+  .qt-lh{text-align:center;text-wrap:balance}
+  .qt-top{font-weight:700;font-size:15px;letter-spacing:.02em;margin-bottom:2px}
   .qt-name{font-weight:700;font-size:18.5px}
   .qt-tag{font-style:italic;font-family:'Monotype Corsiva','URW Chancery L','Apple Chancery',cursive;font-size:16px}
   .qt-s{font-size:13.5px}
@@ -2712,6 +2718,15 @@ function routeBar(day){
     <a class="b primary" target="_blank" rel="noopener" href="${esc(routeUrl(stops))}">Open in Google Maps</a>
     ${stops.length > 10 ? '<span class="hint">Google Maps takes the first 10.</span>' : ''}</div>`;
 }
+/* The money badge (Guile, 2026-09-28: "very important on the eyes of the owner"): a done job
+   says Not paid in red until the office marks it; GCash in blue; cash or other, Paid in green.
+   A job paid before it is done shows it too. The office only — a technician is never sent it. */
+function paidPill(j){
+  if (!db || db.role !== 'admin' || !j || j.status === 'cancelled') return '';
+  if (j.paid_method === 'gcash') return pill('gcash', 'GCash');
+  if (j.paid_method) return pill('paid', 'Paid');
+  return j.status === 'done' ? pill('unpaid', 'Not paid') : '';
+}
 function jobRow(j){
   const c = jobCust(j);
   return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
@@ -2724,7 +2739,7 @@ function jobRow(j){
       <div class="lrow-sub">${esc(place(c))}</div>
       ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
-    <div class="lrow-side">${statusPill(j.status)}${j.price != null ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}${j.paid_method ? '<span class="tag">Paid</span>' : ''}</div>
+    <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
   </div>`;
 }
 function panelJob(p){
@@ -2764,7 +2779,7 @@ function panelJob(p){
     ${techPrice ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo && !tech ? housePhoto(photo) : ''}
-      ${kv('Status', statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
+      ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
       ${j.on_way_at && ['booked', 'scheduled'].includes(j.status) ? kv('On the way', esc('since ' + new Date(j.on_way_at).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit'}))) : ''}
       ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
       ${kv('Number', esc(c.contact || ''))}
@@ -3439,7 +3454,8 @@ async function shareReceipt(id){
    line — signed, their contract. ONE piece, quoteHtml, draws the preview, the Admin sample
    and the paper. Made from a New booking and saved on it; Accept takes its total as the
    job's price. The letterhead and signer are Admin → Quotation, not written in this public
-   file. */
+   file. The QR top right is the owner's own, taken from his Word one (2026-09-28):
+   img/quote-qr.png, https://qr.page/g/1tCsNfQdMaC → qr-codes.io → his Facebook page. */
 const SHOP_SHORT = 'Winter Air';
 const QUOTE_NOTE = 'One (1) month workmanship warranty\nTerms of Payment: Full payment upon completion of work and test run';
 function quoteShop(){
@@ -3481,11 +3497,12 @@ function quoteHtml(q){
   return `<div class="quote">
     ${q.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
     <div class="qt-head"><img class="qt-logo" src="img/winter-air-logo.png" alt="">
-      <div class="qt-lh"><div class="qt-name">${esc(s.name)}</div>
+      <div class="qt-lh">${q.subject ? `<div class="qt-top">${esc(q.subject)}</div>` : ''}<div class="qt-name">${esc(s.name)}</div>
         ${s.tagline ? `<div class="qt-tag">${esc(s.tagline)}</div>` : ''}
         ${s.address ? `<div>${esc(s.address)}</div>` : ''}
         ${s.contact ? `<div class="qt-s">${esc(s.contact)}</div>` : ''}
-        ${s.tin ? `<div class="qt-s">${esc(s.tin)}</div>` : ''}</div></div>
+        ${s.tin ? `<div class="qt-s">${esc(s.tin)}</div>` : ''}</div>
+      <img class="qt-qr" src="img/quote-qr.png" alt="QR code: the shop's Facebook page"></div>
     <div class="qt-date">${esc(longDate(q.date))}</div>
     ${q.to_address ? `<div class="qt-to">${esc(q.to_address)}</div>` : ''}
     <div class="qt-subj">SUBJECT: ${esc(q.subject || '')}</div>
