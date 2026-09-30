@@ -342,6 +342,11 @@
   .lrow-price{font-size:12.5px;font-weight:700;white-space:nowrap}
   .card.est{padding:6px 14px;margin:8px 0 0}
   .loc-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .bk-row{display:flex;gap:8px;align-items:stretch}
+  .bk-row input{flex:1;min-width:0}
+  .bk-row .b{flex:none}
+  .bk-book{width:46px;padding:0}
+  .bk-book .ico{width:28px;height:28px}
   label.b{margin:0}
   .house-photo{display:block;width:100%;height:180px;object-fit:cover;border-radius:var(--radius-sm);
     background:var(--surface-alt);margin-bottom:6px}
@@ -2005,9 +2010,30 @@ const BK_WORDS = {
 const bkBad = (s, f) => (s && s._bad && s._bad[f]) || '';
 const bkCls = (s, f) => bkBad(s, f) ? ' bk-bad' + (s._shake ? ' shake' : '') : '';
 const bkWhy = (s, f) => bkBad(s, f) ? `<div class="bk-why" data-bkwhy="${f}">${esc(bkBad(s, f))}</div>` : '';
-function bkInput(ctx, s, f, label, opt, attrs){
+function bkInput(ctx, s, f, label, opt, attrs, side){
+  const box = `<input data-bk="${f}" data-cart="${ctx}" value="${esc(s[f] || '')}" ${attrs}>`;
   return `<label class="bk-f${bkCls(s, f)}" data-bkf="${f}">${label}${opt ? ` <span class="opt">${opt}</span>` : ''}
-    <input data-bk="${f}" data-cart="${ctx}" value="${esc(s[f] || '')}" ${attrs}></label>${bkWhy(s, f)}`;
+    ${side ? `<span class="bk-row">${box}${side}</span>` : box}</label>${bkWhy(s, f)}`;
+}
+/* Phonebook (Guile for the owner, 2026-09-30): his phone-book icon beside the office's number
+   box, APK only — Android's own picker fills the name and the number. Never on the public page. */
+function bkBookBtn(ctx, s){
+  if (ctx === 'pub' || s._lockWho || !(inApk && window.AndroidBridge.pickContact)) return '';
+  return `<button type="button" class="b bk-book" data-act="bkcontact" data-cart="${ctx}" aria-label="Pick from the phonebook" title="Pick from the phonebook">${ico('phone-book')}</button>`;
+}
+/* "+63 917 123 4567" in the phonebook is "09171234567" here, so Same number still finds them. */
+const phoneFromBook = n => { const d = digits(n); return /^63\d{10}$/.test(d) ? '0' + d.slice(2) : String(n || '').trim().slice(0, 30); };
+async function bkContact(ctx){
+  const s = bkState(ctx); if (!s) return;
+  let got;
+  try { got = await wsNet.call('pickContact', []); } catch (e){ toast(e.message, true); return; }
+  if (!got || bkState(ctx) !== s) return;   // backed out, or the form closed meanwhile
+  const {name, number} = JSON.parse(got);
+  if (number){ s.contact = phoneFromBook(number); bkClear(ctx, 'contact'); }
+  if (/\p{L}/u.test(name || '')){ s.full_name = name.trim().slice(0, 120); bkClear(ctx, 'full_name'); }   // an unnamed contact's "name" is its number
+  const a = document.activeElement;   // a redraw waits for a box that has focus; the pick replaced what was in it
+  if (a && /INPUT|TEXTAREA/.test(a.tagName)) a.blur();
+  bkRedraw(ctx);
 }
 function bkLocHtml(ctx, s){
   const has = !!(s.lat && s.lng);
@@ -2067,7 +2093,7 @@ function bookFormHtml(ctx, s){
   } else if (!s._removed){   // a customer whose details were removed on request stays removed
     const lock = s._lockWho ? ' readonly class="locked"' : '';
     who += bkInput(ctx, s, 'full_name', w.name, '', `maxlength="120" autocomplete="${w.auto[0]}"${lock}`)
-      + bkInput(ctx, s, 'contact', 'Contact number', '', `inputmode="tel" maxlength="30" autocomplete="${w.auto[1]}" placeholder="09XX XXX XXXX"${lock}`)
+      + bkInput(ctx, s, 'contact', 'Contact number', '', `inputmode="tel" maxlength="30" autocomplete="${w.auto[1]}" placeholder="09XX XXX XXXX"${lock}`, bkBookBtn(ctx, s))
       + (s._lockWho ? '<div class="hint">🔒 Only the office changes the name and the number.</div>' : '')
       + (pub || edit ? '' : `<div id="bookSame">${bookSame(s)}</div>`)   // only a NEW customer can be a duplicate
       + bkInput(ctx, s, 'address', 'Address', '', `maxlength="300" autocomplete="${pub ? 'street-address' : 'off'}" placeholder="Street, barangay, city"`)
@@ -3123,7 +3149,7 @@ function checkPlanHtml(target, every, next, day){
 function panelAddCust(p){
   const w = BK_WORDS.panel;
   const who = bkInput('panel', p, 'full_name', w.name, '', 'maxlength="120" autocomplete="off"')
-    + bkInput('panel', p, 'contact', 'Contact number', '', 'inputmode="tel" maxlength="30" autocomplete="off" placeholder="09XX XXX XXXX"')
+    + bkInput('panel', p, 'contact', 'Contact number', '', 'inputmode="tel" maxlength="30" autocomplete="off" placeholder="09XX XXX XXXX"', bkBookBtn('panel', p))
     + (p._dup ? `<div class="inline-note">Same number as <b>${esc(p._dup)}</b>. Tap Save again to add them anyway.</div>` : '')
     + bkInput('panel', p, 'address', 'Address', '', 'maxlength="300" autocomplete="off" placeholder="Street, barangay, city"')
     + bkInput('panel', p, 'landmark', 'Landmark', '— optional', 'maxlength="200" autocomplete="off" placeholder="beside the chapel, blue gate…"')
@@ -4709,6 +4735,7 @@ const ACTIONS = {
     bkRedraw(ctx);
   },
   bkpin: (id, el) => bkPin(el.dataset.cart),
+  bkcontact: (id, el) => bkContact(el.dataset.cart),
   bkmap: (id, el) => bkMap(el.dataset.cart),
   psvc: (id, el) => {
     const p = topPanel(); if (!p) return;
