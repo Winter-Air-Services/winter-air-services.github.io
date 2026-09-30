@@ -1699,7 +1699,8 @@ const BUILTIN_TYPES = [{key: 'Window', label: 'Window', icon: 'ac-window'}, {key
 // chiller = the glass-door drinks chiller the owner meant (2026-09-28); the big outdoor unit
 // that was drawn first stays as industrial-chiller
 const TYPE_ICONS = ['ac-window', 'ac-split', 'ac-floor', 'ac-cassette', 'chiller', 'freezer', 'washing-machine', 'car-aircon',
-  'industrial-chiller'];
+  'industrial-chiller', 'fcu', 'solar', 'ducting', 'tire-inflator',   // the owner's 2026-09-30 additions
+  'exhaust-fan', 'water-dispenser', 'cold-room', 'ice-machine'];      // drawn ahead, before he adds them
 let pubTypes = lsGet('ws_types', null);
 const typeRows = () => db && db.types && db.types.length ? db.types : pubTypes && pubTypes.length ? pubTypes : BUILTIN_TYPES;
 const activeTypes = () => typeRows().filter(t => t.active !== false);
