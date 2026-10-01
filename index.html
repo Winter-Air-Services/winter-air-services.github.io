@@ -329,6 +329,11 @@
   .segment button{flex:1 1 0;min-width:0;width:auto;margin:0;padding:8px 6px;min-height:36px;border-radius:999px;
     background:transparent;color:var(--ink-soft);font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .segment button.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  /* the time (33): [HH] : [MM] [AM | PM] on one line */
+  .bk-time{display:flex;align-items:center;gap:6px;margin:6px 0 4px}
+  .bk-time select{flex:1 1 0;min-width:0;width:auto;text-align:center;font-size:16px}
+  .bk-time b{flex:none;font-size:18px}
+  .bk-time .segment{flex:1.3 1 0;margin:0}
 
   .list{display:flex;flex-direction:column;gap:8px}
   .lrow{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);

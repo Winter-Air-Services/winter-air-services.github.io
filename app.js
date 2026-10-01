@@ -38,7 +38,15 @@ function manilaDate(plusDays){
 const manilaDay = iso => iso ? new Date(iso).toLocaleDateString('en-CA', {timeZone: 'Asia/Manila'}) : null;
 const niceDate = ymd => ymd ? new Date(ymd + 'T00:00:00')
   .toLocaleDateString('en-PH', {weekday: 'short', day: 'numeric', month: 'short'}) : '';
-const slotWord = s => s === 'am' ? 'morning' : s === 'pm' ? 'afternoon' : '';
+/* The time (33, Guile 2026-10-01): `slot` is a clock time, 'HH:MM' on the 24-hour clock, or —
+   on every booking made before it, and from an APK not yet updated — 'am' / 'pm' alone. Every
+   screen turns it into words HERE: slotWord in a sentence, slotShort on a row. */
+const isClock = s => /^([01]\d|2[0-3]):[0-5]\d$/.test(s || '');
+const slotOk = s => s === 'am' || s === 'pm' || isClock(s);
+const clock12 = s => { const h = +s.slice(0, 2); return ((h % 12) || 12) + ':' + s.slice(3) + ' ' + (h < 12 ? 'AM' : 'PM'); };
+const slotWord = s => isClock(s) ? clock12(s) : s === 'am' ? 'morning' : s === 'pm' ? 'afternoon' : '';
+const slotShort = s => isClock(s) ? clock12(s) : String(s || '').toUpperCase();
+const slotKey = s => isClock(s) ? s : s === 'am' ? '00:00' : s === 'pm' ? '12:00' : 'z';   // morning first, then the times
 const STATUS_LABEL = {new: 'New', accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled',
   booked: 'Not scheduled', scheduled: 'Scheduled', in_progress: 'In progress', done: 'Done'};
 
@@ -847,7 +855,7 @@ const timeAgo = iso => {
   return m < 2 ? 'just now' : m < 60 ? Math.round(m) + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago'
     : m < 2880 ? 'yesterday' : new Date(iso).toLocaleDateString('en-PH', {day: 'numeric', month: 'short'});
 };
-const byTime = (a, b) => ((a.scheduled_on || '9999') + (a.slot || 'z')).localeCompare((b.scheduled_on || '9999') + (b.slot || 'z'));
+const byTime = (a, b) => ((a.scheduled_on || '9999') + slotKey(a.slot)).localeCompare((b.scheduled_on || '9999') + slotKey(b.slot));
 const byDoneDesc = (a, b) => (a.done_at || '') < (b.done_at || '') ? 1 : -1;
 
 /* ---------------------------------------------------------------- ⓘ: the explanations
@@ -1106,10 +1114,10 @@ function bkAirconsHtml(ctx, s, label){
     </div>`;
 }
 /* The day and the time. opts.notYet: offer "Not yet" (the office, a job with no day yet);
-   opts.slot: always ask morning or afternoon. Schedule, Book a job, Edit and the page. */
+   the time follows it on every one of them (bkTimeHtml). Schedule, Book a job, Edit and the page. */
 function bkWhenHtml(ctx, s, opts){
   const pub = ctx === 'pub', today = manilaDate(0), d = s.date || '';
-  opts = {notYet: !pub, slot: pub, ...(opts || {})};
+  opts = {notYet: !pub, ...(opts || {})};
   const chips = [...(opts.notYet ? [['', 'Not yet']] : []), [today, 'Today'], [addDays(today, 1), 'Tomorrow'],
     [addDays(today, 2), niceDate(addDays(today, 2))]];
   const chip = (f, v, t, on) => {
@@ -1125,10 +1133,38 @@ function bkWhenHtml(ctx, s, opts){
       ${bkWhy(s, 'date') || (shut ? `<div class="${pub ? 'bk-why' : 'hint warn-line'}">${esc(pub ? closedWords(d, shut)
         : '⚠ The shop is closed that day' + (shut.why ? ' — ' + shut.why : '') + '. You can still book it.')}</div>` : '')}
     </div>
-    ${opts.slot || d ? `<div class="fieldlabel">Morning or afternoon</div>
-      <div class="segment">${[['am', 'Morning (AM)'], ['pm', 'Afternoon (PM)']].map(([k, t]) =>
-        `<button type="button" class="${(s.slot || 'am') === k ? 'active' : ''}" data-act="bkset" data-cart="${ctx}" data-f="slot" data-v="${k}">${t}</button>`).join('')}</div>` : ''}`;
+    ${bkTimeHtml(ctx, s)}`;
 }
+/* The time (33): [hour] : [minute] [AM | PM], any hour, any minute — on every form that asks
+   the day, always shown (Guile, 2026-10-01). No hour yet keeps 'am' / 'pm' alone in slot. */
+const slotParts = s => {
+  const t = s.slot || 'am';
+  if (isClock(t)){ const h = +t.slice(0, 2); return {h: String((h % 12) || 12), m: t.slice(3), ap: h < 12 ? 'am' : 'pm'}; }
+  return {h: '', m: s._mm || '', ap: t === 'pm' ? 'pm' : 'am'};
+};
+function bkTimeHtml(ctx, s){
+  const p = slotParts(s);
+  const pick = (part, now, blank, list) => `<select data-bktime="${part}" data-cart="${ctx}" aria-label="${part === 'h' ? 'Hour' : 'Minutes'}">
+      <option value=""${now ? '' : ' selected'}>${blank}</option>${list.map(v => `<option${v === now ? ' selected' : ''}>${v}</option>`).join('')}</select>`;
+  return `<div class="bk-sec${bkCls(s, 'slot')}" data-bkf="slot">
+      <div class="fieldlabel">${ctx === 'pub' ? 'Preferred time' : 'Time'}</div>
+      <div class="bk-time">${pick('h', p.h, 'HH', Array.from({length: 12}, (_, i) => String(i + 1)))}<b>:</b>${
+        pick('m', p.h ? p.m : '', 'MM', Array.from({length: 60}, (_, i) => String(i).padStart(2, '0')))}
+        <div class="segment">${[['am', 'AM'], ['pm', 'PM']].map(([k, t]) =>
+          `<button type="button" class="${p.ap === k ? 'active' : ''}" data-act="bktime" data-cart="${ctx}" data-f="ap" data-v="${k}">${t}</button>`).join('')}</div>
+      </div>${bkWhy(s, 'slot')}</div>`;
+}
+function bkTime(ctx, part, v){
+  const s = bkState(ctx); if (!s) return;
+  const p = {...slotParts(s), [part]: v};
+  s._mm = p.m;
+  s.slot = p.h ? String((+p.h % 12) + (p.ap === 'pm' ? 12 : 0)).padStart(2, '0') + ':' + (p.m || '00') : p.ap;
+  bkClear(ctx, 'slot');
+  if (ctx === 'pub') saveDraft();
+  bkRedraw(ctx);
+}
+// a day needs its hour — except an old booking's AM / PM, left as it was
+const timeMissing = s => !isClock(s.slot) && (s.slot || 'am') !== s._origSlot;
 function bookFormHtml(ctx, s){
   const pub = ctx === 'pub', w = BK_WORDS[ctx], existing = !pub && s.mode === 'existing', edit = s.mode === 'edit';
   let who = '';
@@ -1159,7 +1195,7 @@ function bookFormHtml(ctx, s){
   // Editing a job: the day only while the job is still open, and a word about the price,
   // which is frozen onto the job and changed by hand (docs/scope.md).
   // editing a booking asks the day like the page does; editing a job like the office does
-  const when = edit ? (s._noWhen ? '' : bkWhenHtml(ctx, s, s._needDate ? {notYet: false, slot: true} : {notYet: s._notYetOk || !s._origDate}))
+  const when = edit ? (s._noWhen ? '' : bkWhenHtml(ctx, s, s._needDate ? {notYet: false} : {notYet: s._notYetOk || !s._origDate}))
                     : bkWhenHtml(ctx, s);
   const priceNote = edit && s._priceNote ? `<p class="hint">${esc(s._priceNote)}</p>` : '';
   // R1: the day the customer asked for, one tap away while the job has none
@@ -1257,6 +1293,7 @@ function bookProblems(ctx, s){
   else if (dayMoved && s.date && s.date < today) out.push(['date', 'That day has already passed.']);
   else if (pub && s.date > manilaDate(120)) out.push(['date', 'That is too far ahead. Please pick a date within the next few months.']);
   else if (pub && closedOn(s.date)) out.push(['date', closedWords(s.date, closedOn(s.date))]);
+  if ((pub || s.date) && !s._noWhen && timeMissing(s)) out.push(['slot', pub ? 'Please choose the hour.' : 'Choose the hour.']);
   if (pub && !s.consent) out.push(['consent', 'Please tick the box to say you have read how we keep your details.']);
   return out;
 }
@@ -1328,7 +1365,7 @@ function loadDraft(){
   if (!(Date.now() - (d.at || 0) < 30 * 864e5)){ lsDel(DRAFT_KEY); return; }
   DRAFT_FIELDS.forEach(f => { if (typeof d[f] === 'string') pubBook[f] = d[f]; });
   if (pubBook.date && pubBook.date < manilaDate(0)) pubBook.date = '';   // a day that has passed
-  if (!['am', 'pm'].includes(pubBook.slot)) pubBook.slot = 'am';
+  if (!slotOk(pubBook.slot)) pubBook.slot = 'am';
   pubUnits = (Array.isArray(d.units) ? d.units : [])
     .filter(u => u && typeOf(u.type) && Array.isArray(u.services) && u.services.length).slice(0, 20)
     .map(u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null}));
@@ -1467,7 +1504,7 @@ function editChanges(ch){
       if ((cb[k] || '') !== (ca[k] || '')) out.push([w, cb[k] || '', ca[k] || '(none)']); });
     if (!!cb.pinned !== !!ca.pinned) out.push(['Pin', cb.pinned ? 'set' : '', ca.pinned ? 'set' : 'removed']);
   }
-  const day = w => w && w.on ? niceDate(w.on) + ' ' + String(w.slot || '').toUpperCase() : '';
+  const day = w => w && w.on ? niceDate(w.on) + ' ' + slotShort(w.slot) : '';
   if (a.wanted) out.push(['Wanted', day(b.wanted), day(a.wanted)]);
   if ('notes' in a) out.push(['Notes', b.notes || '', a.notes || '(none)']);
   return out;
@@ -1486,8 +1523,8 @@ function eventRow(e){
     case 'job_edit':  return ['✏️', 'Edited', editChanges(ch), by];
     case 'job_created': return ['🛠️', 'Job made', null, by];
     case 'job_schedule': return ['📅', 'Scheduled', [['Day',
-      before.scheduled_on ? niceDate(before.scheduled_on) + ' ' + String(before.slot || '').toUpperCase() : '',
-      after.scheduled_on ? niceDate(after.scheduled_on) + ' ' + String(after.slot || '').toUpperCase() : '']], by];
+      before.scheduled_on ? niceDate(before.scheduled_on) + ' ' + slotShort(before.slot) : '',
+      after.scheduled_on ? niceDate(after.scheduled_on) + ' ' + slotShort(after.slot) : '']], by];
     case 'job_status': {
       const to = after.status;
       const icon = {in_progress: '▶️', done: '🏁', cancelled: '🚫'}[to] || '•';
@@ -1734,7 +1771,7 @@ function bookingRow(b){
     <div class="lrow-main">
       <div class="lrow-title">${newDot(b.status === 'new' && !b.seen_at)}${esc(b.full_name)}${b.source === 'office' ? ' ' + pill('kind', 'By phone') : ''}${unsentPill(b.id)}</div>
       <div class="lrow-sub">${esc(unitsLine(unitsOf(b)))} — ${esc(svcList(b.services))}</div>
-      <div class="lrow-sub">${esc(b.preferred_on ? 'Wants ' + shortDate(b.preferred_on) + ' ' + (b.slot || '').toUpperCase() : 'No day yet')} · ${esc(b.address)}</div>
+      <div class="lrow-sub">${esc(b.preferred_on ? 'Wants ' + shortDate(b.preferred_on) + ' ' + slotShort(b.slot) : 'No day yet')} · ${esc(b.address)}</div>
       ${miniSteps({booking: b, job: Object.values(db.jobs).find(j => j.booking_id === b.id) || null})}
     </div>
     <div class="lrow-side">${pill(b.status, b.ref)}<span class="lrow-price">${esc(bookingPrice(b) != null ? peso0(bookingPrice(b)) : '₱ ?')}</span>
@@ -1807,7 +1844,7 @@ function panelEditBooking(p){
     full_name: b.full_name || '', contact: b.contact || '', address: b.address || '', landmark: b.landmark || '',
     lat: b.lat != null ? String(b.lat) : '', lng: b.lng != null ? String(b.lng) : '',
     units: unitsOf(b).map(u => ({...u, services: [...u.services]})), notes: b.notes || '',
-    date: b.preferred_on || '', slot: b.slot || 'am', _origDate: b.preferred_on || ''});
+    date: b.preferred_on || '', slot: b.slot || 'am', _origDate: b.preferred_on || '', _origSlot: b.slot || 'am'});
   return {title: 'Edit the booking', sub: b.full_name + ' · ' + b.ref, info: 'editbooking',
     body: heroFormHtml('edit', p, bookFormHtml('panel', p))};
 }
@@ -1887,7 +1924,7 @@ function jobRow(j){
   const c = jobCust(j);
   return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
     <div class="lrow-when">${j.scheduled_on
-      ? `<b>${esc((j.slot || '').toUpperCase())}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
+      ? `<b>${esc(slotShort(j.slot))}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
       : '<b>—</b><span>no date</span>'}</div>
     <div class="lrow-main">
       <div class="lrow-title">${newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
@@ -1998,7 +2035,7 @@ function panelSchedule(p){
   const word = j.scheduled_on ? 'Change the time' : 'Schedule it';
   // the booking form's own day-and-time piece (ui.md, Reuse)
   return {title: word, sub: jobCust(j).full_name, body: `
-    ${bkWhenHtml('panel', p, {notYet: false, slot: true})}
+    ${bkWhenHtml('panel', p, {notYet: false})}
     <div class="stack"><button type="button" class="b primary wide" data-act="schedule" data-id="${esc(j.id)}">${word}</button></div>`, info: 'schedule'};
 }
 function panelPrice(p){
@@ -3827,6 +3864,7 @@ const ACTIONS = {
     bkClear(ctx, el.dataset.f);
     bkRedraw(ctx);
   },
+  bktime: (id, el) => bkTime(el.dataset.cart, el.dataset.f, el.dataset.v),
   bkpin: (id, el) => bkPin(el.dataset.cart),
   bkcontact: (id, el) => bkContact(el.dataset.cart),
   bkmap: (id, el) => bkMap(el.dataset.cart),
@@ -3919,7 +3957,7 @@ const ACTIONS = {
     const name = fresh ? p.full_name.trim() : c.full_name;
     const bid = uuid();
     const units = p.units.map(u => ({...u, services: [...u.services]}));
-    const details = {new_customer: fresh, units, notes: (p.notes || '').trim(), date: p.date || null, slot: p.date ? p.slot : null};
+    const details = {new_customer: fresh, units, notes: (p.notes || '').trim(), date: p.date || null, slot: p.date || isClock(p.slot) ? p.slot : null};
     if (fresh) Object.assign(details, {full_name: name, contact: p.contact.trim(), address: p.address.trim(),
       landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null});
     else details.customer_id = c.id;
@@ -3939,6 +3977,7 @@ const ACTIONS = {
     const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
     const d = p.date != null ? p.date : j.scheduled_on, s = p.slot || j.slot || 'am';
     if (!d){ notice('Choose a day first. Nothing was changed.', true); return; }
+    if (!isClock(s) && s !== j.slot){ bkShow('panel', p, [['slot', 'Choose the hour.']]); return; }
     write('schedule_job', {p_job: id, p_date: d, p_slot: s, p_decided_at: null},
       'Schedule ' + (jobCust(j).full_name || 'job'), [id], () => {
         j.scheduled_on = d; j.slot = s;
@@ -4137,6 +4176,7 @@ document.addEventListener('input', e => {
     const c = db.customers[id]; if (c && c.check_every && c.check_next !== v){ t.blur(); saveCheck(c, c.check_every, v, Number(v.slice(8, 10))); }
     return;
   }
+  if (t.dataset && t.dataset.bktime){ t.blur(); bkTime(t.dataset.cart, t.dataset.bktime, t.value); return; }   // the time (33)
   // THE booking form: every box writes to its form's state, and typing clears its red
   if (t.dataset && t.dataset.bk){
     const ctx = t.dataset.cart, s = bkState(ctx); if (!s) return;
@@ -4525,10 +4565,10 @@ function routeMap(day){
   stops.forEach((j, i) => {
     const c = jobCust(j);
     if (c.lat != null && c.lng != null) pts.push({lat: +c.lat, lng: +c.lng, label: String(i + 1), cls: 'stop', icon: '📍',
-      title: (i + 1) + '. ' + (c.full_name || '') + ' — ' + (j.slot || '').toUpperCase(), onTap: () => mapGo('job', j.id)});
+      title: (i + 1) + '. ' + (c.full_name || '') + ' — ' + slotShort(j.slot), onTap: () => mapGo('job', j.id)});
   });
   const list = stops.map((j, i) => { const c = jobCust(j);
-    return mapRow('job', j.id, (c.full_name || 'Job'), (j.slot || '').toUpperCase() + ' · ' + place(c) + (c.lat == null ? ' · no pin — Google Maps finds the address' : ''), String(i + 1)); }).join('')
+    return mapRow('job', j.id, (c.full_name || 'Job'), slotShort(j.slot) + ' · ' + place(c) + (c.lat == null ? ' · no pin — Google Maps finds the address' : ''), String(i + 1)); }).join('')
     + `<a class="b primary wide" target="_blank" rel="noopener" href="${esc(routeUrl(stops))}">Open in Google Maps</a>`;
   openMapView((day === 'today' ? 'Today' : 'Tomorrow') + '’s route', stops.length + ' stop' + (stops.length === 1 ? '' : 's') + ', morning first', pts, list);
 }
