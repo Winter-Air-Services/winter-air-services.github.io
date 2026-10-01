@@ -4,9 +4,10 @@
    gets the newest page, and a phone in a dead zone still gets a page. Only this site's own
    page is kept — never a Supabase answer. The data a technician needs offline lives in the
    page's own local copy (see `db` in index.html), not here. */
-const CACHE = 'ws-page-v3';
-// version.js: so Settings → About still knows the version with no signal.
-const PAGE = ['./', './index.html', './version.js'];
+const CACHE = 'ws-page-v4';
+// version.js: so Settings → About still knows the version with no signal. app.js: the page's
+// script, its own file since 2026-10-01 (the Content-Security-Policy runs no inline script).
+const PAGE = ['./', './index.html', './app.js', './version.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PAGE)).then(() => self.skipWaiting()));
