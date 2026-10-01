@@ -2016,10 +2016,14 @@ function bkInput(ctx, s, f, label, opt, attrs, side){
   return `<label class="bk-f${bkCls(s, f)}" data-bkf="${f}">${label}${opt ? ` <span class="opt">${opt}</span>` : ''}
     ${side ? `<span class="bk-row">${box}${side}</span>` : box}</label>${bkWhy(s, f)}`;
 }
-/* Phonebook (Guile for the owner, 2026-09-30): his phone-book icon beside the office's number
-   box, APK only — Android's own picker fills the name and the number. Never on the public page. */
+/* Phonebook (Guile for the owner, 2026-09-30): his phone-book icon beside the number box, and
+   the phone's own picker fills the name and the number. The APK asks Android; the customer's
+   page too (Guile, 2026-10-01), in a browser that has a contact picker — Chrome on Android.
+   Nowhere else can a page reach the phonebook, so there the icon is not drawn at all. */
+const pageContacts = () => !!(navigator.contacts && navigator.contacts.select);
+const canPickContact = () => (inApk && !!window.AndroidBridge.pickContact) || pageContacts();
 function bkBookBtn(ctx, s){
-  if (ctx === 'pub' || s._lockWho || !(inApk && window.AndroidBridge.pickContact)) return '';
+  if (s._lockWho || !canPickContact()) return '';
   return `<button type="button" class="b bk-book" data-act="bkcontact" data-cart="${ctx}" aria-label="Pick from the phonebook" title="Pick from the phonebook">${ico('phone-book')}</button>`;
 }
 /* "+63 917 123 4567" in the phonebook is "09171234567" here, so Same number still finds them. */
@@ -2027,7 +2031,11 @@ const phoneFromBook = n => { const d = digits(n); return /^63\d{10}$/.test(d) ? 
 async function bkContact(ctx){
   const s = bkState(ctx); if (!s) return;
   let got;
-  try { got = await wsNet.call('pickContact', []); } catch (e){ toast(e.message, true); return; }
+  try {
+    if (inApk && window.AndroidBridge.pickContact) got = await wsNet.call('pickContact', []);
+    else { const [c] = await navigator.contacts.select(['name', 'tel'], {multiple: false});   // nothing picked: []
+      got = c ? JSON.stringify({name: (c.name || [])[0] || '', number: (c.tel || [])[0] || ''}) : ''; }
+  } catch (e){ toast(e.message, true); return; }
   if (!got || bkState(ctx) !== s) return;   // backed out, or the form closed meanwhile
   const {name, number} = JSON.parse(got);
   if (number){ s.contact = phoneFromBook(number); bkClear(ctx, 'contact'); }
@@ -2733,6 +2741,7 @@ function panelBooking(p){
         ? 'Saved ' + niceDate(manilaDay(b.quote.saved_at)) + ' · ' + peso(b.quote.total)
         : 'Make one to send — print it or save it as a PDF') : ''}
       ${menuRow('bookingstatus', b.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}
+      ${db.role === 'admin' ? menuRow('delbooking', b.id, '🗑️', 'Delete this booking', (job ? 'With its job. ' : '') + 'You will be warned first.', 'is-danger') : ''}
     </div>
     ${same.length && !mine ?`<p class="hint">Same number as ${same.map(c => esc(c.full_name) + ' (' + esc(c.address) + ')').join('; ')} — accept as the same customer so their history stays in one place.</p>` : ''}
     ${b.status === 'new' && b.quote ? `<label>Price for the job <span class="opt">— optional; the quotation says ${esc(peso(b.quote.total))}</span>
@@ -2875,6 +2884,7 @@ function panelJob(p){
       ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'Customer’s history', c.full_name) : ''}
       ${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print on A4')}
       ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
+      ${menuRow('deljob', j.id, '🗑️', 'Delete this job', (bookingOfJob(j) ? 'With its booking. ' : '') + 'You will be warned first.', 'is-danger')}
     </div>`;
   // L3: the gate photo first on a technician's screen — the first thing needed at the street
   return {title: c.full_name || 'Job', sub: svcList(j.services), body: `
@@ -2963,6 +2973,35 @@ function panelCancel(p){
     <label>Why <span class="opt">— optional; empty says “No reason”</span>
       <input data-pf="why" maxlength="300" value="${esc(p.why || '')}" placeholder="Customer cancelled, no parts…"></label>
     <div class="stack"><button type="button" class="b danger wide" data-act="cancel" data-id="${esc(j.id)}">Cancel this job</button></div>`, info: 'cancel'};
+}
+/* Delete a job or a booking, whatever its status (31, the owner via Guile, 2026-10-01). A job
+   and the booking it came from go together — half a pair shows on the customer's My bookings
+   as a booking with no job. The customer's file stays. Warned, then a tick, as Delete customer. */
+function workPair(p){
+  const j = p.kind === 'deljob' ? db.jobs[p.id] : Object.values(db.jobs).find(x => x.booking_id === p.id);
+  const b = p.kind === 'deljob' ? bookingOfJob(j) : db.bookings[p.id];
+  return {j: j || null, b: b || null};
+}
+function panelDelete(p){
+  const {j, b} = workPair(p), job = p.kind === 'deljob';
+  if (!(job ? j : b)) return {title: 'Delete', body: empty('This is no longer on this phone.')};
+  const name = (j && jobCust(j).full_name) || (b && b.full_name) || '';
+  const what = j && b ? 'This job and its booking ' + b.ref : j ? 'This job' : 'Booking ' + b.ref;
+  const warn = [];
+  if (j && j.status === 'in_progress') warn.push('A technician has started it.');
+  else if (j && ['booked', 'scheduled'].includes(j.status) && j.scheduled_on)
+    warn.push('It is on ' + niceDate(j.scheduled_on) + ' — it leaves the technicians’ phones too.');
+  if (j && j.status === 'done') warn.push('It is done' + (j.paid_method ? ' and paid' : '') + ' — Numbers stop counting it.');
+  if (b && b.source === 'page') warn.push('The weekly count of bookings from the page drops it.');
+  if ((b && b.quote) || (j && j.quote)) warn.push('Its quotation goes too.');
+  if (b && b.account_id) warn.push('It leaves the customer’s own My bookings.');
+  return {title: job ? 'Delete the job' : 'Delete the booking', sub: name, body: `
+    <div class="inline-note"><span>⚠️ <b>${esc(what)}</b>${name ? ' for <b>' + esc(name) + '</b>' : ''}
+      ${j && b ? 'are' : 'is'} deleted with ${j && b ? 'their' : 'its'} history — from every phone.
+      ${esc(warn.join(' '))} ${(j && j.customer_id) || (b && b.customer_id) ? 'The customer’s file stays.' : ''}
+      <b>This cannot be undone.</b></span></div>
+    <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, delete it</label>
+    <div class="stack"><button type="button" class="b danger wide" data-act="delwork" data-id="${esc(p.id)}">Delete for good</button></div>`};
 }
 
 /* ---------------------------------------------------------------- customers */
@@ -4297,8 +4336,9 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   editbooking: panelEditBooking, service: panelService, receipt: panelReceipt, quote: panelQuote, jobquote: panelQuote, utype: panelUtype, ppcrop: panelPpcrop,
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
-  book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust};
-const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy']);
+  book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
+  deljob: panelDelete, delbooking: panelDelete};
+const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
 const topPanel = () => stack[stack.length - 1];
@@ -4318,6 +4358,15 @@ function closePanel(){
   if (history.state && history.state.ws){ ignorePop++; history.back(); }
 }
 function replacePanel(p){ stack[stack.length - 1] = p; render(); }
+/* Several screens at once — after a delete, the warning AND the job under it. One history
+   step back, so one popstate to ignore. */
+function closePanels(n){
+  const k = Math.min(n, stack.length); if (!k) return;
+  stack.splice(stack.length - k, k);
+  render();
+  const depth = history.state && history.state.ws || 0;
+  if (depth){ ignorePop++; history.go(-Math.min(k, depth)); }
+}
 window.addEventListener('popstate', () => {
   if (ignorePop){ ignorePop--; return; }
   if (stack.length){ stack.pop(); render(); }
@@ -4984,6 +5033,19 @@ const ACTIONS = {
     });
     if (old){ op.cleanup_photo = old; saveLocal(); }
     closePanel();
+  },
+  // a job or a booking, and the other half of its pair (31)
+  delwork: () => {
+    const p = topPanel(); if (!p || !['deljob', 'delbooking'].includes(p.kind)) return;
+    if (!p.ok){ notice('Tick the box first — deleting cannot be undone.', true); return; }
+    const {j, b} = workPair(p);
+    const jids = Object.values(db.jobs).filter(x => (j && x.id === j.id) || (b && x.booking_id === b.id)).map(x => x.id);
+    const name = (j && jobCust(j).full_name) || (b && b.full_name) || '';
+    write('delete_job', p.kind === 'deljob' ? {p_job: p.id} : {p_booking: p.id},
+      'Delete ' + (j ? 'job' : 'booking ' + b.ref) + (name ? ' — ' + name : ''), [...jids, ...(b ? [b.id] : [])], db => {
+        jids.forEach(k => delete db.jobs[k]); if (b) delete db.bookings[b.id];
+      });
+    closePanels(2);   // the warning, and the job or booking it was about
   },
   tidy: () => {
     const p = topPanel() || {};
