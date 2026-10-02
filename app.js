@@ -883,6 +883,7 @@ const INFO = {
   book: ['Book a job', 'For a call you took yourself. It goes to the Inbox first, marked “By phone”: look it over, make the quotation, then Accept — as for a booking from the page.\n\nThe Numbers count the page’s bookings only, so these are left out of them.'],
   cancel: ['Cancel', 'Every technician stops seeing it as work. Undo on the job puts it back.'],
   roles: ['What they can do', 'Technician — sees every job on the schedule, marks jobs started and done.\n\nAdmin — everything: bookings, jobs, customers, team and settings.\n\nCustomer — books on the page and sees their own bookings. Nothing else.'],
+  smssender: ['This phone sends the texts', 'Texts to customers go from this phone, on its own SIM and load — turn it on on the owner\'s phone only, or customers get the same text twice. Android asks once to allow it. For now it only sends a test text; the reminders come next.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
   showpricestech: ['Show prices to technicians', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt.\n\nOff: technicians never see a price; the server does not even send it.'],
   closedwd: ['Closed every week', 'Tap the weekdays the shop never works. The booking page greys them out and will not take a booking for one. Book a job (a call you take) only warns you.'],
@@ -3390,6 +3391,8 @@ function panelSettings(){
         <b>${slotCap() || '—'}</b><button type="button" class="b" data-act="slotcap" data-v="1" aria-label="One more" ${slotCap() >= 50 ? 'disabled' : ''}>+</button></div>
     </div>` : ''}
 
+    ${role === 'admin' ? smsCardHtml() : ''}
+
     <div class="sec">This phone</div>
     <div class="card">
       ${kv('Sending', esc(failed ? failed + ' not sent — see the red cards' : unsent ? unsent + ' waiting' + (online ? '' : ', offline') : online ? 'All sent' : 'Offline'))}
@@ -3405,6 +3408,35 @@ function panelSettings(){
 
     <div class="stack"><button type="button" class="b danger wide" data-act="logout">Log out</button></div>
     <p class="credit">Icons by <a href="https://www.flaticon.com/" target="_blank" rel="noopener">Flaticon</a></p>`};
+}
+
+/* Automatic texts, step 1 (the owner via Guile, 2026-10-02): may this phone send texts, and
+   does one test text arrive? Only the owner's phone sends — so it is switched on per phone,
+   and kept on this phone only. The APK only: a web page cannot send a text. */
+const smsCapable = () => inApk && !!window.AndroidBridge.sendSms;
+let smsBusy = false;
+function smsState(){ try { return window.AndroidBridge.smsState(); } catch (e) { return 'none'; } }
+function smsCardHtml(){
+  if (!smsCapable()) return '';
+  const state = smsState(), on = lsGet('ws_sms_sender', false) && state === 'granted', t = lsGet('ws_sms_test', {});
+  const sw = `<div class="card row-between">
+      <div class="menu-title">This phone sends the texts ${infoBtn('smssender')}</div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
+        `<button type="button" class="${on === v ? 'active' : ''}" data-act="smssender" data-v="${v}" ${state === 'none' ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+    </div>`;
+  const why = state === 'none' ? `<div class="card"><div class="sms-note">This device cannot send texts — no SIM part. Texts go from the owner's phone.</div></div>`
+    : state === 'blocked' && lsGet('ws_sms_sender', false) ? `<div class="card"><div class="sms-note">Android has stopped asking. In the app's settings: Permissions → SMS → Allow. If it says "restricted setting", tap ⋮ at the top → Allow restricted settings, then try again.</div>
+        <div class="actions"><button type="button" class="b" data-act="smssettings">Open the app's settings</button></div></div>` : '';
+  const test = on ? `<div class="card">
+      <label>Send a test text to<input data-k="smsTestNo" id="smsTestNo" type="tel" inputmode="tel" maxlength="20" value="${esc(t.no || '')}" placeholder="Your own number, 09…" autocomplete="off"></label>
+      ${t.at ? `<div class="sms-note${t.ok ? '' : ' bad'}">${esc(t.ok ? 'Sent ' + timeAgo(t.at) + (t.parts > 1 ? ' as ' + t.parts + ' parts' : '') + ' — check that it arrived.' : 'Not sent ' + timeAgo(t.at) + ': ' + t.why)}</div>` : ''}
+      <div class="actions"><button type="button" class="b" data-act="smstest" ${smsBusy ? 'disabled' : ''}>${smsBusy ? 'Sending…' : 'Send a test text'}</button></div>
+    </div>` : '';
+  return `<div class="sec">Texts to customers</div>${sw}${why}${test}`;
+}
+function smsTestText(){
+  const now = new Date().toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila'});
+  return 'Winter Air test text, sent by the app on its own at ' + now + '. No reply needed.';
 }
 
 /* ---------------------------------------------------------------- panels
@@ -3540,6 +3572,26 @@ const ACTIONS = {
   infook: () => hideInfo(),
   logout: (id, el) => logOut(el),
   theme: (id, el) => { lsSet('ws_theme', el.dataset.v); applyTheme(); render(); },
+  smssender: async (id, el) => {
+    if (el.dataset.v !== 'true'){ lsSet('ws_sms_sender', false); render(); return; }
+    lsSet('ws_sms_sender', true);
+    let state = smsState();
+    if (state === 'ask'){
+      try { state = await wsNet.call('askSms', []); } catch (e) { toast(e.message, true); }
+    }
+    if (state !== 'granted' && state !== 'blocked'){ lsSet('ws_sms_sender', false); toast('Not allowed — this phone will not send texts.', true); }
+    render();
+  },
+  smssettings: () => window.AndroidBridge.openAppSettings(),
+  smstest: async () => {
+    const no = digits(val('smsTestNo') || '');
+    if (no.length < 10){ toast('Type the number to send it to, e.g. 0917 123 4567.', true); return; }
+    smsBusy = true; render();
+    const t = {no, at: new Date().toISOString()};
+    try { t.parts = Number(await wsNet.call('sendSms', [no, smsTestText()])); t.ok = true; }
+    catch (e) { t.ok = false; t.why = e.message; }
+    smsBusy = false; lsSet('ws_sms_test', t); render();
+  },
   months: (id, el) => {
     const n = Math.min(24, Math.max(1, checkupMonths() + Number(el.dataset.v)));
     write('set_shop_setting', {p_key: 'checkup_months', p_value: n}, 'Check-up gap ' + n + ' month' + (n === 1 ? '' : 's'), ['checkup_months'],
