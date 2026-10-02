@@ -341,6 +341,7 @@ async function pull(){
   else Object.keys(statusLive).forEach(k => { if (statusLive[k].error) delete statusLive[k]; });
   saveLocal();
   render();
+  textTick();
 }
 /* What a pull changed on this phone, by comparing before and after — so a full fresh copy
    that brought nothing new says "nothing new", not "40 received". */
@@ -883,7 +884,14 @@ const INFO = {
   book: ['Book a job', 'For a call you took yourself. It goes to the Inbox first, marked “By phone”: look it over, make the quotation, then Accept — as for a booking from the page.\n\nThe Numbers count the page’s bookings only, so these are left out of them.'],
   cancel: ['Cancel', 'Every technician stops seeing it as work. Undo on the job puts it back.'],
   roles: ['What they can do', 'Technician — sees every job on the schedule, marks jobs started and done.\n\nAdmin — everything: bookings, jobs, customers, team and settings.\n\nCustomer — books on the page and sees their own bookings. Nothing else.'],
-  smssender: ['This phone sends the texts', 'Texts to customers go from this phone, on its own SIM and load — turn it on on the owner\'s phone only, or customers get the same text twice. Android asks once to allow it. For now it only sends a test text; the reminders come next.'],
+  smssender: ['This phone sends the texts', 'Texts to customers go from this phone, on its own SIM and load — turn it on on the owner\'s phone only, or customers get the same text twice. Android asks once to allow it. What it sends, and when, is Admin → Texts.'],
+  chksms: ['Texts allowed', 'Lets Winter Air send texts from this phone\'s SIM.\n\n1. Tap Allow beside this line.\n2. Android asks "Allow Winter Air to send and view SMS messages?" — tap Allow.\n\nPressed "Don\'t allow" twice? Android stops asking. Then:\n1. Tap Open settings.\n2. Permissions → SMS → Allow.\n3. If it says "Restricted setting": tap ⋮ at the top right → Allow restricted settings, then do step 2 again.'],
+  chkbatterymi: ['Battery: No restrictions', 'Battery saving can stop the reminders from going on time.\n\n1. Tap Open settings beside this line — Winter Air\'s own settings open.\n2. Tap Battery saver.\n3. Choose No restrictions.\n4. Come back to Winter Air — the line turns ✔️.\n\nOr: Settings → Apps → Manage apps → Winter Air → Battery saver → No restrictions.'],
+  chkbattery: ['Battery: No restrictions', 'Battery saving can stop the reminders from going on time.\n\n1. Tap Allow beside this line.\n2. Android asks to let the app always run in the background — tap Allow.\n3. Come back to Winter Air — the line turns ✔️.\n\nOr: Settings → Apps → Winter Air → Battery → Unrestricted.'],
+  chkautostart: ['Background autostart', 'On a Xiaomi, Redmi or Poco phone, an app that is closed is not woken for its reminders unless Autostart is on (measured 2026-10-02: off, the reminder never went).\n\n1. Tap Open Autostart beside this line.\n2. Find Winter Air in the list (search "winter").\n3. Turn it on.\n4. Come back to Winter Air — the line turns ✔️.\n\nOr: Settings → Apps → Manage apps → Background autostart → search "winter" → turn it on.'],
+  chksim: ['Sends from', 'Which SIM the texts go from, and so which number customers see and whose load pays.\n\nTap the SIM to use. "The phone\'s default" is the SIM Android uses for texts (Settings → SIM cards & mobile networks → Default for SMS).\n\nIf the line is ❌, the phone is set to "Ask every time": choose a SIM here.'],
+  texter: ['Sends texts to customers', 'On: this person sees Texts to customers in Settings, 💬 Text on a job and Text all of Tomorrow, and their phone may be the sending phone. Off: none of it — and if their phone was the sending phone, it stops at its next refresh. Any admin can change it, for themselves too.'],
+  textauto: ['Send texts by themselves', 'The phone with "This phone sends the texts" on sends them, at your times, even with the app closed — never the same text twice. A job is texted from the time this is turned on; jobs scheduled before then are not.\n\nThe reminders are written each time the app is open on that phone: a job cancelled on another phone after that can still get one. Open the app once in the evening and it is up to date.\n\nOff: nothing is sent unless you press 💬 Text on a job.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
   showpricestech: ['Show prices to technicians', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt.\n\nOff: technicians never see a price; the server does not even send it.'],
   closedwd: ['Closed every week', 'Tap the weekdays the shop never works. The booking page greys them out and will not take a booking for one. Book a job (a call you take) only warns you.'],
@@ -1885,7 +1893,7 @@ function jobTabsHtml(){
   if (!days.some(d => d[0] === ui[key])) ui[key] = 'today';
   const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
   const rows = jobList(ui[key]);
-  return chips(tech ? 'techday' : 'day', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + routeBar(ui[key]) +
+  return chips(tech ? 'techday' : 'day', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + routeBar(ui[key]) + (tech ? '' : textAllBar(ui[key])) +
     (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
 }
 function drawJobs(){ return jobTabsHtml(); }
@@ -1989,9 +1997,10 @@ function panelJob(p){
             `<button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="${m}">${m === 'cash' ? '💵 Cash' : m === 'gcash' ? '📱 GCash' : 'Other'}</button>`).join('')}`}</div>`}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
       ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
-      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${j.status !== 'cancelled' || !tech ? editBtn('editjob', j.id) : ''}</div>
+      <div class="actions">${callBtn(c.contact)}${tech ? '' : textBtn(j)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${j.status !== 'cancelled' || !tech ? editBtn('editjob', j.id) : ''}</div>
     </div>
     ${tech ? '' : wantNote(j)}
+    ${tech ? '' : textsDoneHtml(j)}
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons &amp; appliances</div>
     ${cartHtml('view', unitsOf(j), {pf: tech && !techPrice ? null : officePrice, missing: 'Not every service has a price yet'})}
@@ -2406,6 +2415,12 @@ function panelMember(p){
       ${kv('Joined', esc(t.created_at ? new Date(t.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : '—'))}
       ${kv('Last seen', esc(timeAgo(t.last_sign_in_at)))}
     </div>
+    ${t.role === 'admin' ? `<div class="card row-between">
+      <div class="lrow-main"><div class="menu-title">Sends texts to customers ${infoBtn('texter')}</div>
+        <div class="sms-note">${textTexters().includes(t.id) ? 'Sees Texts to customers in Settings, 💬 Text on jobs and Text all.' : 'Sees none of the texting.'}</div></div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
+        `<button type="button" class="${textTexters().includes(t.id) === v ? 'active' : ''}" data-act="texter" data-id="${esc(t.id)}" data-v="${v}">${l}</button>`).join('')}</div>
+    </div>` : ''}
     ${me ? `<p class="hint">This is you. Another admin changes your role; nobody can switch themselves off.
       Your name is what technicians and customers see on the steps you take.</p>
     <label>Name <input data-pf="name" maxlength="60" value="${esc(name)}" placeholder="e.g. Guile"></label>
@@ -2424,11 +2439,11 @@ function panelMember(p){
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
   const secs = [['services', 'Services & prices'], ['types', 'Appliances'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['numbers', 'Numbers']];
+    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['texts', 'Texts'], ['numbers', 'Numbers']];
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
     ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, receipt: drawReceiptSample, quote: drawQuoteAdmin,
-      numbers: drawNumbers})[v]();
+      texts: drawTexts, numbers: drawNumbers})[v]();
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
    it"): the weekdays the shop never works, and a month calendar to close particular dates —
@@ -3415,29 +3430,359 @@ function panelSettings(){
    and kept on this phone only. The APK only: a web page cannot send a text. */
 const smsCapable = () => inApk && !!window.AndroidBridge.sendSms;
 let smsBusy = false;
+async function smsAllowed(){
+  let state = smsState();
+  if (state === 'ask'){ try { state = await wsNet.call('askSms', []); } catch (e) {} }
+  if (state === 'granted') return true;
+  toast(state === 'blocked' ? 'Android blocks texts from this app — Settings → Texts to customers shows how to allow it.'
+    : state === 'none' ? 'This device cannot send texts.' : 'Not allowed — this phone will not send texts.', true);
+  return false;
+}
 function smsState(){ try { return window.AndroidBridge.smsState(); } catch (e) { return 'none'; } }
+/* What the phone must allow before it may send by itself (Guile, 2026-10-02): his mother's
+   Redmi let the app send by hand, but at 1:55 HyperOS would not wake it for its alarm —
+   Background autostart was off. So the switch stays off until every line is ✔, and a line
+   that goes ❌ later (Don't allow, battery saver back on) turns the sending off with it. */
+/* Which SIM (Guile, 2026-10-02: "the Default sim selection can it not be used on the app?"):
+   the owner's two-SIM Xiaomi failed with the modem's code 16, and a phone set to "Ask every
+   time" has no default for an app to use. The phone says which SIMs it has and its default;
+   the office picks one here, kept on this phone. */
+function smsSims(){ try { return JSON.parse(window.AndroidBridge.sims ? window.AndroidBridge.sims() : '{}'); } catch (e) { return {}; } }
+function smsSim(){
+  const s = smsSims(), list = s.list || [], pick = lsGet('ws_sms_sim', null);
+  if (pick != null && list.some(x => x.slot === pick)) return pick;
+  return list.length === 1 ? list[0].slot : s.default != null ? s.default : -1;
+}
+const simName = x => 'SIM ' + (x.slot + 1) + (x.name ? ' · ' + x.name : '');
+function smsChecks(){
+  const state = smsState();
+  let free = true, auto = 'na';
+  try { free = !!window.AndroidBridge.batteryFree(); } catch (e) {}
+  try { auto = window.AndroidBridge.autostart ? window.AndroidBridge.autostart() : 'na'; } catch (e) {}
+  const xiaomi = auto !== 'na';
+  const list = [
+    {k: 'sms', info: 'chksms', ok: state === 'granted', label: 'Texts allowed',
+     fix: state === 'blocked' ? ['smssettings', 'Open settings'] : ['smsask', 'Allow'],
+     help: state === 'blocked' ? 'Android stopped asking after "Don\'t allow". In the app\'s settings: Permissions → SMS → Allow. If it says "restricted setting", tap ⋮ at the top → Allow restricted settings first.'
+       : state === 'ask' ? 'Tap Allow, then Allow again on Android\'s question.' : ''},
+    {k: 'battery', info: xiaomi ? 'chkbatterymi' : 'chkbattery', ok: free, label: 'Battery: No restrictions',
+     fix: xiaomi ? ['smssettings', 'Open settings'] : ['smsbattery', 'Allow'],
+     help: xiaomi ? 'Battery saver → No restrictions.' : 'Without it, Android can hold the reminders back for hours.'},
+  ];
+  const sims = smsSims(), sl = sims.list || [];
+  if (sl.length){
+    const pick = lsGet('ws_sms_sim', null), use = smsSim(), now = sl.find(x => x.slot === use);
+    list.push({k: 'sim', info: 'chksim', ok: !!now, label: now ? 'Sends from ' + simName(now) + (pick == null || !sl.some(x => x.slot === pick) ? ' — the phone\'s default' : '') : 'Sends from: no SIM chosen',
+      help: 'This phone asks which SIM every time — choose one below.',
+      choose: sl.length > 1 ? `<div class="segment mini sms-sims">${sl.map(x =>
+        `<button type="button" class="${x.slot === use ? 'active' : ''}" data-act="smssim" data-v="${x.slot}">${esc(simName(x))}</button>`).join('')}</div>` : ''});
+  }
+  if (xiaomi) list.push({k: 'autostart', info: 'chkautostart', ok: auto === 'on', unknown: auto === 'unknown', label: 'Background autostart',
+    fix: ['smsautostart', 'Open Autostart'],
+    help: auto === 'unknown' ? 'This phone would not say — check that Winter Air is on in the list.' : 'Find Winter Air in the list and turn it on.'});
+  return {state, list, ready: list.every(c => c.ok || c.unknown)};
+}
 function smsCardHtml(){
-  if (!smsCapable()) return '';
-  const state = smsState(), on = lsGet('ws_sms_sender', false) && state === 'granted', t = lsGet('ws_sms_test', {});
+  if (!smsCapable() || !canTextHere()) return '';
+  const {state, list, ready} = smsChecks(), on = isSenderHere() && ready, t = lsGet('ws_sms_test', {}), who = textSender();
+  if (state === 'none') return `<div class="sec">Texts to customers</div>
+    <div class="card"><div class="sms-note">This device has no SIM, so it cannot send texts by itself${who ? ' — ' + esc(who.name) + ' sends them' : ''}.
+      To text a customer from here: open the job → 💬 Text → Open in Messages. A tablet paired with a phone in Google Messages sends it through the phone; press Send there.</div></div>`;
+  const checks = `<div class="card">${list.map(c => `<div class="row-between sms-check">
+      <div class="lrow-main"><div class="menu-title">${c.ok ? '✔️' : c.unknown ? '⚠️' : '❌'} ${esc(c.label)} ${c.info ? infoBtn(c.info) : ''}</div>
+        ${c.ok ? '' : `<div class="sms-note${c.unknown ? '' : ' bad'}">${esc(c.help)}</div>`}${c.choose || ''}</div>
+      ${c.ok || !c.fix ? '' : `<button type="button" class="b" data-act="${c.fix[0]}">${esc(c.fix[1])}</button>`}</div>`).join('')}</div>`;
   const sw = `<div class="card row-between">
-      <div class="menu-title">This phone sends the texts ${infoBtn('smssender')}</div>
+      <div class="lrow-main"><div class="menu-title">This phone sends the texts ${infoBtn('smssender')}</div>
+        <div class="sms-note">${esc(on ? 'This phone sends them — the only one.' : who ? 'Sending phone: ' + who.name + (isSenderHere() ? ' (this phone)' : '') + '. On here takes over; that phone stops.' : 'No phone sends texts yet.')}</div>
+        ${ready ? '' : `<div class="sms-note">Every line above must be ✔️ first.</div>`}</div>
       <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
-        `<button type="button" class="${on === v ? 'active' : ''}" data-act="smssender" data-v="${v}" ${state === 'none' ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+        `<button type="button" class="${on === v ? 'active' : ''}" data-act="smssender" data-v="${v}" ${v && !ready ? 'disabled' : ''}>${l}</button>`).join('')}</div>
     </div>`;
-  const why = state === 'none' ? `<div class="card"><div class="sms-note">This device cannot send texts — no SIM part. Texts go from the owner's phone.</div></div>`
-    : state === 'blocked' && lsGet('ws_sms_sender', false) ? `<div class="card"><div class="sms-note">Android has stopped asking. In the app's settings: Permissions → SMS → Allow. If it says "restricted setting", tap ⋮ at the top → Allow restricted settings, then try again.</div>
-        <div class="actions"><button type="button" class="b" data-act="smssettings">Open the app's settings</button></div></div>` : '';
   const test = on ? `<div class="card">
       <label>Send a test text to<input data-k="smsTestNo" id="smsTestNo" type="tel" inputmode="tel" maxlength="20" value="${esc(t.no || '')}" placeholder="Your own number, 09…" autocomplete="off"></label>
       ${t.at ? `<div class="sms-note${t.ok ? '' : ' bad'}">${esc(t.ok ? 'Sent ' + timeAgo(t.at) + (t.parts > 1 ? ' as ' + t.parts + ' parts' : '') + ' — check that it arrived.' : 'Not sent ' + timeAgo(t.at) + ': ' + t.why)}</div>` : ''}
       <div class="actions"><button type="button" class="b" data-act="smstest" ${smsBusy ? 'disabled' : ''}>${smsBusy ? 'Sending…' : 'Send a test text'}</button></div>
     </div>` : '';
-  return `<div class="sec">Texts to customers</div>${sw}${why}${test}`;
+  return `<div class="sec">Texts to customers</div>${checks}${sw}${test}`;
 }
 function smsTestText(){
   const now = new Date().toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila'});
   return 'Winter Air test text, sent by the app on its own at ' + now + '. No reply needed.';
 }
+
+/* ---------------------------------------------------------------- texts to customers (34)
+   Step 2 (the owner via Guile, 2026-10-02). The owner's phone texts scheduled customers by
+   itself: a reminder the day before and/or on the day at his times, and a text when a job is
+   scheduled or moved. Admin → Texts holds his switches and wording; the job's Text button and
+   "Text all of Tomorrow" send by hand. ONE writer of the message — textCompose — for all of
+   them, and one record of what went — textsOf — so nothing goes twice:
+     · the server's jobs.texts (record_text, queued like every write),
+     · this phone's copy until that lands (ws_texts),
+     · what the closed app sent and has not handed over yet (TextAlarms' log).
+   The reminders are sent by the phone's alarm (TextAlarms.java) from a PLAN this page writes;
+   a "booked" text goes from here, the moment this phone sees the job scheduled. */
+const TEXT_WORDS = {
+  reminder: 'Hi {name}, this is {owner} of {company}. A reminder: your service is {when}.\n{appliances}\n{price}\nTo change it, call or text {phone}. Thank you!',
+  booked: 'Hi {name}, this is {owner} of {company}. Your service is booked for {when}.\n{appliances}\n{price}\nTo change it, call or text {phone}. Thank you!',
+};
+const TEXT_FILLINS = ['name', 'when', 'appliances', 'price', 'owner', 'company', 'phone'];
+const TEXT_KIND = {before: 'Reminder, the day before', today: 'Reminder, on the day', booked: 'Booked / moved', hand: 'By hand'};
+function textSet(){
+  const s = {auto: false, before_on: true, before_at: '18:00', today_on: false, today_at: '08:00', booked: true, price: false,
+             ...((db && db.settings || {}).texts || {})};
+  if (!String(s.words_reminder || '').trim()) s.words_reminder = TEXT_WORDS.reminder;
+  if (!String(s.words_booked || '').trim()) s.words_booked = TEXT_WORDS.booked;
+  return s;
+}
+/* A text is 160 letters, or 70 once ONE letter is outside the plain SMS alphabet — ₱, an
+   emoji, a curly quote — and the whole message then costs two to four times as many texts
+   (218 letters: 2 texts, 4 with ₱; measured 2026-10-02). So the shop's own words are made
+   plain here, and the counter says when the owner's are not. */
+const GSM7 = '@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà^{}\\[~]|€';
+const smsPlain = t => String(t).replace(/₱\s?/g, 'PHP ').replace(/[–—]/g, '-').replace(/[•·]/g, '-').replace(/[‘’]/g, "'")
+  .replace(/[“”]/g, '"').replace(/…/g, '...').replace(/ /g, ' ');
+function smsCount(t){
+  const plain = [...t].every(ch => GSM7.includes(ch));
+  const n = plain ? [...t].reduce((a, ch) => a + ('^{}\\[~]|€'.includes(ch) ? 2 : 1), 0) : [...t].length;
+  const parts = plain ? (n <= 160 ? 1 : Math.ceil(n / 153)) : (n <= 70 ? 1 : Math.ceil(n / 67));
+  return {n, parts, plain};
+}
+const smsCountLine = t => { const c = smsCount(t);
+  return `${c.n} letters · ${c.parts} text${c.parts === 1 ? '' : 's'}${c.plain ? '' : ' — an emoji or a special letter makes each text hold only 70'}`; };
+// a job's day and time, in Manila, as a moment
+const manilaMs = (ymd, hhmm) => Date.parse(ymd + 'T' + hhmm + ':00+08:00');
+const jobUntil = j => manilaMs(j.scheduled_on, isClock(j.slot) ? j.slot : j.slot === 'am' ? '12:00' : j.slot === 'pm' ? '18:00' : '23:59');
+function textWhen(j, sendDay){
+  const t = isClock(j.slot) ? ' at ' + clock12(j.slot) : j.slot === 'am' ? ' in the morning' : j.slot === 'pm' ? ' in the afternoon' : '';
+  const d = j.scheduled_on;
+  return (d === sendDay ? 'TODAY' : d === addDays(sendDay, 1) ? 'TOMORROW' : 'on ' + niceDate(d)) + t;
+}
+/* The message, from the owner's wording: {when} is said from the day it is SENT on. */
+function textCompose(j, kind, sendDay, words){
+  const set = textSet(), c = jobCust(j), shop = quoteShop(), r = receiptOf(j);
+  let w = words != null ? words : kind === 'booked' ? set.words_booked : set.words_reminder;
+  if (!shop.signer) w = w.replace(/\{owner\} of \{company\}/g, '{company}');
+  const price = set.price && r.total != null ? 'Total: PHP ' + Number(r.total).toLocaleString('en-PH', {maximumFractionDigits: 2}) : '';
+  const fill = {name: c.full_name || 'there', when: textWhen(j, sendDay || manilaDate(0)), price,
+    appliances: r.lines.map(l => '- ' + (l.unit || l.type) + ' - ' + l.label).join('\n'),
+    owner: shop.signer || '', company: shop.name || SHOP_NAME, phone: SHOP_PHONE};
+  // a line that was only fill-ins, all empty ({price} with the price off), goes; his own blank lines stay
+  const out = w.split('\n').map(l => [l, l.replace(/\{(\w+)\}/g, (m, k) => k in fill ? fill[k] : m)])
+    .filter(([l, f]) => f.trim() !== '' || !/\{\w+\}/.test(l)).map(([, f]) => f.trimEnd()).join('\n');
+  return smsPlain(out).trim();
+}
+function textSample(kind){
+  const r = receiptSample();
+  const j = {...r.job, id: 'zz', price: r.lines.reduce((a, l) => a + l.amount, 0), customer: r.customer,
+             scheduled_on: addDays(manilaDate(0), 1), slot: '09:00'};
+  return textCompose(j, kind, manilaDate(0));
+}
+
+/* What a job has had: the server's record, this phone's copy, the closed app's log. */
+function textsOf(j){
+  const out = {...(j.texts || {})};
+  Object.entries(lsGet('ws_texts', {})[j.id] || {}).forEach(([k, v]) => { if (!out[k] || (v.ok && !out[k].ok)) out[k] = v; });
+  return out;
+}
+function textKept(jobId, key, ok, why, atMs){
+  const all = lsGet('ws_texts', {}), old = Date.now() - 30 * 864e5;
+  Object.keys(all).forEach(id => { Object.keys(all[id]).forEach(k => { if (Date.parse(all[id][k].at) < old) delete all[id][k]; });
+    if (!Object.keys(all[id]).length) delete all[id]; });
+  const at = new Date(atMs || Date.now()).toISOString();
+  all[jobId] = {...(all[jobId] || {}), [key]: {ok, why: why || null, at}};
+  lsSet('ws_texts', all);
+  const j = db.jobs[jobId];
+  write('record_text', {p_job: jobId, p_key: key, p_ok: ok, p_why: why || null, p_at: at},
+    (ok ? 'Text sent — ' : 'Text not sent — ') + ((j && jobCust(j).full_name) || ''), [jobId]);
+}
+const textDay = key => key.split(':')[1].slice(0, 10);
+// any text that went for that day, and when — "booked" and "by hand" make a reminder soon after needless
+const textWentFor = (j, day) => Object.entries(textsOf(j)).filter(([k, v]) => v.ok && textDay(k) === day).map(([, v]) => Date.parse(v.at));
+
+/* ONE sending phone for the whole shop (Guile, 2026-10-02: "multiple admins will send to one
+   customer"). The switch used to live on each phone, so two admins turning it on meant every
+   automatic text went twice. Now texts.sender on the server names the phone (35): turning it on
+   here claims it, and every other phone stops at its next refresh. */
+function myPhoneId(){
+  let id = lsGet('ws_phone_id', '');
+  if (!id){ id = uuid(); lsSet('ws_phone_id', id); }
+  return id;
+}
+const textSender = () => textSet().sender || null;
+/* Who may send texts (Guile, 2026-10-02): Admin → Users → a person → "Sends texts to customers".
+   Off: no Texts to customers in Settings, no 💬 Text, no Text all. The server refuses them too (36). */
+const textTexters = () => Array.isArray(textSet().texters) ? textSet().texters : [];
+const canTextHere = () => !!db && db.role === 'admin' && !!session && textTexters().includes(session.uid);
+const isSenderHere = () => { const s = textSender(); return !!s && s.id === myPhoneId(); };
+const smsSender = () => smsCapable() && canTextHere() && isSenderHere() && smsChecks().ready;
+const textable = j => j.status === 'scheduled' && j.scheduled_on && j.scheduled_on >= manilaDate(0) && digits(jobCust(j).contact).length >= 10;
+/* The reminders this phone's alarm should send, written now. */
+function textPlan(){
+  const set = textSet(), since = Date.parse(set.since || '') || Infinity, now = Date.now(), plan = [];
+  if (!set.auto || !smsSender()) return plan;
+  Object.values(db.jobs).filter(textable).forEach(j => {
+    const d = j.scheduled_on, until = jobUntil(j), had = textsOf(j), sched = Date.parse(j.schedule_at || '') || 0;
+    [['before', set.before_on, addDays(d, -1), set.before_at], ['today', set.today_on, d, set.today_at]].forEach(([kind, on, day, hhmm]) => {
+      const key = kind + ':' + d, at = manilaMs(day, hhmm);
+      if (!on || had[key] || at < since || at >= until || until <= now) return;
+      if (sched > at - 12 * 3600e3 && (set.booked || sched > at)) return;   // the "booked" text has just said it
+      if (textWentFor(j, d).some(t => t > at - 12 * 3600e3)) return;      // sent by hand that evening
+      plan.push({id: j.id + '|' + key, job: j.id, key, to: digits(jobCust(j).contact), text: textCompose(j, 'reminder', day), at, until, sim: smsSim()});
+    });
+  });
+  return plan.sort((a, b) => a.at - b.at);
+}
+let textBusy = false;
+const smsSendNow = (no, text) => window.AndroidBridge.sendSmsSim ? wsNet.call('sendSmsSim', [no, text, smsSim()]) : wsNet.call('sendSms', [no, text]);
+/* After every refresh: take in what the closed app sent, hand it the new plan, and send the
+   "booked" texts this phone has not sent yet. */
+async function textTick(){
+  if (!smsCapable() || textBusy || !db || db.role !== 'admin') return;
+  textBusy = true;
+  try {
+    let log = [];
+    if (canTextHere()) try { log = JSON.parse(window.AndroidBridge.textLog() || '[]'); } catch (e) {}
+    if (log.length){
+      log.forEach(e => textKept(e.job, e.key, !!e.ok, e.why, e.at));
+      window.AndroidBridge.forgetTextLog(JSON.stringify(log.map(e => e.id)));
+    }
+    const plan = JSON.stringify(textPlan());
+    if (plan !== lsGet('ws_text_plan', '')){
+      const r = window.AndroidBridge.setTextPlan(plan);
+      if (r === 'ok') lsSet('ws_text_plan', plan); else console.error('text plan:', r);
+    }
+    const set = textSet(), since = Date.parse(set.since || '') || Infinity;
+    if (!set.auto || !set.booked || !smsSender()) return;
+    for (const j of Object.values(db.jobs).filter(textable)){
+      const key = 'booked:' + j.scheduled_on + (j.slot ? ' ' + j.slot : '');
+      if (textsOf(j)[key] || !(Date.parse(j.schedule_at || '') >= since) || jobUntil(j) <= Date.now()) continue;
+      await textSend(j, key, textCompose(j, 'booked', manilaDate(0)));
+    }
+  } finally { textBusy = false; }
+}
+/* One text, now, from this phone; recorded either way. */
+async function textSend(j, key, text){
+  try { await smsSendNow(digits(jobCust(j).contact), text); textKept(j.id, key, true); return true; }
+  catch (e) { textKept(j.id, key, false, e.message); return false; }
+}
+/* What a job has had, for the office: on the job screen and the Text screen. */
+function textsDoneHtml(j){
+  const rows = Object.entries(textsOf(j)).sort((a, b) => Date.parse(b[1].at) - Date.parse(a[1].at));
+  if (!rows.length) return '';
+  const when = iso => new Date(iso).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+  return `<div class="card">${rows.slice(0, 8).map(([k, v]) => `<div class="sms-note${v.ok ? '' : ' bad'}">💬 ${esc(TEXT_KIND[k.split(':')[0]] || 'Text')} for ${esc(shortDate(textDay(k)))} — ${esc(v.ok ? 'sent ' + when(v.at) : 'not sent ' + when(v.at) + (v.why ? ': ' + v.why : ''))}</div>`).join('')}</div>`;
+}
+const textBtn = j => !canTextHere() || ['cancelled', 'done'].includes(j.status) || digits(jobCust(j).contact).length < 10 ? ''
+  : `<button type="button" class="b" data-act="textjob" data-id="${esc(j.id)}">💬 Text</button>`;
+
+/* The job's Text button: the reminder, written, his to change; Send from this phone, or Share. */
+function panelText(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Text', body: empty('This job is no longer on this phone.')};
+  const c = jobCust(j), body = p.text != null ? p.text : textCompose(j, 'reminder', manilaDate(0));
+  const canSend = smsCapable() && smsState() !== 'none';
+  // two admins, one customer: say so when someone texted them in the last 24 hours
+  const recent = Object.entries(textsOf(j)).filter(([, v]) => v.ok && Date.now() - Date.parse(v.at) < 864e5)
+    .sort((a, b) => Date.parse(b[1].at) - Date.parse(a[1].at))[0];
+  const already = recent ? `<div class="sms-note bad">⚠️ Already texted ${esc(new Date(recent[1].at).toLocaleString('en-PH', {weekday: 'short', hour: 'numeric', minute: '2-digit'}))} — ${esc((TEXT_KIND[recent[0].split(':')[0]] || 'a text').toLowerCase())}. Check below before sending again.</div>` : '';
+  return {title: 'Text', sub: c.full_name || '', body: `
+    <div class="card">
+      ${kv('To', esc((c.full_name || '') + ' · ' + (c.contact || '')))}
+      ${already}
+      <label>The message <span class="opt">yours to change, this text only</span>
+        <textarea id="txt_body" data-k="txt_body" data-txtcount="txt_count" rows="9" maxlength="700">${esc(body)}</textarea></label>
+      <div class="sms-note" id="txt_count">${esc(smsCountLine(body))}</div>
+      <div class="actions">
+        ${canSend ? `<button type="button" class="b primary" data-act="textsend" data-id="${esc(j.id)}" ${p.busy ? 'disabled' : ''}>${p.busy ? 'Sending…' : '💬 Send from this phone'}</button>` : ''}
+        ${!canSend && inApk && window.AndroidBridge.openSms ? `<button type="button" class="b primary" data-act="textopen" data-id="${esc(j.id)}">💬 Open in Messages</button>` : ''}
+        <button type="button" class="b" data-act="textshare" data-id="${esc(j.id)}">📤 Share — Messenger…</button>
+      </div>
+      ${canSend ? '' : '<div class="sms-note">This device cannot send texts itself. Open in Messages fills in the number and the message — a tablet paired with a phone in Google Messages sends it through the phone; press Send there. Share goes to Messenger or Viber.</div>'}
+    </div>
+    ${textsDoneHtml(j)}`};
+}
+/* Tomorrow's customers, all at once — the ones not yet texted for that day. */
+function textAllBar(day){
+  if (day !== 'tomorrow' || !canTextHere() || !smsCapable() || smsState() === 'none') return '';
+  const n = textAllJobs().length;
+  return `<div class="route-bar"><span>${n ? n + ' not texted yet' : 'Everyone has had a text'}</span>
+    <button type="button" class="b" data-act="textall" ${n ? '' : 'disabled'}>💬 Text all of Tomorrow</button></div>`;
+}
+const textAllJobs = () => jobList('tomorrow').filter(textable).filter(j => !textWentFor(j, j.scheduled_on).length);
+function panelTextAll(p){
+  const rows = jobList('tomorrow').filter(textable), todo = textAllJobs();
+  const line = j => { const went = textWentFor(j, j.scheduled_on), r = p.done && p.done[j.id];
+    return `<div class="lrow"><div class="lrow-main"><div class="lrow-title">${esc(jobCust(j).full_name || '')}</div>
+      <div class="sms-note${r === false ? ' bad' : ''}">${esc(slotShort(j.slot))} · ${esc(r === true ? 'sent just now' : r === false ? 'not sent — see the job' : went.length ? 'already texted' : 'will be texted')}</div></div></div>`; };
+  return {title: 'Text all of Tomorrow', sub: rows.length + ' job' + (rows.length === 1 ? '' : 's'), body: `
+    <div class="card"><div class="sms-note">Each customer not yet texted for tomorrow gets the reminder, from this phone. Those already texted are left alone.</div>
+      <div class="actions"><button type="button" class="b primary" data-act="textallsend" ${todo.length && !p.busy ? '' : 'disabled'}>${p.busy ? 'Sending ' + p.busy + '…' : '💬 Send to ' + todo.length}</button></div></div>
+    <div class="list">${rows.map(line).join('')}</div>`};
+}
+
+/* Admin → Texts: his switches and his wording. */
+const TEXT_TIMES = Array.from({length: 33}, (_, i) => String(5 + Math.floor(i / 2)).padStart(2, '0') + ':' + (i % 2 ? '30' : '00'));
+function drawTexts(){
+  const s = textSet();
+  const sw = (k, title, info) => `<div class="card row-between">
+      <div class="menu-title">${title}${info ? ' ' + infoBtn(info) : ''}</div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
+        `<button type="button" class="${!!s[k] === v ? 'active' : ''}" data-act="textset" data-f="${k}" data-v="${v}">${l}</button>`).join('')}</div></div>`;
+  const at = (k, on, title) => `<div class="card row-between">
+      <div class="menu-title">${title}</div>
+      <div class="row-gap"><select data-textat="${k}" aria-label="Time">${TEXT_TIMES.map(t => `<option value="${t}"${s[k] === t ? ' selected' : ''}>${clock12(t)}</option>`).join('')}</select>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
+        `<button type="button" class="${!!s[on] === v ? 'active' : ''}" data-act="textset" data-f="${on}" data-v="${v}">${l}</button>`).join('')}</div></div></div>`;
+  const words = (k, kind, title) => `<div class="card">
+      <div class="menu-title">${title}</div>
+      <label><span class="opt">Fill-ins: ${TEXT_FILLINS.map(f => '{' + f + '}').join(' ')}</span>
+        <textarea id="tw_${kind}" data-k="tw_${kind}" data-txtcount="tc_${kind}" rows="7" maxlength="700">${esc(s[k])}</textarea></label>
+      <div class="sms-note" id="tc_${kind}">${esc(smsCountLine(s[k]))}</div>
+      <div class="actions"><button type="button" class="b primary" data-act="textwords" data-f="${k}" data-v="${kind}">Save</button>
+        <button type="button" class="b" data-act="textwordsreset" data-f="${k}" data-v="${kind}">The shop's wording</button></div>
+      <div class="sms-note">Looks like this — a sample, ZZ data:</div><pre class="sms-sample">${esc(textSample(kind))}</pre>
+      <div class="sms-note">${esc(smsCountLine(textSample(kind)))}</div></div>`;
+  const who = textSender();
+  const here = smsSender() ? '✓ This phone sends them — the only one.'
+    : who ? 'Sending phone: ' + who.name + '. Only that phone sends.'
+    : 'No phone sends them yet. On the owner\'s phone: Settings → This phone sends the texts.';
+  return `${sw('auto', 'Send texts by themselves', 'textauto')}
+    <div class="card"><div class="sms-note">${esc(here)}</div></div>
+    ${at('before_at', 'before_on', 'Reminder the day before')}
+    ${at('today_at', 'today_on', 'Reminder on the day')}
+    ${sw('booked', 'Text when a job is scheduled or moved')}
+    ${sw('price', 'Put the price in texts')}
+    ${words('words_reminder', 'reminder', 'The reminder')}
+    ${words('words_booked', 'booked', 'Booked or moved')}`;
+}
+function saveTexts(patch, label){
+  const v = {...textSet(), ...patch};
+  delete v.since;
+  if (!('sender' in patch)) delete v.sender;   // the sending phone changes only by its own switch (35)
+  if (!('texters' in patch)) delete v.texters;   // who may text changes only on Users (36)
+  write('set_text_settings', {p_value: v}, 'Texts — ' + label, ['texts'], db => {
+    const old = (db.settings || {}).texts || {};
+    const since = v.auto ? (old.auto && old.since ? old.since : new Date().toISOString()) : undefined;
+    let sender = 'sender' in patch ? (patch.sender ? {...patch.sender, uid: session.uid, at: new Date().toISOString()} : null) : old.sender || null;
+    const texters = 'texters' in patch ? patch.texters : old.texters;
+    if (sender && sender.uid && Array.isArray(texters) && !texters.includes(sender.uid)) sender = null;   // taken off the list (36)
+    const next = {...v, ...(since ? {since} : {})};
+    delete next.sender; delete next.texters;
+    if (sender) next.sender = sender;
+    if (texters) next.texters = texters;
+    db.settings = {...(db.settings || {}), texts: next};
+  });
+  textTick();
+}
+document.addEventListener('change', e => {
+  const k = e.target.dataset && e.target.dataset.textat;
+  if (k) saveTexts({[k]: e.target.value}, 'time');
+});
+document.addEventListener('input', e => {
+  const id = e.target.dataset && e.target.dataset.txtcount, out = id && document.getElementById(id);
+  if (out) out.textContent = smsCountLine(smsPlain(e.target.value));
+});
 
 /* ---------------------------------------------------------------- panels
    A panel is a screen on top of the list, with Back. The stack lives in memory only, and
@@ -3449,7 +3794,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
-  deljob: panelDelete, delbooking: panelDelete};
+  deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll};
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
@@ -3573,22 +3918,92 @@ const ACTIONS = {
   logout: (id, el) => logOut(el),
   theme: (id, el) => { lsSet('ws_theme', el.dataset.v); applyTheme(); render(); },
   smssender: async (id, el) => {
-    if (el.dataset.v !== 'true'){ lsSet('ws_sms_sender', false); render(); return; }
-    lsSet('ws_sms_sender', true);
-    let state = smsState();
-    if (state === 'ask'){
-      try { state = await wsNet.call('askSms', []); } catch (e) { toast(e.message, true); }
+    if (el.dataset.v !== 'true'){   // off: only the sending phone can let go; its alarm goes too
+      if (isSenderHere()) saveTexts({sender: null}, 'no sending phone');
+      return;
     }
-    if (state !== 'granted' && state !== 'blocked'){ lsSet('ws_sms_sender', false); toast('Not allowed — this phone will not send texts.', true); }
-    render();
+    if (!smsChecks().ready) return toast('Every line above must be ✔️ first.', true);
+    if (isSenderHere()) return;
+    const was = textSender();
+    let phone = ''; try { phone = window.AndroidBridge.deviceName ? window.AndroidBridge.deviceName() : ''; } catch (e) {}
+    const me = ((db.profile || {}).display_name || (session.email || '').split('@')[0] || 'Office');
+    saveTexts({sender: {id: myPhoneId(), name: (me + (phone ? ' · ' + phone : '')).slice(0, 80)}}, 'sending phone');
+    toast(was ? 'This phone sends the texts now. ' + was.name + ' stops at its next refresh — open the app on it once.' : 'This phone sends the texts now.');
   },
   smssettings: () => window.AndroidBridge.openAppSettings(),
+  smsbattery: () => window.AndroidBridge.askBatteryFree(),
+  smsautostart: () => window.AndroidBridge.openAutostart(),
+  texter: (id, el) => {
+    const on = el.dataset.v === 'true', list = textTexters();
+    if (list.includes(id) === on) return;
+    const t = db.team[id] || {}, who = t.display_name || (t.email || '').split('@')[0];
+    saveTexts({texters: on ? [...list, id] : list.filter(x => x !== id)}, (on ? 'texts allowed — ' : 'texts not allowed — ') + who);
+  },
+  smssim: (id, el) => { lsSet('ws_sms_sim', Number(el.dataset.v)); render(); textTick(); },
+  smsask: async () => {
+    try { await wsNet.call('askSms', []); } catch (e) { toast(e.message, true); }
+    render();
+  },
+  textjob: id => openPanel({kind: 'text', id}),
+  textsend: async id => {
+    const j = db.jobs[id], p = topPanel(); if (!j || !p || p.kind !== 'text' || p.busy) return;
+    const text = smsPlain(($('#txt_body') || {}).value || '').trim();
+    if (!text) return toast('The message is empty.', true);
+    if (!(await smsAllowed())) return;
+    p.text = text; p.busy = true; render();
+    const ok = await textSend(j, 'hand:' + (j.scheduled_on || manilaDate(0)), text);
+    p.busy = false; render();
+    toast(ok ? 'Sent.' : 'Not sent — the reason is under the message.', !ok);
+  },
+  textshare: async id => {
+    const text = smsPlain(($('#txt_body') || {}).value || '').trim(), j = db.jobs[id];
+    const title = 'Text to ' + ((j && jobCust(j).full_name) || 'the customer');
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.shareText){ window.AndroidBridge.shareText(title, text); return; }
+      if (navigator.share){ await navigator.share({title, text}); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    copyText(text, $('[data-act="textshare"]'));
+  },
+  textopen: id => {   // a device with no SIM: its Messages app, filled in; not recorded — the app cannot see Send pressed
+    const j = db.jobs[id], text = smsPlain(($('#txt_body') || {}).value || '').trim();
+    if (!j || !text) return toast('The message is empty.', true);
+    if (!window.AndroidBridge.openSms(digits(jobCust(j).contact), text)) toast('No Messages app on this device — use Share.', true);
+  },
+  textall: () => openPanel({kind: 'textall', done: {}}),
+  textallsend: async () => {
+    const p = topPanel(); if (!p || p.kind !== 'textall' || p.busy) return;
+    const todo = textAllJobs(); if (!todo.length) return;
+    if (!(await smsAllowed())) return;
+    const today = manilaDate(0);
+    for (let i = 0; i < todo.length; i++){
+      p.busy = (i + 1) + ' of ' + todo.length; render();
+      p.done[todo[i].id] = await textSend(todo[i], 'hand:' + todo[i].scheduled_on, textCompose(todo[i], 'reminder', today));
+    }
+    p.busy = false; render();
+    const bad = Object.values(p.done).filter(v => !v).length;
+    toast(bad ? bad + ' not sent — open the job to see why.' : 'All sent.', !!bad);
+  },
+  textset: (id, el) => {
+    const f = el.dataset.f, on = el.dataset.v === 'true';
+    if (!!textSet()[f] === on) return;
+    saveTexts({[f]: on}, {auto: 'by themselves', before_on: 'the day before', today_on: 'on the day', booked: 'when scheduled', price: 'the price'}[f] + (on ? ' on' : ' off'));
+    if (f === 'auto' && on && !smsSender()) toast('Turned on. Now, on the owner\'s phone: Settings → This phone sends the texts.');
+  },
+  textwords: (id, el) => {
+    const v = (($('#tw_' + el.dataset.v) || {}).value || '').trim();
+    if (!v) return toast('The message is empty.', true);
+    saveTexts({[el.dataset.f]: v}, 'wording'); toast('Saved.');
+  },
+  textwordsreset: (id, el) => {
+    const box = $('#tw_' + el.dataset.v); if (box) box.value = TEXT_WORDS[el.dataset.v];
+    saveTexts({[el.dataset.f]: TEXT_WORDS[el.dataset.v]}, 'wording'); toast('Back to the shop\'s wording.');
+  },
   smstest: async () => {
     const no = digits(val('smsTestNo') || '');
     if (no.length < 10){ toast('Type the number to send it to, e.g. 0917 123 4567.', true); return; }
     smsBusy = true; render();
     const t = {no, at: new Date().toISOString()};
-    try { t.parts = Number(await wsNet.call('sendSms', [no, smsTestText()])); t.ok = true; }
+    try { t.parts = Number(await smsSendNow(no, smsTestText())); t.ok = true; }
     catch (e) { t.ok = false; t.why = e.message; }
     smsBusy = false; lsSet('ws_sms_test', t); render();
   },
@@ -4681,7 +5096,7 @@ window.addEventListener('storage', e => {
 /* ================================================================ start */
 window.addEventListener('online',  () => { online = true; flush(); });
 window.addEventListener('offline', () => { online = false; render(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && session) flush(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && session){ flush(); render(); textTick(); } });   // back from Android's settings: the ✔ / ❌ again
 setInterval(() => { if (session && !document.hidden) flush(); }, 30000);
 
 applyTheme();
