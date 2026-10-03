@@ -735,6 +735,44 @@
   .nav-badge{position:absolute;top:-6px;left:14px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;
     background:var(--bad);color:#fff;font-size:10.5px;line-height:17px;font-weight:700;font-style:normal}
   body.has-nav .wrap{padding-bottom:110px}
+  /* View as (37): a pill above Jobs, its menu opening upward */
+  .nav-slot{position:relative;flex:1 1 0;max-width:108px;min-width:0;display:flex}
+  .nav-slot > button[data-act=tab]{max-width:none}
+  .bottom-nav .view-pill{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);flex:none;max-width:none;
+    flex-direction:row;gap:4px;white-space:nowrap;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:700;
+    background:var(--surface);color:var(--ink);border:1px solid var(--border);box-shadow:0 3px 10px rgba(0,0,0,.14)}
+  .bottom-nav .view-pill.as{background:var(--st-prog-bg);color:var(--st-prog);border-color:var(--st-prog)}
+  .view-menu{position:absolute;bottom:calc(100% + 46px);left:0;min-width:168px;display:flex;flex-direction:column;gap:2px;
+    padding:6px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+  .bottom-nav .view-opt{flex:none;max-width:none;flex-direction:row;justify-content:flex-start;gap:6px;padding:10px 12px;
+    font-size:14.5px;color:var(--ink);border-radius:8px;white-space:nowrap}
+  .bottom-nav .view-opt.on{background:var(--primary-soft);color:var(--primary)}
+  .bottom-nav .view-opt b{margin-left:auto}
+  /* What to bring (37): the whole line is the tick box; who ticked it underneath */
+  .card.prep{padding:2px 12px 8px}
+  .prep-row{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border)}
+  .prep-tick{flex:1;display:flex;align-items:flex-start;gap:8px;margin:0;padding:6px 0;min-height:0;width:auto;min-width:0;
+    background:transparent;color:var(--ink);text-align:left;font-weight:500;border-radius:0}
+  .prep-box{flex:none;width:18px;height:18px;border:2px solid var(--ink-soft);border-radius:5px;display:inline-flex;
+    align-items:center;justify-content:center;font-size:12px;font-weight:800;line-height:1;margin-top:1px}
+  .prep-row.ticked .prep-box{background:var(--st-done);border-color:var(--st-done);color:#fff}
+  .prep-main{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+  .prep-row > .prep-main{padding:6px 0}
+  .prep-text{font-size:14px;line-height:1.3;overflow-wrap:anywhere}
+  .prep-row.ticked .prep-text{color:var(--ink-soft)}
+  .prep-by{font-size:12px;line-height:1.25;color:var(--st-done)}
+  .prep-row:not(.ticked) .prep-by{color:var(--ink-soft)}
+  .prep-count{font-size:12.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--surface-alt);color:var(--ink-soft);margin-left:6px}
+  .prep-count.all{background:var(--st-done-bg);color:var(--st-done)}
+  .prep-add{display:flex;gap:8px;margin-top:8px}
+  .prep-add input{flex:1;min-width:0;margin:0;padding:7px 12px;min-height:0;height:38px;font-size:15px}
+  .prep-add .b{flex:none;width:auto;margin:0;padding:0 12px;min-height:0;height:38px;font-size:14px}
+  .prep-row .cart-x{width:28px;height:28px;min-height:28px;font-size:13px}
+  .card.prep > .b{margin-top:8px;width:100%}
+  .pill.role-helper{background:var(--st-new-bg);color:var(--st-new)}
+  /* an aircon's complaint (37), under its services */
+  .cart-problem{font-size:14px;color:var(--ink);margin-top:4px;overflow-wrap:anywhere}
+  .cart-problem b{color:var(--st-new)}
   .fab{position:fixed;right:max(16px, calc(50vw - 314px));bottom:calc(70px + env(safe-area-inset-bottom));z-index:31;
     width:auto;margin:0;padding:11px 18px;border-radius:999px;font-size:14.5px;box-shadow:0 6px 18px rgba(13,111,184,.35)}
   /* Add customer sits above Book a job (Guile, 2026-09-27) */

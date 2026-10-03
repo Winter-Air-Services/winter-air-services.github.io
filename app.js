@@ -277,6 +277,9 @@ async function flush(){
    that is what keeps work done in a dead zone safe (sync.md). */
 async function pull(){
   if (!session) return;
+  // 38: the field now gets the jobs with no day too — older ones changed before this phone's
+  // last refresh would never arrive by "what changed since", so one full copy, once
+  if (inField(db.role) && !db.nodate38){ db.cursor = null; db.nodate38 = true; }
   let res;
   try { res = await rpc('pull', {p_since: db.cursor}); }
   catch (e) {
@@ -296,7 +299,7 @@ async function pull(){
     forgetStatus(); saveLocal();
     return pull();
   }
-  if (db.role === 'technician' && res.settings && 'show_prices_tech' in res.settings && db.cursor !== null
+  if (inField(db.role) && res.settings && 'show_prices_tech' in res.settings && db.cursor !== null
       && !!(db.settings || {}).show_prices_tech !== !!res.settings.show_prices_tech){
     // L5: the office switched prices on or off — the jobs themselves did not change, so an
     // ordinary pull would keep them with (or without) their price
@@ -324,6 +327,8 @@ async function pull(){
     if (keep !== undefined) db.settings.page_photos = keep;
   }
   if (res.services) db.services = res.services; // the price list, sent whole (admin only)
+  // what to bring, per service, the shop's three roles (37) — not while a change is on its way
+  if (res.checklists && !queue.some(o => o.fn === 'save_checklist')) db.checklists = res.checklists;
   // the appliance list, every role (27) — not while a change to it is still on its way: two
   // quick "↑ Earlier" taps moved it one place, the second read from a copy pulled in between
   if (res.types && !queue.some(o => o.fn === 'save_unit_type')){
@@ -362,13 +367,21 @@ function diffStats(before, now){
    function that redraws the views (docs/rules/ui.md). */
 const ui = lsGet('ws_ui', {tab: 'inbox', inbox: 'new', day: 'today', techDay: 'today', search: '', teamSearch: ''});
 const saveUi = () => lsSet('ws_ui', ui);
+ui.viewMenu = false;   // the View as menu opens closed (37)
 let authOpen = false, authMode = 'signin';
 
-const ROLE_WORD = {admin: 'Office', technician: 'Technician', customer: 'My account', disabled: 'Switched off'};
+const ROLE_WORD = {admin: 'Office', technician: 'Technician', helper: 'Helper', customer: 'My account', disabled: 'Switched off'};
+/* 37 (Guile, 2026-10-03): a helper rides along — the technician's Jobs, less. Both work in the field. */
+const inField = r => r === 'technician' || r === 'helper';
+/* The admin's "View as" (37): the Jobs tab drawn as a technician or a helper sees it. A drawing
+   only — the admin's phone already holds everything, and every button still acts as the admin. */
+const viewRole = () => db && db.role === 'admin' && ui.tab === 'jobs' && inField(ui.viewAs) ? ui.viewAs : db && db.role;
+/* The price, as that view would have it: the office always; the field only with the owner's switch on. */
+const seesPrice = () => { const v = viewRole(); return v === 'admin' || (inField(v) && !!(db.settings || {}).show_prices_tech); };
 
 function render(){
   const role = session ? (db && db.role) || session.role : null;
-  const staff = role === 'admin' || role === 'technician';
+  const staff = role === 'admin' || inField(role);
   const profile = (db && db.profile) || {};
   // Said "I work here" and not given a role yet: a person waiting on a person, not a form.
   const waiting = role === 'customer' && profile.signup_kind === 'employee';
@@ -408,7 +421,7 @@ function render(){
   $('#publicView').hidden = blocked || staff;
   document.body.classList.toggle('pub', !$('#publicView').hidden);   // the wide Travelista top
   $('#adminView').hidden = blocked || role !== 'admin';
-  $('#techView').hidden = blocked || role !== 'technician';
+  $('#techView').hidden = blocked || !inField(role);
   $('#customerView').hidden = role !== 'customer';
   $('#registerNudge').hidden = !!session;
   $('#heroText').innerHTML = heroTextHtml('pub');   // the shared photo top's words
@@ -417,13 +430,15 @@ function render(){
   $('#bottomNav').hidden = !nav;
   if (nav) drawNav();
   document.body.classList.toggle('has-nav', nav);
-  $('#fab').hidden = !nav || !['inbox', 'jobs', 'people', 'checkups'].includes(ui.tab);
+  // View as (37): the field's screen has no Book a job, and the open menu must not be covered
+  $('#fab').hidden = !nav || !['inbox', 'jobs', 'people', 'checkups'].includes(ui.tab)
+    || (ui.tab === 'jobs' && (ui.viewMenu || inField(viewRole())));
   $('#fab2').hidden = $('#fab').hidden;
 
   drawNotices();
   if (session && db && !blocked){
     if (role === 'admin') keepTyping($('#adminBody'), drawAdmin);
-    if (role === 'technician') keepTyping($('#techBody'), drawTech);
+    if (inField(role)) keepTyping($('#techBody'), drawTech);
     if (role === 'customer') keepTyping($('#myBookings'), drawMine);
   }
   drawPanels();
@@ -802,7 +817,7 @@ const place = c => [c.address, c.landmark].filter(Boolean).join(' — ');
 const initials = s => String(s || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 const pill = (cls, text) => `<span class="pill ${esc(cls)}">${esc(text)}</span>`;
 const statusPill = s => pill(s, STATUS_LABEL[s] || s);
-const ROLE_NAME = {admin: 'Admin', technician: 'Technician', customer: 'Customer', disabled: 'Switched off'};
+const ROLE_NAME = {admin: 'Admin', technician: 'Technician', helper: 'Helper', customer: 'Customer', disabled: 'Switched off'};
 const rolePill = r => pill('role-' + r, ROLE_NAME[r] || r);
 /* A label and a value, one line each. Empty values draw nothing. */
 const kv = (k, v) => v ? `<div class="kv"><span>${esc(k)}</span><div>${v}</div></div>` : '';
@@ -867,7 +882,7 @@ const INFO = {
   jobs: ['Jobs', 'The schedule. Every technician sees every job that has a day — there is no assigning. The job remembers who pressed Start and Done.'],
   people: ['Customers', 'Everyone the shop has worked for. Tap one for their history, or to book them again.'],
   checkups: ['Check-ups', 'Customers whose regular check has come — set on each customer: Customers → tap them → 📅 Regular check (every month, 2, 3, 6 months or yearly, from a date you choose). Ring them, or Book it. ✓ Done moves them to their next date. Nobody with a job already booked shows here. At the top: jobs done a week ago, to ask “is it working well?”.'],
-  team: ['Users', 'Anyone can make an account, and starts as a customer. Tap a person to make them a technician or an admin. “Says they work here” means they ticked that box when they signed up — it gives them nothing on its own.'],
+  team: ['Users', 'Anyone can make an account, and starts as a customer. Tap a person to make them a technician, a helper or an admin. “Says they work here” means they ticked that box when they signed up — it gives them nothing on its own.'],
   admin: ['Admin', 'Only admins see this tab. The price list and the services the booking page offers, the receipt, and the three numbers the app was built to answer.'],
   showprices: ['Show prices', 'Off: customers never see a price; you tell them on the call.\n\nOn: once a customer picks the aircon type and the services, the booking page shows the total from this list. If a service has no price for their aircon type, it says you will tell them on the call.'],
   service: ['A service', 'A price for each aircon type. Leave a type empty if the shop does not do it for that type — a booking with that type then shows no price until you set one. Customers never see prices.'],
@@ -893,7 +908,7 @@ const INFO = {
   texter: ['Sends texts to customers', 'On: this person sees Texts to customers in Settings, 💬 Text on a job and Text all of Tomorrow, and their phone may be the sending phone. Off: none of it — and if their phone was the sending phone, it stops at its next refresh. Any admin can change it, for themselves too.'],
   textauto: ['Send texts by themselves', 'The phone with "This phone sends the texts" on sends them, at your times, even with the app closed — never the same text twice. A job is texted from the time this is turned on; jobs scheduled before then are not.\n\nThe reminders are written each time the app is open on that phone: a job cancelled on another phone after that can still get one. Open the app once in the evening and it is up to date.\n\nOff: nothing is sent unless you press 💬 Text on a job.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
-  showpricestech: ['Show prices to technicians', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt.\n\nOff: technicians never see a price; the server does not even send it.'],
+  showpricestech: ['Show prices to technicians & helpers', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt. A helper sees the price on the job, nothing more.\n\nOff: technicians and helpers never see a price; the server does not even send it.'],
   closedwd: ['Closed every week', 'Tap the weekdays the shop never works. The booking page greys them out and will not take a booking for one. Book a job (a call you take) only warns you.'],
   closeddates: ['Days off', 'A holiday, a fiesta, a day off: tap the day in the calendar. Type a reason first if you want the customer to see it ("Christmas"). Past days drop off by themselves.'],
   shopfb: ['Facebook page', 'With a link here, the booking page shows “Message us on Facebook” beside the call button. Leave it empty to hide it.'],
@@ -946,6 +961,11 @@ function unitsOf(x){
               brand: x.unit_brand || null, model: x.unit_model || null});
   return out;
 }
+/* One aircon, copied whole: what it is, what it needs, what is known about it — since 37
+   (Guile, 2026-10-03) its serial number and its problem too. Every place that copies one uses
+   this, so a new field is added once. */
+const unitCopy = u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null,
+                        serial: u.serial || null, problem: u.problem || null});
 /* "Window #1", "Window #2", "Split #1". */
 function unitNames(units){
   const seen = {};
@@ -982,7 +1002,7 @@ function cartUnits(cart){
 }
 /* A technician holds the price list only while the office shows them prices (19); without
    it, no "₱ ?" either — the question of money is simply not on their screen. */
-const staffPf = () => db && db.role === 'technician' && !svcRows().length ? null : officePrice;
+const staffPf = () => db && inField(db.role) && !svcRows().length ? null : officePrice;
 const cartPrice = cart => cart === 'pub' ? pagePrice() : staffPf();
 const cartKeys = cart => cart === 'pub' ? Object.keys(serviceLabels) : activeServiceKeys();
 function afterCart(cart){
@@ -1004,7 +1024,7 @@ function cartHtml(cart, units, opts){
   if (!units.length) return editable ? '<div class="cart-empty">Nothing yet — tap what it is, above.</div>' : '';
   const names = unitNames(units), total = unitsPrice(units, pf);
   return `<div class="cart-list">${units.map((u, i) => {
-      const up = unitPrice(u, pf), meta = [u.brand, u.model].filter(Boolean).join(' · ');
+      const up = unitPrice(u, pf), meta = [u.brand, u.model, u.serial ? 'SN ' + u.serial : ''].filter(Boolean).join(' · ');
       return `<div class="cart-unit">
         <div class="cart-unit-head">
           ${editable ? `<button type="button" class="cart-unit-name" data-act="unitedit" data-cart="${cart}" data-i="${i}">${esc(names[i])} <span aria-hidden="true">›</span></button>`
@@ -1017,6 +1037,7 @@ function cartHtml(cart, units, opts){
           const p = pf && u.type ? pf(k, u.type) : null;
           return `<span class="svc-chip">${esc(svcLabel(k))}${p != null ? ` <i>${esc(peso0(p))}</i>` : ''}${editable
             ? `<button type="button" data-act="unitsvcx" data-cart="${cart}" data-i="${i}" data-v="${esc(k)}" aria-label="Take off ${esc(svcLabel(k))}">×</button>` : ''}</span>`; }).join('')}</div>
+        ${u.problem ? `<div class="cart-problem"><b>Problem:</b> ${esc(u.problem)}</div>` : ''}
       </div>`; }).join('')}
     ${pf ? `<div class="cart-total"><span>Total</span><b>${total != null ? esc(peso(total)) : esc(opts.missing || 'We will tell you on the call')}</b></div>` : ''}
   </div>`;
@@ -1041,6 +1062,9 @@ function drawUnitSheet(){
       <label>Brand <span class="opt">— optional</span><input data-ued="brand" maxlength="60" value="${esc(u.brand || '')}" placeholder="Carrier, Koppel…" autocomplete="off"></label>
       <label>Model <span class="opt">— optional</span><input data-ued="model" maxlength="60" value="${esc(u.model || '')}" autocomplete="off"></label>
     </div>
+    <label>Serial number <span class="opt">— optional</span><input data-ued="serial" maxlength="60" value="${esc(u.serial || '')}" autocomplete="off"></label>
+    <label>Problem or complaint <span class="opt">— optional</span>
+      <textarea data-ued="problem" maxlength="300" rows="2" placeholder="What is wrong with this ${esc(name)}? Not cold, leaking…">${esc(u.problem || '')}</textarea></label>
     <div class="unit-msg" id="unitMsg" aria-live="polite"></div>
     <div class="stack"><button type="button" class="b primary wide" data-act="unitdone">Finish</button></div>`;
   lockBody();
@@ -1377,7 +1401,7 @@ function loadDraft(){
   if (!slotOk(pubBook.slot)) pubBook.slot = 'am';
   pubUnits = (Array.isArray(d.units) ? d.units : [])
     .filter(u => u && typeOf(u.type) && Array.isArray(u.services) && u.services.length).slice(0, 20)
-    .map(u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null}));
+    .map(unitCopy);
   pubBook._restored = pubUnits.length > 0 || DRAFT_FIELDS.some(f => f !== 'slot' && pubBook[f]);
 }
 function drawPubCart(){
@@ -1743,16 +1767,30 @@ function drawNav(){
   const n = unseenCounts();
   // One red thing only: the number. The envelope no longer swaps to one with its own red
   // dot (it did, and the two read as one confusing blob — Guile, 2026-09-27).
-  $('#bottomNav').innerHTML = ADMIN_TABS.map(([k, icon, label]) =>
-    `<button type="button" data-act="tab" data-v="${k}" aria-current="${ui.tab === k}">
-       <span class="nav-ico">${ico(icon, icon === 'customers' ? 'mono' : '')}${n[k] ? `<span class="nav-badge">${n[k] > 99 ? '99+' : n[k]}</span>` : ''}</span><span class="nav-word">${label}</span></button>`).join('');
+  const as = inField(ui.viewAs) ? ui.viewAs : 'admin';
+  $('#bottomNav').innerHTML = ADMIN_TABS.map(([k, icon, label]) => {
+    // View as a helper: Jobs wears Guile's Helper.png (37)
+    if (k === 'jobs' && as === 'helper') icon = 'helper';
+    const b = `<button type="button" data-act="tab" data-v="${k}" aria-current="${ui.tab === k}">
+       <span class="nav-ico">${ico(icon, icon === 'customers' ? 'mono' : '')}${n[k] ? `<span class="nav-badge">${n[k] > 99 ? '99+' : n[k]}</span>` : ''}</span><span class="nav-word">${label}</span></button>`;
+    return k === 'jobs' && ui.tab === 'jobs' ? `<div class="nav-slot">${viewAsHtml(as)}${b}</div>` : b;
+  }).join('');
+}
+/* View as (Guile, 2026-10-03): a pill above Jobs; it opens upward — Office · Technician · Helper.
+   Not a <details> dropdown (scope.md: none on staff screens): a pill and three buttons. */
+const VIEW_AS = [['admin', '🏢', 'Office'], ['technician', '🔧', 'Technician'], ['helper', '🤲', 'Helper']];
+function viewAsHtml(as){
+  const cur = VIEW_AS.find(x => x[0] === as);
+  return `${ui.viewMenu ? `<div class="view-menu" role="menu">${VIEW_AS.map(([k, e, t]) =>
+      `<button type="button" role="menuitemradio" aria-checked="${k === as}" class="view-opt${k === as ? ' on' : ''}" data-act="viewas" data-v="${k}">${e} ${t}${k === as ? ' <b>✓</b>' : ''}</button>`).join('')}</div>` : ''}
+    <button type="button" class="view-pill${as !== 'admin' ? ' as' : ''}" data-act="viewmenu" aria-expanded="${!!ui.viewMenu}">👁 ${esc(cur[2])} <span aria-hidden="true">${ui.viewMenu ? '▾' : '▴'}</span></button>`;
 }
 function drawAdmin(){
   if (ui.tab === 'numbers') ui.tab = 'admin';
   if (!ADMIN_HEAD[ui.tab]) ui.tab = 'inbox';
   const body = {inbox: drawInbox, jobs: drawJobs, people: drawPeople, checkups: drawCheckups, team: drawTeam, admin: drawAdminTab}[ui.tab]();
   return pageHead(ADMIN_HEAD[ui.tab], ui.tab) +
-    (['inbox', 'jobs'].includes(ui.tab) ? drawStats() : '') + body;
+    (ui.tab === 'inbox' || (ui.tab === 'jobs' && !inField(viewRole())) ? drawStats() : '') + body;
 }
 
 /* ---------------------------------------------------------------- inbox */
@@ -1883,17 +1921,20 @@ function jobList(day){
   return ['done', 'cancelled'].includes(day) ? rows.sort(byDoneDesc).slice(0, 60) : rows.sort(byTime);
 }
 /* L4 (Guile, 2026-09-27, ui.md Reuse): the office's Jobs and the technician's Jobs were two
-   copies of one tab strip — the technician's had no Cancelled. One function draws both. A
-   technician never receives a job with no day (scope.md), so "No date" is left out for them. */
+   copies of one tab strip — the technician's had no Cancelled. One function draws both. Since
+   38 (Guile, 2026-10-03) technicians and helpers get the jobs with no day too, so every tab
+   is everyone's. */
 const JOB_TABS = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
                   ['done', 'Done'], ['cancelled', 'Cancelled']];
 function jobTabsHtml(){
-  const tech = db.role === 'technician', key = tech ? 'techDay' : 'day';
-  const days = JOB_TABS.filter(([k]) => !(tech && k === 'unplanned'));
+  // the admin's View as (37) draws the field's tabs on the admin's own day
+  const tech = inField(viewRole()), key = db.role === 'admin' ? 'day' : 'techDay';
+  const days = JOB_TABS;
   if (!days.some(d => d[0] === ui[key])) ui[key] = 'today';
   const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
   const rows = jobList(ui[key]);
-  return chips(tech ? 'techday' : 'day', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + routeBar(ui[key]) + (tech ? '' : textAllBar(ui[key])) +
+  // a helper has no map (37)
+  return chips(key === 'day' ? 'day' : 'techday', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + (viewRole() === 'helper' ? '' : routeBar(ui[key])) + (tech ? '' : textAllBar(ui[key])) +
     (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
 }
 function drawJobs(){ return jobTabsHtml(); }
@@ -1921,10 +1962,10 @@ function routeBar(day){
 }
 /* The money badge (Guile, 2026-09-28: "very important on the eyes of the owner"): every open
    job — Not scheduled, Scheduled, In progress, Done — says Not paid in red until the office
-   marks it (TODO 12, option A); GCash in blue; cash or other, Paid in green. The office only —
-   a technician is never sent it. */
+   marks it (TODO 12, option A); GCash in blue; cash or other, Paid in green. Since 37 (Guile,
+   2026-10-03) technicians and helpers see it too, to read — only the office marks it. */
 function paidPill(j){
-  if (!db || db.role !== 'admin' || !j || j.status === 'cancelled') return '';
+  if (!db || !(db.role === 'admin' || inField(db.role)) || !j || j.status === 'cancelled') return '';
   if (j.paid_method === 'gcash') return pill('gcash', 'GCash');
   if (j.paid_method) return pill('paid', 'Paid');
   return pill('unpaid', 'Not paid');
@@ -1941,13 +1982,15 @@ function jobRow(j){
       <div class="lrow-sub">${esc(place(c))}</div>
       ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
-    <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
+    <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null && seesPrice() ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
   </div>`;
 }
 function panelJob(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Job', body: empty('This job is no longer on this phone.')};
-  const tech = db.role === 'technician';
+  // the field's screen, for them and for the admin's View as (37); a helper's is less again:
+  // no buttons that act, nothing that rings, maps or edits, no history (Guile, 2026-10-03)
+  const v = viewRole(), tech = inField(v), helper = v === 'helper';
   const c = jobCust(j), open = !['done', 'cancelled'].includes(j.status);
   const acts = [];
   // idea 1: on the way there — before Start, once, while the job has a day
@@ -1957,15 +2000,17 @@ function panelJob(p){
     acts.push(`<button type="button" class="b primary" data-act="status" data-to="in_progress" data-id="${esc(j.id)}">▶ Start the job</button>`);
   if (open && (!tech || j.scheduled_on))
     acts.push(`<button type="button" class="b primary" data-act="status" data-to="done" data-id="${esc(j.id)}">✓ Mark done</button>`);
-  const canUndo = tech ? ['in_progress', 'done'].includes(j.status) : ['in_progress', 'done', 'cancelled'].includes(j.status);
+  // a job with no day is the field's to see, not to change (38): the server refuses it
+  const canUndo = tech ? !!j.scheduled_on && ['in_progress', 'done'].includes(j.status) : ['in_progress', 'done', 'cancelled'].includes(j.status);
   if (canUndo) acts.push(`<button type="button" class="b" data-act="undo" data-id="${esc(j.id)}">↶ Undo last step</button>`);
+  if (helper) acts.length = 0;
   const by = whoPressed(j);
   const cid = j.customer_id, photo = c.photo_path;
   // No "Change the time" row: ✏️ Edit changes the day with everything else (Guile, 2026-09-27)
   // L5: a technician sees the price only with the office's switch on — the server sends it
   // then and only then — and gives the receipt from it
-  const techPrice = tech && j.price != null;
-  const menu = tech ? (techPrice ? `<div class="menu">${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print or share it with the customer')}</div>` : '') : `<div class="menu">
+  const techPrice = tech && j.price != null && seesPrice();
+  const menu = helper ? '' : tech ? (techPrice ?`<div class="menu">${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print or share it with the customer')}</div>` : '') : `<div class="menu">
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
       ${open || j.quote ? menuRow('jobquote', j.id, '📄', 'Quotation', j.quote
         ? 'Saved ' + niceDate(manilaDay(j.quote.saved_at)) + ' · ' + peso(j.quote.total)
@@ -1977,9 +2022,9 @@ function panelJob(p){
     </div>`;
   // L3: the gate photo first on a technician's screen — the first thing needed at the street
   return {title: c.full_name || 'Job', sub: svcList(j.services), body: `
-    ${tech && photo ? `<div class="gate-top">${housePhoto(photo)}<div class="gate-cap">📷 The gate — to find the house</div></div>` : ''}
+    ${tech && !helper && photo ? `<div class="gate-top">${housePhoto(photo)}<div class="gate-cap">📷 The gate — to find the house</div></div>` : ''}
     ${stepsHtml({booking: bookingOfJob(j), job: j})}
-    ${techPrice ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
+    ${techPrice && !helper ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo && !tech ? housePhoto(photo) : ''}
       ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
@@ -1989,26 +2034,88 @@ function panelJob(p){
       ${kv('Address', esc(c.address || ''))}
       ${kv('Landmark', esc(c.landmark || ''))}
       ${kv('Notes', j.notes ? esc(j.notes) : '')}
-      ${tech ? '' : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
+      ${tech ? (helper && techPrice ? kv('Price', esc(peso(j.price))) : '') : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
       ${tech || j.status === 'cancelled' ? '' : `<div class="paid-row">${j.paid_method
         ? `<span class="pill done">Paid · ${esc(PAY[j.paid_method])}${j.paid_at ? ' · ' + esc(shortDate(manilaDay(j.paid_at))) : ''}</span>
            <button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="">Not paid</button>`
         : `<span class="muted">Not paid yet</span>${['cash', 'gcash', 'other'].map(m =>
             `<button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="${m}">${m === 'cash' ? '💵 Cash' : m === 'gcash' ? '📱 GCash' : 'Other'}</button>`).join('')}`}</div>`}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
-      ${j.status === 'cancelled' ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
-      <div class="actions">${callBtn(c.contact)}${tech ? '' : textBtn(j)}${mapBtn(c)}${cid && c.full_name !== '(removed)' ? photoBtn(cid, photo) : ''}${j.status !== 'cancelled' || !tech ? editBtn('editjob', j.id) : ''}</div>
+      ${j.status === 'cancelled' && !helper ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
+      ${helper ? '' : `<div class="actions">${callBtn(c.contact)}${tech ? '' : textBtn(j)}${mapBtn(c)}${cid && c.full_name !== '(removed)' && (!tech || j.scheduled_on) ? photoBtn(cid, photo) : ''}${!tech || (j.scheduled_on && j.status !== 'cancelled') ? editBtn('editjob', j.id) : ''}</div>`}
     </div>
     ${tech ? '' : wantNote(j)}
     ${tech ? '' : textsDoneHtml(j)}
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons &amp; appliances</div>
-    ${cartHtml('view', unitsOf(j), {pf: tech && !techPrice ? null : officePrice, missing: 'Not every service has a price yet'})}
+    ${cartHtml('view', unitsOf(j), {pf: helper || (tech && !techPrice) ? null : officePrice, missing: 'Not every service has a price yet'})}
     ${tech ? '' : listPriceNote(j)}
-    <div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>
+    ${prepHtml(j)}
+    ${helper ? '' : `<div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>`}
     ${menu}
-    ${statusBlockHtml('job', j.id)}`};
+    ${helper ? '' : statusBlockHtml('job', j.id)}`};
 }
+/* ---------------------------------------------------------------- what to bring (37)
+   Guile, 2026-10-03: "so that the helper know what to do and what to bring and they dont
+   forget it … also it lessen the things to bring on the service truck". The owner's list for
+   each of the job's services (Admin → Services & prices), in his order, twins once; then what
+   was added on this job — it stays on this job. Anyone of the shop ticks; a tick says who:
+   "Checked by Guile (Technician)". A tick is keyed by the item's words, lower-cased. */
+const prepKey = t => String(t || '').trim().toLowerCase();
+function prepItems(j){
+  const keys = new Set([...(j.services || []), ...unionServices(unitsOf(j))]);
+  const seen = new Set(), out = [];
+  const add = (text, extra) => { const k = prepKey(text); if (k && !seen.has(k)){ seen.add(k); out.push({text, key: k, extra}); } };
+  (db.checklists || []).filter(l => keys.has(l.key)).forEach(l => (l.items || []).forEach(t => add(t)));
+  ((j.prep || {}).extra || []).forEach(x => add(x.text, x));
+  return out;
+}
+/* An add box (37): a redraw waits while a box is being typed in (keepTyping), and Enter leaves
+   the cursor there — so let go, redraw, and put the cursor back, empty, for the next item. */
+function againTyping(pf, draw){
+  const a = document.activeElement, was = a && a.dataset && a.dataset.pf === pf;
+  if (was) a.blur();
+  draw();
+  if (was){ const i = $$(`[data-pf="${pf}"]`, $('#panels')).pop(); if (i){ i.value = ''; i.focus(); } }   // the top panel's
+}
+const prepWho = x =>esc(x.name || 'Someone') + ' (' + esc(ROLE_NAME[x.role] || x.role || '') + ')';
+function prepHtml(j){
+  if (!db.checklists) return '';   // a server from before 37
+  const items = prepItems(j), ticks = (j.prep || {}).ticks || {};
+  const n = items.filter(i => ticks[i.key]).length, id = esc(j.id);
+  const p = topPanel() || {};
+  return `<div class="sec">🧰 What to bring${items.length ? ` <span class="prep-count${n === items.length ? ' all' : ''}">${n} of ${items.length}</span>` : ''}</div>
+    <div class="card prep">
+      ${items.map(i => { const t = ticks[i.key];
+        return `<div class="prep-row${t ? ' ticked' : ''}">
+          <button type="button" class="prep-tick" role="checkbox" aria-checked="${t ? 'true' : 'false'}" data-act="prep" data-id="${id}" data-do="${t ? 'untick' : 'tick'}" data-v="${esc(i.text)}">
+            <span class="prep-box" aria-hidden="true">${t ? '✓' : ''}</span>
+            <span class="prep-main"><span class="prep-text">${esc(i.text)}</span>
+              ${t ? `<span class="prep-by">Checked by ${prepWho(t)}</span>`
+                  : i.extra ? `<span class="prep-by">Added for this job by ${prepWho(i.extra)}</span>` : ''}</span>
+          </button>
+          ${i.extra ? `<button type="button" class="cart-x" data-act="prep" data-id="${id}" data-do="remove" data-v="${esc(i.text)}" aria-label="Take ${esc(i.text)} off this job">×</button>` : ''}
+        </div>`; }).join('')
+        || `<p class="hint">Nothing listed for these services yet.${db.role === 'admin' ? ' The lists are in Admin → Services &amp; prices.' : ''}</p>`}
+      <div class="prep-add"><input data-pf="prepNew" maxlength="60" value="${esc(p.prepNew || '')}" placeholder="Add something for this job" autocomplete="off">
+        <button type="button" class="b" data-act="prepadd" data-id="${id}">＋ Add</button></div>
+    </div>`;
+}
+function prepWrite(id, how, text){
+  const j = db.jobs[id]; if (!j) return;
+  const words = {tick: 'Checked', untick: 'Unchecked', add: 'Added', remove: 'Took off'}[how];
+  write('job_prep', {p_job: id, p_do: how, p_item: text}, words + ' — ' + text, [id], db => {
+    const x = db.jobs[id]; if (!x) return;
+    const prep = x.prep = {ticks: {...((x.prep || {}).ticks || {})}, extra: [...((x.prep || {}).extra || [])]};
+    const me = {by: session.uid, name: (db.profile && db.profile.display_name) || 'Someone', role: db.role, at: new Date().toISOString()};
+    const k = prepKey(text);
+    if (how === 'tick') prep.ticks[k] = me;
+    if (how === 'untick' || how === 'remove') delete prep.ticks[k];
+    if (how === 'add' && !prep.extra.some(e => prepKey(e.text) === k)) prep.extra.push({text: text.trim(), ...me});
+    if (how === 'remove') prep.extra = prep.extra.filter(e => prepKey(e.text) !== k);
+  });
+}
+
 /* R1 (2026-09-27): Accept makes the job with no day, though the customer already chose one
    — WA-1970 asked for Mon Sep 28 PM and the day had to be picked again. Offer theirs. */
 function wantOf(j){
@@ -2307,7 +2414,7 @@ function openBook(customerId, services){
   if (customerId){
     const last = jobsOf(customerId).sort(byTime).pop();
     if (last) units = unitsOf(last).filter(u => u.type)
-      .map(u => ({type: u.type, services: services && services.length ? [...services] : [...u.services], brand: u.brand || null, model: u.model || null}));
+      .map(u => ({...unitCopy(u), services: services && services.length ? [...services] : [...u.services]}));
   }
   openPanel({kind: 'book', mode: customerId ? 'existing' : 'new', customer_id: customerId || '', q: '',
     full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', units, notes: '', date: null, slot: 'am'});
@@ -2362,7 +2469,7 @@ function panelEditJob(p){
 
 /* ---------------------------------------------------------------- team (SukiRun's Admin → Team) */
 function teamList(){
-  const order = {admin: 1, technician: 2, customer: 3};
+  const order = {admin: 1, technician: 2, helper: 3, customer: 4};
   const q = (ui.teamSearch || '').toLowerCase().trim();
   return Object.values(db.team)
     .filter(t => !q || ((t.display_name || '') + ' ' + (t.email || '') + ' ' + t.role).toLowerCase().includes(q))
@@ -2378,9 +2485,10 @@ function teamListHtml(){
 function drawTeam(){
   const all = Object.values(db.team);
   const n = r => all.filter(t => t.role === r).length;
-  return `<div class="stat-strip three">
+  return `<div class="stat-strip">
       <div class="stat-card"><div class="stat-num">${n('admin')}</div><div class="stat-label">Admins</div></div>
       <div class="stat-card"><div class="stat-num">${n('technician')}</div><div class="stat-label">Technicians</div></div>
+      <div class="stat-card"><div class="stat-num">${n('helper')}</div><div class="stat-label">Helpers</div></div>
       <div class="stat-card"><div class="stat-num">${n('customer')}</div><div class="stat-label">Customers</div></div>
     </div>
     ${all.length > 6 ? `<input type="search" class="find" id="teamSearch" placeholder="🔎 Search ${all.length} people" value="${esc(ui.teamSearch || '')}" autocomplete="off">` : ''}
@@ -2400,6 +2508,7 @@ function teamRow(t){
 }
 const ROLE_CHOICES = [
   ['technician', 'Technician', 'Sees every job on the schedule. Marks jobs started and done.'],
+  ['helper', 'Helper', 'Rides along: sees the jobs on the schedule and ticks what to bring. No calls, no map, no buttons.'],
   ['admin', 'Admin', 'Everything: bookings, jobs, customers, team and settings.'],
   ['customer', 'Customer', 'Books on the page and sees their own bookings. Nothing else.'],
 ];
@@ -2674,7 +2783,7 @@ function drawServices(){
         `<button type="button" class="${on === v ? 'active' : ''}" data-act="showprices" data-v="${v}">${t}</button>`).join('')}</div>
     </div>
     <div class="card row-between">
-      <div class="menu-title">Show prices to technicians ${infoBtn('showpricestech')}</div>
+      <div class="menu-title">Show prices to technicians &amp; helpers ${infoBtn('showpricestech')}</div>
       <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
         `<button type="button" class="${!!(db.settings || {}).show_prices_tech === v ? 'active' : ''}" data-act="showpricestech" data-v="${v}">${t}</button>`).join('')}</div>
     </div>`;
@@ -2695,6 +2804,7 @@ function panelService(p){
   const r = p.id ? svcRows().find(x => x.key === p.id) : null;
   if (p.label == null){
     p.label = r ? r.label : ''; p.active = r && !r.active ? '0' : '1';
+    p.check = r ? checklistOf(r.key) : []; p.check0 = JSON.stringify(p.check);   // 37
     activeTypes().forEach(t => { p['price_' + t.key] = r && r.prices && r.prices[t.key] != null ? String(r.prices[t.key]) : ''; });
   }
   return {title: r ? r.label : 'New service', sub: r ? 'Service' : 'Shows on the booking page', info: 'service', body: `
@@ -2705,8 +2815,30 @@ function panelService(p){
     <div class="fieldlabel">On the booking page</div>
     <div class="segment">${[['1', 'Shown'], ['0', 'Hidden']].map(([k, t]) =>
       `<button type="button" class="${p.active === k ? 'active' : ''}" data-act="pset" data-f="active" data-v="${k}">${t}</button>`).join('')}</div>
+    <div class="fieldlabel">🧰 What to bring <span class="opt">— technicians and helpers tick it on every job with this service</span></div>
+    <div class="card prep">
+      ${p.check.map((t, i) => `<div class="prep-row"><span class="prep-main"><span class="prep-text">${esc(t)}</span></span>
+        <button type="button" class="cart-x" data-act="chkx" data-i="${i}" aria-label="Take ${esc(t)} off the list">×</button></div>`).join('')
+        || `<p class="hint">Nothing yet.${STARTER_LISTS[p.id] ? '' : ' Add what the team must not forget.'}</p>`}
+      ${!p.check.length && STARTER_LISTS[p.id] ? `<button type="button" class="b" data-act="chkstarter">Start from our usual list (${STARTER_LISTS[p.id].length})</button>` : ''}
+      <div class="prep-add"><input data-pf="chkNew" maxlength="60" value="${esc(p.chkNew || '')}" placeholder="Wire tester, electrical tape…" autocomplete="off">
+        <button type="button" class="b" data-act="chkadd">＋ Add</button></div>
+    </div>
     <div class="stack"><button type="button" class="b primary wide" data-act="saveservice">Save</button></div>`};
 }
+/* A first list per service, for the owner to cut down (37, 2026-10-03): what a crew usually
+   carries for each in the trade — not measured here. Offered only while his list is empty;
+   nothing is saved until he taps Save. */
+const STARTER_LISTS = {
+  repair:    ['Wire tester', 'Multimeter', 'Clamp meter', 'Wires', 'Electrical tape', 'Spare capacitors', 'Manifold gauge', 'Freon', 'Screwdriver set'],
+  install:   ['Hammer drill', 'Core drill bit', 'Jackhammer', 'Level', 'Copper pipe', 'Flaring tool', 'Pipe cutter', 'Vacuum pump', 'Manifold gauge', 'Bracket and anchors', 'Drain hose', 'Putty', 'Insulation tape', 'Ladder'],
+  clean:     ['Pressure washer', 'Aircon cleaning bag (catches the water)', 'Coil cleaner', 'Pail', 'Brush', 'Rags', 'Drop cloth', 'Ladder', 'Extension cord'],
+  relocate:  ['Manifold gauge', 'Wrenches', 'Pipe caps', 'Hammer drill', 'Copper pipe', 'Flaring tool', 'Vacuum pump', 'Bracket and anchors', 'Insulation tape', 'Ladder'],
+  dismantle: ['Manifold gauge', 'Wrenches', 'Pipe caps', 'Tape', 'Screwdriver set', 'Ladder'],
+  checkup:   ['Multimeter', 'Clamp meter', 'Manifold gauge', 'Thermometer', 'Flashlight'],
+  survey:    ['Tape measure', 'Level', 'Flashlight', 'Phone for photos'],
+};
+const checklistOf = key => { const l = (db.checklists || []).find(x => x.key === key); return l ? [...(l.items || [])] : []; };
 
 /* ---------------------------------------------------------------- the receipt
    A sample for Guile to mark up (2026-09-26): A4, from any printer's menu. The lines come
@@ -3366,7 +3498,7 @@ function drawMine(){
 function bookAgain(id){
   const b = db.bookings[id]; if (!b) return;
   const units = (b.job && Array.isArray(b.job.units) && b.job.units.length ? b.job.units : unitsOf(b))
-    .filter(u => u.type).map(u => ({type: u.type, services: [...u.services], brand: u.brand || null, model: u.model || null}));
+    .filter(u => u.type).map(unitCopy);
   pubBook = {...freshPubBook(), full_name: (db.profile && db.profile.display_name) || '', address: b.address || '', landmark: b.landmark || ''};
   pubUnits = units;
   $('#done').hidden = true; bookForm.hidden = false;
@@ -3388,7 +3520,7 @@ function panelSettings(){
   const name = prof.display_name || (session.email || '').split('@')[0];
   const theme = lsGet('ws_theme', 'system'), m = checkupMonths();
   const unsent = queue.filter(o => o.state === 'pending').length, failed = queue.filter(o => o.state === 'failed').length;
-  const staff = role === 'admin' || role === 'technician';
+  const staff = role === 'admin' || inField(role);
   return {title: 'Settings', sub: name, body: `
     <div class="card me-card"><div class="avatar big">${esc(initials(name))}</div>
       <div class="lrow-main"><div class="lrow-title">${esc(name)}</div><div class="lrow-sub">${esc(session.email || '')}</div></div>
@@ -4188,7 +4320,7 @@ const ACTIONS = {
     const key = p.id || (label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'svc')
       + '_' + Math.random().toString(16).slice(2, 6);
     const active = p.active !== '0';
-    write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices}, 'Service — ' + label, ['svc:' + key], db => {
+    const op = write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices}, 'Service — ' + label, ['svc:' + key], db => {
       const list = db.services || (db.services = []);
       let r = list.find(x => x.key === key);
       if (!r){ r = {key, sort: 9999}; list.push(r);
@@ -4198,8 +4330,32 @@ const ACTIONS = {
       Object.entries(prices).forEach(([t, v]) => { if (v == null) delete kept[t]; else kept[t] = v; });
       Object.assign(r, {label, active, prices: kept});
     });
+    // what to bring (37): its own write, after the service exists, only when it changed
+    if (JSON.stringify(p.check || []) !== (p.check0 || '[]'))
+      write('save_checklist', {p_key: key, p_items: p.check}, 'What to bring — ' + label, ['svc:' + key], db => {
+        const l = db.checklists || (db.checklists = []);
+        const r = l.find(x => x.key === key);
+        if (r) Object.assign(r, {label, items: [...p.check]}); else l.push({key, label, items: [...p.check]});
+      }, p.id ? undefined : op.op_id);
     closePanel();
   },
+  // ---- what to bring (37)
+  prep: (id, el) => prepWrite(id, el.dataset.do, el.dataset.v),
+  prepadd: id => {
+    const p = topPanel(), t = ((p && p.prepNew) || '').trim();
+    if (!t){ notice('Write what to bring first.', true); return; }
+    p.prepNew = ''; againTyping('prepNew', () => prepWrite(id, 'add', t));
+  },
+  chkadd: () => {
+    const p = topPanel(); if (!p || p.kind !== 'service') return;
+    const t = (p.chkNew || '').trim(); if (!t) return;
+    if (!p.check.some(x => prepKey(x) === prepKey(t))) p.check.push(t.slice(0, 60));
+    p.chkNew = ''; againTyping('chkNew', render);
+  },
+  chkx: (id, el) => { const p = topPanel(); if (p && p.check){ p.check.splice(+el.dataset.i, 1); render(); } },
+  chkstarter: () => { const p = topPanel(); if (p && STARTER_LISTS[p.id]){ p.check = [...STARTER_LISTS[p.id]]; render(); } },
+  viewas: (id, el) => { ui.viewAs = el.dataset.v; ui.viewMenu = false; saveUi(); render(); },
+  viewmenu: () => { ui.viewMenu = !ui.viewMenu; render(); },
   inbox: (id, el) => { ui.inbox = el.dataset.v; saveUi(); render(); },
   day: (id, el) => { ui.day = el.dataset.v; saveUi(); render(); },
   techday: (id, el) => { ui.techDay = el.dataset.v; saveUi(); render(); },
@@ -4224,7 +4380,7 @@ const ACTIONS = {
     if (k === 'job'){
       // the first time THIS person opens it, the job's history says so: "👀 Seen · ZZ Tech" (20)
       const j = db && db.jobs[id];
-      if (j && jobUnseen(j) && ['admin', 'technician'].includes(db.role) && (db.role === 'admin' || j.scheduled_on))
+      if (j && jobUnseen(j) && (db.role === 'admin' || inField(db.role)))   // 38: no day too
         write('mark_job_seen', {p_job: id}, 'Seen — ' + (jobCust(j).full_name || 'job'), [id]);
       markSeen('jobs', id);
     }
@@ -4236,7 +4392,7 @@ const ACTIONS = {
   unitnew: (id, el) => {
     const cart = el.dataset.cart;
     if (cartUnits(cart).length >= 20){ notice('That is more than 20 aircons — please ring the shop for a bigger job.', true); return; }
-    unitEd = {cart, index: -1, unit: {type: el.dataset.v, services: [], brand: '', model: ''}};
+    unitEd = {cart, index: -1, unit: {type: el.dataset.v, services: [], brand: '', model: '', serial: '', problem: ''}};
     drawUnitSheet();
   },
   unitedit: (id, el) => {
@@ -4254,7 +4410,8 @@ const ACTIONS = {
     if (!unitEd) return;
     const u = unitEd.unit;
     if (!u.services.length){ $('#unitMsg').textContent = 'Choose at least one service for this aircon.'; return; }
-    const clean = {type: u.type, services: [...u.services], brand: (u.brand || '').trim() || null, model: (u.model || '').trim() || null};
+    const tr = x => (x || '').trim() || null;
+    const clean = {...unitCopy(u), brand: tr(u.brand), model: tr(u.model), serial: tr(u.serial), problem: tr(u.problem)};
     const units = cartUnits(unitEd.cart), cart = unitEd.cart;
     if (unitEd.index >= 0) units[unitEd.index] = clean; else units.push(clean);
     unitEd = null; drawUnitSheet(); afterCart(cart);
@@ -4467,7 +4624,7 @@ const ACTIONS = {
   showpricestech: (id, el) => {   // L5
     const on = el.dataset.v === 'true';
     if (!!((db.settings || {}).show_prices_tech) === on) return;
-    write('set_shop_setting', {p_key: 'show_prices_tech', p_value: on}, on ? 'Show prices to technicians' : 'Hide prices from technicians',
+    write('set_shop_setting', {p_key: 'show_prices_tech', p_value: on}, on ? 'Show prices to technicians & helpers' : 'Hide prices from technicians & helpers',
       ['show_prices_tech'], db => { db.settings = {...(db.settings || {}), show_prices_tech: on}; });
   },
   slotcap: (id, el) => {   // idea 3: most jobs a morning / afternoon, 0 = no limit
@@ -4632,6 +4789,11 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role=button][data-act]')){
     e.preventDefault(); e.target.click();
+  }
+  // an item typed in What to bring, or in the owner's list (37): Enter is its ＋ Add
+  if (e.key === 'Enter' && e.target.matches && e.target.matches('[data-pf=prepNew], [data-pf=chkNew]')){
+    e.preventDefault();
+    const b = e.target.parentElement && e.target.parentElement.querySelector('button[data-act]'); if (b) b.click();
   }
 });
 document.addEventListener('input', e => {
@@ -4839,7 +5001,7 @@ bookForm.addEventListener('submit', async e => {
   if (bad.length){ bkShow('pub', s, bad); return; }
   const payload = {full_name: s.full_name, contact: s.contact, address: s.address, landmark: s.landmark,
     lat: s.lat, lng: s.lng, preferred_on: s.date, slot: s.slot, notes: s.notes, website: s.website,
-    units: pubUnits.map(u => ({type: u.type, services: u.services, brand: u.brand || null, model: u.model || null}))};
+    units: pubUnits.map(unitCopy)};
 
   s._sending = true; s._msg = ''; drawPubCart();
   try {
