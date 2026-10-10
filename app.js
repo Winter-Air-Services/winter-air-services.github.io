@@ -267,6 +267,7 @@ async function flush(){
     if (lost) db.cursor = null;   // our local guess was wrong somewhere: take a full fresh copy
     await pull();
     sweepWorkPhotos();   // 39
+    carryOver();         // 41
   } finally {
     flushing = false;
     render();
@@ -964,10 +965,12 @@ function unitsOf(x){
   return out;
 }
 /* One aircon, copied whole: what it is, what it needs, what is known about it — since 37
-   (Guile, 2026-10-03) its serial number and its problem too. Every place that copies one uses
-   this, so a new field is added once. */
+   (Guile, 2026-10-03) its serial number and its problem too; since 40 its Additionals (the
+   owner via Guile, 2026-10-10: indoor or outdoor…). Every place that copies one uses this, so
+   a new field is added once. */
 const unitCopy = u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null,
-                        serial: u.serial || null, problem: u.problem || null});
+                        serial: u.serial || null, extra: u.extra || null, problem: u.problem || null,
+                        ...(u.cu ? {cu: u.cu} : {})});   // 43: which saved appliance it is
 /* "Window #1", "Window #2", "Split #1". */
 function unitNames(units){
   const seen = {};
@@ -1039,11 +1042,36 @@ function cartHtml(cart, units, opts){
           const p = pf && u.type ? pf(k, u.type) : null;
           return `<span class="svc-chip">${esc(svcLabel(k))}${p != null ? ` <i>${esc(peso0(p))}</i>` : ''}${editable
             ? `<button type="button" data-act="unitsvcx" data-cart="${cart}" data-i="${i}" data-v="${esc(k)}" aria-label="Take off ${esc(svcLabel(k))}">×</button>` : ''}</span>`; }).join('')}</div>
+        ${u.extra ? `<div class="cart-problem"><b>Additionals:</b> ${esc(u.extra)}</div>` : ''}
         ${u.problem ? `<div class="cart-problem"><b>Problem:</b> ${esc(u.problem)}</div>` : ''}
+        ${opts.saved && u.cu ? notesHtml(opts.saved(u.cu), 'cart:' + u.cu) : ''}
       </div>`; }).join('')}
     ${pf ? `<div class="cart-total"><span>Total</span><b>${total != null ? esc(peso(total)) : esc(opts.missing || 'We will tell you on the call')}</b></div>` : ''}
   </div>`;
 }
+/* ---------------------------------------------------------------- saved appliances (43)
+   The owner via Guile, 2026-10-10: a customer's aircons are kept on their file — brand,
+   model, serial, additionals, problem, and his own notes ("changed the capacitor"). A job's
+   aircons are saved there by the server; the office edits them in the customer's file; a
+   booking for that customer offers them when a type is tapped. Notes are staff only. */
+const custOfId = cid => db.customers[cid] || (Object.values(db.jobs).find(j => j.customer_id === cid) || {}).customer || null;
+const savedUnits = cid => ((custOfId(cid) || {}).units || []).filter(x => !x.removed);
+const savedOf = (cid, id) => id ? savedUnits(cid).find(x => x.id === id) || null : null;
+const savedLine = x => [x.brand, x.model].filter(Boolean).join(' · ') + (x.serial ? (x.brand || x.model ? ' · ' : '') + 'SN ' + x.serial : '') || 'No brand or serial yet';
+// whose cart this is, when the office (or a technician's Edit) books for a known customer
+function cartCustomer(cart){
+  if (cart === 'pub' || !db || !['admin', 'technician'].includes(db.role)) return null;
+  const p = topPanel(); if (!p) return null;
+  if (p.kind === 'book') return p.mode === 'existing' ? p.customer_id || null : null;
+  if (p.kind === 'editjob') return (db.jobs[p.id] || {}).customer_id || null;
+  if (p.kind === 'editbooking') return (db.bookings[p.id] || {}).customer_id || null;
+  return null;
+}
+// a saved appliance's notes, three lines until "Show all" (staff screens)
+const notesHtml = (x, key) => x && x.notes ? `<div class="cart-notes${openNotes.has(key) ? ' open' : ''}"><b>📝 Notes:</b> ${esc(x.notes)}</div>
+  <button type="button" class="linkish" data-act="notesmore" data-v="${esc(key)}">${openNotes.has(key) ? 'Show less' : 'Show all notes'}</button>` : '';
+const openNotes = new Set();
+
 /* The small window: "Window #2" — what it needs, brand and model if they know them. */
 function drawUnitSheet(){
   const box = $('#unitSheet');
@@ -1052,6 +1080,19 @@ function drawUnitSheet(){
   const name = unitEd.index >= 0 ? unitNames(units)[unitEd.index] : typeLabel(u.type) + ' #' + (units.filter(x => x.type === u.type).length + 1);
   const keys = cartKeys(unitEd.cart).filter(k => typeOffers(u.type, k) || u.services.includes(k));   // A2 (28)
   box.hidden = false;
+  const cid = cartCustomer(unitEd.cart), saved = cid ? savedOf(cid, u.cu) : null;
+  if (unitEd.pick){   // 43: which of their saved ones is it?
+    const taken = new Set(units.map(x => x.cu).filter(Boolean));
+    const list = savedUnits(cid).filter(x => x.type === u.type && !taken.has(x.id));
+    $('.unit-card', box).innerHTML = `
+      <div class="unit-head"><div class="unit-title">Which ${esc(typeLabel(u.type))}?</div>
+        <button type="button" class="cart-x" data-act="unitclose" aria-label="Close">✕</button></div>
+      <p class="hint">Saved on ${esc(((custOfId(cid) || {}).full_name || 'their') + '’s')} file — tap one and its details fill in.</p>
+      <div class="menu">${list.map(x => `<button type="button" class="menu-row" data-act="unitpick" data-v="${esc(x.id)}">
+          <span class="menu-main"><span class="menu-title">${esc(savedLine(x))}</span>${x.extra || x.problem ? `<span class="menu-sub">${esc([x.extra, x.problem].filter(Boolean).join(' · '))}</span>` : ''}</span><span class="menu-chev">›</span></button>`).join('')}
+        <button type="button" class="menu-row" data-act="unitpick" data-v=""><span class="menu-main"><span class="menu-title">＋ A new ${esc(typeLabel(u.type))}</span></span></button></div>`;
+    lockBody(); return;
+  }
   $('.unit-card', box).innerHTML = `
     <div class="unit-head"><div class="unit-title">${esc(name)}</div>
       <button type="button" class="cart-x" data-act="unitclose" aria-label="Close">✕</button></div>
@@ -1065,8 +1106,10 @@ function drawUnitSheet(){
       <label>Model <span class="opt">— optional</span><input data-ued="model" maxlength="60" value="${esc(u.model || '')}" autocomplete="off"></label>
     </div>
     <label>Serial number <span class="opt">— optional</span><input data-ued="serial" maxlength="60" value="${esc(u.serial || '')}" autocomplete="off"></label>
+    <label>Additionals <span class="opt">— optional</span><textarea data-ued="extra" maxlength="200" rows="2" placeholder="Indoor or outdoor, which room…">${esc(u.extra || '')}</textarea></label>
     <label>Problem or complaint <span class="opt">— optional</span>
       <textarea data-ued="problem" maxlength="300" rows="2" placeholder="What is wrong with this ${esc(name)}? Not cold, leaking…">${esc(u.problem || '')}</textarea></label>
+    ${saved ? `<div class="card saved-card"><div class="sms-note">🗂️ Saved on ${esc(((custOfId(cid) || {}).full_name || 'their') + '’s')} file</div>${notesHtml(saved, 'ued:' + saved.id)}</div>` : ''}
     <div class="unit-msg" id="unitMsg" aria-live="polite"></div>
     <div class="stack"><button type="button" class="b primary wide" data-act="unitdone">Finish</button></div>`;
   lockBody();
@@ -1572,6 +1615,8 @@ function eventRow(e){
     case 'job_seen':  return ['👀', 'Seen', null, by];   // one per person who opened the job (20)
     case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
     case 'job_photo': return ['📷', before.had ? 'New gate photo' : 'Gate photo', null, by];   // L3: the gate, for the next visit
+    case 'job_carry': return ['⏭️', 'Moved to the next day — not finished', [['Day',   // 41
+      before.scheduled_on ? niceDate(before.scheduled_on) : '', after.scheduled_on ? niceDate(after.scheduled_on) : '']], ''];
     case 'job_workphoto': return after.photo ? ['📷', 'Work photo added', null, by] : ['🗑️', 'Work photo taken off', null, by];   // 39
     case 'job_assign': {   // 39: the names as they were at the time
       const to = after.name || ROLE_NAME[after.role] || 'someone';
@@ -2108,7 +2153,8 @@ function panelJob(p){
     ${tech ? '' : textsDoneHtml(j)}
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
     <div class="sec">🛒 Aircons &amp; appliances</div>
-    ${cartHtml('view', unitsOf(j), {pf: helper || (tech && !techPrice) ? null : officePrice, missing: 'Not every service has a price yet'})}
+    ${cartHtml('view', unitsOf(j), {pf: helper || (tech && !techPrice) ? null : officePrice, missing: 'Not every service has a price yet',
+      saved: helper ? null : id => savedOf(j.customer_id, id)})}
     ${tech ? '' : listPriceNote(j)}
     ${prepHtml(j)}
     ${helper ? '' : `<div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>`}
@@ -2314,7 +2360,7 @@ function panelCustomer(p){
     ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>
     <div class="sec">📅 Regular check${cu ? ` <span class="plan-now${k && k.due <= today ? ' due' : ''}">${esc(cu)}</span>` : ''}</div>
     <div class="card">${checkPlanHtml(c.id, c.check_every, c.check_next, c.check_day)}</div>`}
-    ${airconHistoryHtml(c.id)}
+    ${removed ? airconHistoryHtml(c.id) : appliancesHtml(c)}
     <div class="sec">Jobs</div>
     ${jobs.length ? `<div class="list">${jobs.map(jobRow).join('')}</div>` : empty('No jobs yet.')}
     <div class="sec">Bookings</div>
@@ -2362,6 +2408,49 @@ function airconHistory(cid){
   const list = Object.values(byKey);
   const count = {}; list.forEach(h => { count[h.type] = (count[h.type] || 0) + 1; h.name = typeLabel(h.type) + ' #' + count[h.type]; });
   return list;
+}
+/* The customer's saved appliances (43), each with its last services from the jobs linked to
+   it; tap one to edit it. Before 43's jobs, the old "Their aircons" list still shows. */
+function appliancesHtml(c){
+  // removed ones last and greyed — still there to bring back (schema.md: a delete is tidying)
+  const list = [...(c.units || [])].sort((a, b) => !!a.removed - !!b.removed);
+  const last = id => { const out = {};
+    jobsOf(c.id).filter(j => j.status === 'done' && j.done_at).forEach(j => unitsOf(j).forEach(u => {
+      if (u.cu === id) u.services.forEach(k => { const d = manilaDay(j.done_at); if (!out[k] || out[k] < d) out[k] = d; }); }));
+    return Object.entries(out).map(([k, d]) => svcLabel(k) + ' ' + shortDate(d)).join(' · '); };
+  return `<div class="sec">🗂️ Appliances <span class="prep-count">${list.filter(x => !x.removed).length}</span></div>
+    ${list.length ? `<div class="list">${list.map(x => `<div class="lrow${x.removed ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="custunit" data-id="${esc(c.id + '|' + x.id)}">
+        <div class="lrow-main"><div class="lrow-title">${esc(typeLabel(x.type))} <span class="muted">${esc(savedLine(x))}</span></div>
+          ${x.extra ? `<div class="lrow-sub">${esc(x.extra)}</div>` : ''}
+          ${x.notes ? `<div class="lrow-sub">📝 ${esc(x.notes.split('\n')[0])}</div>` : ''}
+          ${last(x.id) ? `<div class="lrow-sub">${esc(last(x.id))}</div>` : ''}</div>
+        <span class="menu-chev">›</span></div>`).join('')}</div>` : airconHistoryHtml(c.id) || '<p class="hint">None saved yet. A job’s aircons are saved here by themselves.</p>'}
+    <div class="stack"><button type="button" class="b wide" data-act="open" data-kind="custunit" data-id="${esc(c.id + '|')}">＋ Add appliance</button></div>`;
+}
+function panelCustUnit(p){
+  const [cid, uid] = String(p.id || '').split('|'), c = custOfId(cid);
+  if (!c) return {title: 'Appliance', body: empty('This customer is no longer on this phone.')};
+  const x = uid ? ((c.units || []).find(y => y.id === uid) || null) : null;
+  if (p.type == null){
+    Object.assign(p, {uid: uid || uuid(), type: x ? x.type : '', brand: x && x.brand || '', model: x && x.model || '', serial: x && x.serial || '',
+      extra: x && x.extra || '', problem: x && x.problem || '', notes: x && x.notes || '', removed: !!(x && x.removed)});
+  }
+  const lines = Math.min(30, Math.max(6, String(p.notes || '').split('\n').length + 1));
+  return {title: x ? typeLabel(x.type) : 'New appliance', sub: c.full_name, body: `
+    ${x ? '' : `<div class="fieldlabel">What is it?</div>
+    <div class="tabbar tight">${activeTypes().map(t => `<button type="button" class="tab-btn${p.type === t.key ? ' active' : ''}" data-act="pset" data-f="type" data-v="${esc(t.key)}">${p.type === t.key ? '✓ ' : ''}${esc(t.label)}</button>`).join('')}</div>`}
+    <div class="row">
+      <label>Brand <input data-pf="brand" maxlength="60" value="${esc(p.brand)}" autocomplete="off"></label>
+      <label>Model <input data-pf="model" maxlength="60" value="${esc(p.model)}" autocomplete="off"></label>
+    </div>
+    <label>Serial number <input data-pf="serial" maxlength="60" value="${esc(p.serial)}" autocomplete="off"></label>
+    <label>Additionals <textarea data-pf="extra" maxlength="200" rows="2" placeholder="Indoor or outdoor, which room…">${esc(p.extra)}</textarea></label>
+    <label>Problem or complaint <textarea data-pf="problem" maxlength="300" rows="2">${esc(p.problem)}</textarea></label>
+    <label>📝 Notes <span class="opt">— the shop's only: what was done, parts changed. The customer never sees them.</span>
+      <textarea data-pf="notes" maxlength="4000" rows="${p.big ? lines : 6}" class="notes-box" placeholder="Oct 10 — changed the capacitor. Cleaned the drain…">${esc(p.notes)}</textarea></label>
+    <div class="actions"><button type="button" class="b" data-act="pset" data-f="big" data-v="${p.big ? '' : '1'}">${p.big ? '⤡ Smaller' : '⤢ Show all the notes'}</button></div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="savecustunit">Save</button>
+      ${x ? `<button type="button" class="b wide${x.removed ? '' : ' danger'}" data-act="savecustunit" data-v="${x.removed ? 'back' : 'remove'}">${x.removed ? 'Bring it back' : 'Remove from their file'}</button>` : ''}</div>`};
 }
 function airconHistoryHtml(cid){
   const list = airconHistory(cid); if (!list.length) return '';
@@ -2608,11 +2697,11 @@ function panelMember(p){
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
   const secs = [['services', 'Services & prices'], ['types', 'Appliances'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['texts', 'Texts'], ['numbers', 'Numbers']];
+    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['texts', 'Texts'], ['job', 'Job'], ['numbers', 'Numbers']];   // job: 41
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
     ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, receipt: drawReceiptSample, quote: drawQuoteAdmin,
-      texts: drawTexts, numbers: drawNumbers})[v]();
+      texts: drawTexts, job: drawJobMover, numbers: drawNumbers})[v]();
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
    it"): the weekdays the shop never works, and a month calendar to close particular dates —
@@ -3680,6 +3769,20 @@ async function sweepWorkPhotos(){
   } catch (e) { lsSet(key, ''); }   // tried again on the next refresh
 }
 
+/* An unfinished job moves to the next day by itself (Guile, 2026-10-10, 41): the first of the
+   shop's phones to refresh on a new day moves every job still open from before today to
+   today. The server keeps the day first promised (promised_on) for the third number. Once a
+   day per phone; the server moves each job once however many phones ask. */
+async function carryOver(){
+  if (!db || !['admin', 'technician'].includes(db.role) || !online || !session) return;
+  const day = manilaDate(0), key = 'ws_carry_' + session.uid;
+  if (lsGet(key, '') === day) return;
+  if (!Object.values(db.jobs).some(j => j.scheduled_on && j.scheduled_on < day && ['booked', 'scheduled', 'in_progress'].includes(j.status))){ lsSet(key, day); return; }
+  lsSet(key, day);
+  try { const r = await rpc('carry_over_jobs', {}); if (r && r.moved) await pull(); }
+  catch (e) { lsSet(key, ''); }   // a server before 41, or no signal: asked again next refresh
+}
+
 /* The viewer: full screen, swipe left and right, pinch or double-tap to zoom, drag to look
    around a zoomed photo. Android's back closes it. Written here, no library. */
 let viewer = null;
@@ -3814,7 +3917,8 @@ function drawNumbers(){
   const median = mins.length ? mins[Math.floor((mins.length - 1) / 2)] : null;
   const waiting = bookings.filter(b => b.status === 'new').length;
   const done = jobs.filter(j => j.status === 'done' && j.done_at && new Date(j.done_at) > since && j.scheduled_on);
-  const onDay = done.filter(j => manilaDay(j.done_at) === j.scheduled_on).length;
+  // the day first promised: a job moved on by itself keeps it in promised_on (41)
+  const onDay = done.filter(j => manilaDay(j.done_at) === (j.promised_on || j.scheduled_on)).length;
   const fmtMins = m => m == null ? '—' : m < 60 ? Math.round(m) + ' min' : m < 1440 ? (m / 60).toFixed(1) + ' h' : (m / 1440).toFixed(1) + ' days';
   const max = Math.max(1, ...perWeek.map(p => p[1]));
   return `<div class="card"><div class="sec" style="margin-top:0">1 · Bookings through the page, per week</div>
@@ -4068,14 +4172,17 @@ function smsTestText(){
 const TEXT_WORDS = {
   reminder: 'Hi {name}, this is {owner} of {company}. A reminder: your service is {when}.\n{appliances}\n{price}\nTo change it, call or text {phone}. Thank you!',
   booked: 'Hi {name}, this is {owner} of {company}. Your service is booked for {when}.\n{appliances}\n{price}\nTo change it, call or text {phone}. Thank you!',
+  // 41: a job not finished on its day, moved on by itself (the owner via Guile, 2026-10-10)
+  carried: 'Hi {name}, this is {owner} of {company}. Sorry, we could not finish your service as planned. We moved it to {when}. Sorry for the inconvenience. To change it, call or text {phone}. Thank you!',
 };
 const TEXT_FILLINS = ['name', 'when', 'appliances', 'price', 'owner', 'company', 'phone'];
-const TEXT_KIND = {before: 'Reminder, the day before', today: 'Reminder, on the day', booked: 'Booked / moved', hand: 'By hand'};
+const TEXT_KIND = {before: 'Reminder, the day before', today: 'Reminder, on the day', booked: 'Booked / moved', carried: 'Moved to the next day', hand: 'By hand'};
 function textSet(){
   const s = {auto: false, before_on: true, before_at: '18:00', today_on: false, today_at: '08:00', booked: true, price: false,
-             ...((db && db.settings || {}).texts || {})};
+             carried: true, ...((db && db.settings || {}).texts || {})};   // carried: 41
   if (!String(s.words_reminder || '').trim()) s.words_reminder = TEXT_WORDS.reminder;
   if (!String(s.words_booked || '').trim()) s.words_booked = TEXT_WORDS.booked;
+  if (!String(s.words_carried || '').trim()) s.words_carried = TEXT_WORDS.carried;
   return s;
 }
 /* A text is 160 letters, or 70 once ONE letter is outside the plain SMS alphabet — ₱, an
@@ -4096,18 +4203,19 @@ const smsCountLine = t => { const c = smsCount(t);
 // a job's day and time, in Manila, as a moment
 const manilaMs = (ymd, hhmm) => Date.parse(ymd + 'T' + hhmm + ':00+08:00');
 const jobUntil = j => manilaMs(j.scheduled_on, isClock(j.slot) ? j.slot : j.slot === 'am' ? '12:00' : j.slot === 'pm' ? '18:00' : '23:59');
-function textWhen(j, sendDay){
+function textWhen(j, sendDay, full){
   const t = isClock(j.slot) ? ' at ' + clock12(j.slot) : j.slot === 'am' ? ' in the morning' : j.slot === 'pm' ? ' in the afternoon' : '';
   const d = j.scheduled_on;
+  if (full) return (d === sendDay ? 'TODAY, ' : d === addDays(sendDay, 1) ? 'TOMORROW, ' : '') + niceDate(d) + t;   // 41
   return (d === sendDay ? 'TODAY' : d === addDays(sendDay, 1) ? 'TOMORROW' : 'on ' + niceDate(d)) + t;
 }
 /* The message, from the owner's wording: {when} is said from the day it is SENT on. */
 function textCompose(j, kind, sendDay, words){
   const set = textSet(), c = jobCust(j), shop = quoteShop(), r = receiptOf(j);
-  let w = words != null ? words : kind === 'booked' ? set.words_booked : set.words_reminder;
+  let w = words != null ? words : kind === 'booked' ? set.words_booked : kind === 'carried' ? set.words_carried : set.words_reminder;
   if (!shop.signer) w = w.replace(/\{owner\} of \{company\}/g, '{company}');
   const price = set.price && r.total != null ? 'Total: PHP ' + Number(r.total).toLocaleString('en-PH', {maximumFractionDigits: 2}) : '';
-  const fill = {name: c.full_name || 'there', when: textWhen(j, sendDay || manilaDate(0)), price,
+  const fill = {name: c.full_name || 'there', when: textWhen(j, sendDay || manilaDate(0), kind === 'carried'), price,
     appliances: r.lines.map(l => '- ' + (l.unit || l.type) + ' - ' + l.label).join('\n'),
     owner: shop.signer || '', company: shop.name || SHOP_NAME, phone: SHOP_PHONE};
   // a line that was only fill-ins, all empty ({price} with the price off), goes; his own blank lines stay
@@ -4164,7 +4272,7 @@ const textable = j => j.status === 'scheduled' && j.scheduled_on && j.scheduled_
 function textPlan(){
   const set = textSet(), since = Date.parse(set.since || '') || Infinity, now = Date.now(), plan = [];
   if (!set.auto || !smsSender()) return plan;
-  Object.values(db.jobs).filter(textable).forEach(j => {
+  Object.values(db.jobs).filter(textable).filter(j => !j.promised_on).forEach(j => {   // 41: not a moved-on job
     const d = j.scheduled_on, until = jobUntil(j), had = textsOf(j), sched = Date.parse(j.schedule_at || '') || 0;
     [['before', set.before_on, addDays(d, -1), set.before_at], ['today', set.today_on, d, set.today_at]].forEach(([kind, on, day, hhmm]) => {
       const key = kind + ':' + d, at = manilaMs(day, hhmm);
@@ -4196,11 +4304,17 @@ async function textTick(){
       if (r === 'ok') lsSet('ws_text_plan', plan); else console.error('text plan:', r);
     }
     const set = textSet(), since = Date.parse(set.since || '') || Infinity;
-    if (!set.auto || !set.booked || !smsSender()) return;
-    for (const j of Object.values(db.jobs).filter(textable)){
+    if (!set.auto || !smsSender()) return;
+    if (set.booked) for (const j of Object.values(db.jobs).filter(textable).filter(j => !j.promised_on)){   // 41
       const key = 'booked:' + j.scheduled_on + (j.slot ? ' ' + j.slot : '');
       if (textsOf(j)[key] || !(Date.parse(j.schedule_at || '') >= since) || jobUntil(j) <= Date.now()) continue;
       await textSend(j, key, textCompose(j, 'booked', manilaDate(0)));
+    }
+    // 41: moved on by itself — "sorry, we moved it to …", the first refresh after the move
+    if (set.carried) for (const j of Object.values(db.jobs).filter(textable).filter(j => j.promised_on && j.carried_at)){
+      const key = 'carried:' + j.scheduled_on + (j.slot ? ' ' + j.slot : '');
+      if (textsOf(j)[key] || !(Date.parse(j.carried_at) >= since) || jobUntil(j) <= Date.now()) continue;
+      await textSend(j, key, textCompose(j, 'carried', manilaDate(0)));
     }
   } finally { textBusy = false; }
 }
@@ -4266,6 +4380,61 @@ function panelTextAll(p){
 
 /* Admin → Texts: his switches and his wording. */
 const TEXT_TIMES = Array.from({length: 33}, (_, i) => String(5 + Math.floor(i / 2)).padStart(2, '0') + ':' + (i % 2 ? '30' : '00'));
+function textWordsCard(k, kind, title){
+  const s = textSet();
+  return `<div class="card">
+      <div class="menu-title">${title}</div>
+      <label><span class="opt">Fill-ins: ${TEXT_FILLINS.map(f => '{' + f + '}').join(' ')}</span>
+        <textarea id="tw_${kind}" data-k="tw_${kind}" data-txtcount="tc_${kind}" rows="7" maxlength="700">${esc(s[k])}</textarea></label>
+      <div class="sms-note" id="tc_${kind}">${esc(smsCountLine(s[k]))}</div>
+      <div class="actions"><button type="button" class="b primary" data-act="textwords" data-f="${k}" data-v="${kind}">Save</button>
+        <button type="button" class="b" data-act="textwordsreset" data-f="${k}" data-v="${kind}">The shop's wording</button></div>
+      <div class="sms-note">Looks like this — a sample, ZZ data:</div><pre class="sms-sample">${esc(textSample(kind))}</pre>
+      <div class="sms-note">${esc(smsCountLine(textSample(kind)))}</div></div>`;
+}
+/* Admin → Job (the owner via Guile, 2026-10-10, 41): the job mover — on/off and the time an
+   unfinished job of today moves to tomorrow — and the apology text it sends, with his wording. */
+const moverSet = () => ({on: true, at: '23:59', ...((db && db.settings || {}).job_mover || {})});
+/* The mover's time, typed like a job's (Guile, 2026-10-10): [HH] : [MM] [AM | PM], any minute. */
+function moverTimeHtml(at){
+  const h = +at.slice(0, 2), hh = String((h % 12) || 12), mm = at.slice(3), ap = h < 12 ? 'am' : 'pm';
+  const pick = (part, now, list) => `<select data-movert="${part}" aria-label="${part === 'h' ? 'Hour' : 'Minutes'}">${list.map(v =>
+    `<option${v === now ? ' selected' : ''}>${v}</option>`).join('')}</select>`;
+  return `<div class="bk-time">${pick('h', hh, Array.from({length: 12}, (_, i) => String(i + 1)))}<b>:</b>${
+    pick('m', mm, Array.from({length: 60}, (_, i) => String(i).padStart(2, '0')))}
+    <div class="segment">${[['am', 'AM'], ['pm', 'PM']].map(([k, t]) =>
+      `<button type="button" class="${ap === k ? 'active' : ''}" data-act="moverap" data-v="${k}">${t}</button>`).join('')}</div></div>`;
+}
+function moverAt(part, v){
+  const at = moverSet().at, h = +at.slice(0, 2);
+  const p = {h: String((h % 12) || 12), m: at.slice(3), ap: h < 12 ? 'am' : 'pm', [part]: v};
+  const next = String((+p.h % 12) + (p.ap === 'pm' ? 12 : 0)).padStart(2, '0') + ':' + p.m;
+  if (next !== at) saveMover(moverSet().on, next);
+}
+// what the time means, said plainly: 12:00 AM is the start of a day, 12:00 PM is noon (42)
+function moverMeans(at){
+  if (at === '00:00') return 'At 12:00 AM (midnight), every job from the day before that is not Done or Cancelled moves to the new day, same time.';
+  return 'At ' + clock12(at) + (at === '12:00' ? ' (noon)' : '') + ' each day, every job of that day — and any older one — that is not Done or Cancelled moves to the next day, same time. A job whose own time is later than ' + clock12(at) + ' stays.'
+    + (at < '17:00' ? ' This is during the working day: a job still being worked on at ' + clock12(at) + ' moves too.' : '');
+}
+function drawJobMover(){
+  const m = moverSet(), s = textSet();
+  const seg = (act, on) => `<div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
+    `<button type="button" class="${!!on === v ? 'active' : ''}" ${act} data-v="${v}">${l}</button>`).join('')}</div>`;
+  const last = m.last_at ? 'Last moved ' + new Date(m.last_at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'})
+    + ' — ' + (m.last_n || 0) + ((m.last_n || 0) === 1 ? ' job' : ' jobs') : 'Has not moved any job yet.';
+  return `<div class="card row-between">
+      <div class="menu-title">Move unfinished jobs to the next day</div>${seg('data-act="moverset" data-f="on"', m.on)}</div>
+    <div class="card"><div class="menu-title">At</div>${moverTimeHtml(m.at)}
+      <p class="hint">${esc(moverMeans(m.at))}</p>
+      <p class="hint">Its history says it moved; the day first promised still counts in Numbers.</p>
+      <div class="sms-note">${esc(m.clock === false ? 'The server has no clock here: jobs move when a shop phone opens the app on a new day.' : last)}</div></div>
+    <div class="card row-between">
+      <div class="menu-title">Text the customer when it moves</div>${seg('data-act="textset" data-f="carried"', s.carried)}</div>
+    <div class="card"><div class="sms-note">${esc(s.auto ? (smsSender() ? '✓ This phone sends it, the next time the app opens after the move.' : 'The sending phone sends it, the next time its app opens after the move.')
+      : 'Texts are off: Admin → Texts → Send texts by themselves.')}</div></div>
+    ${textWordsCard('words_carried', 'carried', 'The apology')}`;
+}
 function drawTexts(){
   const s = textSet();
   const sw = (k, title, info) => `<div class="card row-between">
@@ -4277,15 +4446,7 @@ function drawTexts(){
       <div class="row-gap"><select data-textat="${k}" aria-label="Time">${TEXT_TIMES.map(t => `<option value="${t}"${s[k] === t ? ' selected' : ''}>${clock12(t)}</option>`).join('')}</select>
       <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
         `<button type="button" class="${!!s[on] === v ? 'active' : ''}" data-act="textset" data-f="${on}" data-v="${v}">${l}</button>`).join('')}</div></div></div>`;
-  const words = (k, kind, title) => `<div class="card">
-      <div class="menu-title">${title}</div>
-      <label><span class="opt">Fill-ins: ${TEXT_FILLINS.map(f => '{' + f + '}').join(' ')}</span>
-        <textarea id="tw_${kind}" data-k="tw_${kind}" data-txtcount="tc_${kind}" rows="7" maxlength="700">${esc(s[k])}</textarea></label>
-      <div class="sms-note" id="tc_${kind}">${esc(smsCountLine(s[k]))}</div>
-      <div class="actions"><button type="button" class="b primary" data-act="textwords" data-f="${k}" data-v="${kind}">Save</button>
-        <button type="button" class="b" data-act="textwordsreset" data-f="${k}" data-v="${kind}">The shop's wording</button></div>
-      <div class="sms-note">Looks like this — a sample, ZZ data:</div><pre class="sms-sample">${esc(textSample(kind))}</pre>
-      <div class="sms-note">${esc(smsCountLine(textSample(kind)))}</div></div>`;
+  const words = textWordsCard;
   const who = textSender();
   const here = smsSender() ? '✓ This phone sends them — the only one.'
     : who ? 'Sending phone: ' + who.name + '. Only that phone sends.'
@@ -4321,7 +4482,13 @@ function saveTexts(patch, label){
 document.addEventListener('change', e => {
   const k = e.target.dataset && e.target.dataset.textat;
   if (k) saveTexts({[k]: e.target.value}, 'time');
+  if (e.target.dataset && e.target.dataset.movert) moverAt(e.target.dataset.movert, e.target.value);   // 41, 42
 });
+function saveMover(on, at){
+  write('set_job_mover', {p_on: on, p_at: at}, 'Job mover — ' + (on ? clock12(at) : 'off'), ['mover'], db => {
+    db.settings = {...(db.settings || {}), job_mover: {...moverSet(), on, at}};
+  });
+}
 document.addEventListener('input', e => {
   const id = e.target.dataset && e.target.dataset.txtcount, out = id && document.getElementById(id);
   if (out) out.textContent = smsCountLine(smsPlain(e.target.value));
@@ -4338,7 +4505,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
   deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
-  assign: panelAssign, donephoto: panelDonePhoto};   // 39
+  assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit};   // 39, 43
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
@@ -4531,8 +4698,14 @@ const ACTIONS = {
   textset: (id, el) => {
     const f = el.dataset.f, on = el.dataset.v === 'true';
     if (!!textSet()[f] === on) return;
-    saveTexts({[f]: on}, {auto: 'by themselves', before_on: 'the day before', today_on: 'on the day', booked: 'when scheduled', price: 'the price'}[f] + (on ? ' on' : ' off'));
+    saveTexts({[f]: on}, {auto: 'by themselves', before_on: 'the day before', today_on: 'on the day', booked: 'when scheduled', price: 'the price', carried: 'when moved'}[f] + (on ? ' on' : ' off'));
     if (f === 'auto' && on && !smsSender()) toast('Turned on. Now, on the owner\'s phone: Settings → This phone sends the texts.');
+  },
+  moverap: (id, el) => moverAt('ap', el.dataset.v),   // 42
+  moverset: (id, el) => {   // 41
+    const on = el.dataset.v === 'true', m = moverSet();
+    if (!!m.on === on) return;
+    saveMover(on, m.at);
   },
   textwords: (id, el) => {
     const v = (($('#tw_' + el.dataset.v) || {}).value || '').trim();
@@ -4815,9 +4988,19 @@ const ACTIONS = {
   unitnew: (id, el) => {
     const cart = el.dataset.cart;
     if (cartUnits(cart).length >= 20){ notice('That is more than 20 aircons — please ring the shop for a bigger job.', true); return; }
-    unitEd = {cart, index: -1, unit: {type: el.dataset.v, services: [], brand: '', model: '', serial: '', problem: ''}};
+    unitEd = {cart, index: -1, unit: {type: el.dataset.v, services: [], brand: '', model: '', serial: '', extra: '', problem: ''}};
+    // 43: a known customer with that type saved — ask which one first
+    const cid = cartCustomer(cart), taken = new Set(cartUnits(cart).map(x => x.cu).filter(Boolean));
+    if (cid && savedUnits(cid).some(x => x.type === el.dataset.v && !taken.has(x.id))) unitEd.pick = true;
     drawUnitSheet();
   },
+  unitpick: (id, el) => {   // 43
+    if (!unitEd) return;
+    const x = el.dataset.v && savedOf(cartCustomer(unitEd.cart), el.dataset.v);
+    if (x) Object.assign(unitEd.unit, {brand: x.brand || '', model: x.model || '', serial: x.serial || '', extra: x.extra || '', problem: x.problem || '', cu: x.id});
+    unitEd.pick = false; drawUnitSheet();
+  },
+  notesmore: (id, el) => { const k = el.dataset.v; if (openNotes.has(k)) openNotes.delete(k); else openNotes.add(k); if (unitEd) drawUnitSheet(); render(); },
   unitedit: (id, el) => {
     const u = cartUnits(el.dataset.cart)[+el.dataset.i]; if (!u) return;
     unitEd = {cart: el.dataset.cart, index: +el.dataset.i, unit: {...u, services: [...u.services]}};
@@ -4834,7 +5017,7 @@ const ACTIONS = {
     const u = unitEd.unit;
     if (!u.services.length){ $('#unitMsg').textContent = 'Choose at least one service for this aircon.'; return; }
     const tr = x => (x || '').trim() || null;
-    const clean = {...unitCopy(u), brand: tr(u.brand), model: tr(u.model), serial: tr(u.serial), problem: tr(u.problem)};
+    const clean = {...unitCopy(u), brand: tr(u.brand), model: tr(u.model), serial: tr(u.serial), extra: tr(u.extra), problem: tr(u.problem)};
     const units = cartUnits(unitEd.cart), cart = unitEd.cart;
     if (unitEd.index >= 0) units[unitEd.index] = clean; else units.push(clean);
     unitEd = null; drawUnitSheet(); afterCart(cart);
@@ -5147,6 +5330,24 @@ const ACTIONS = {
     toast(what + '.');
   },
   workview: (id, el) => openViewer(id, el.dataset.v),
+  savecustunit: (id, el) => {   // 43
+    const p = topPanel(); if (!p || p.kind !== 'custunit') return;
+    const [cid] = String(p.id).split('|'), c = custOfId(cid);
+    if (!p.type){ notice('Tap what it is first. Nothing was saved.', true); return; }
+    const removed = el.dataset.v === 'remove' ? true : el.dataset.v === 'back' ? false : !!p.removed;
+    const tr = v => String(v || '').trim();
+    const unit = {id: p.uid, type: p.type, brand: tr(p.brand), model: tr(p.model), serial: tr(p.serial), extra: tr(p.extra),
+                  problem: tr(p.problem), notes: tr(p.notes), removed};
+    write('save_customer_unit', {p_customer: cid, p_unit: unit}, (removed ? 'Appliance removed — ' : 'Appliance — ') + ((c || {}).full_name || ''), [cid], db => {
+      const row = db.customers[cid]; if (!row) return;
+      const list = (row.units || []).filter(y => y.id !== unit.id);
+      const clean = {...unit, updated_at: new Date().toISOString()};
+      Object.keys(clean).forEach(k => { if (clean[k] === '') delete clean[k]; });
+      row.units = [...list, clean];
+    });
+    closePanel();
+    toast(removed ? 'Removed from their file. Bring it back any time.' : 'Saved on their file.');
+  },
   cancel: id => {
     const j = db.jobs[id], p = topPanel(); if (!j) return;
     // Guile, 2026-09-27: an empty box is not a question — it goes as "No reason"
