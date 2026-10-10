@@ -266,6 +266,7 @@ async function flush(){
     }
     if (lost) db.cursor = null;   // our local guess was wrong somewhere: take a full fresh copy
     await pull();
+    sweepWorkPhotos();   // 39
   } finally {
     flushing = false;
     render();
@@ -327,6 +328,7 @@ async function pull(){
     if (keep !== undefined) db.settings.page_photos = keep;
   }
   if (res.services) db.services = res.services; // the price list, sent whole (admin only)
+  if (res.staff) db.staff = res.staff;          // the shop's people by name, for Assigned to (39)
   // what to bring, per service, the shop's three roles (37) — not while a change is on its way
   if (res.checklists && !queue.some(o => o.fn === 'save_checklist')) db.checklists = res.checklists;
   // the appliance list, every role (27) — not while a change to it is still on its way: two
@@ -887,7 +889,7 @@ const INFO = {
   showprices: ['Show prices', 'Off: customers never see a price; you tell them on the call.\n\nOn: once a customer picks the aircon type and the services, the booking page shows the total from this list. If a service has no price for their aircon type, it says you will tell them on the call.'],
   service: ['A service', 'A price for each aircon type. Leave a type empty if the shop does not do it for that type — a booking with that type then shows no price until you set one. Customers never see prices.'],
   editbooking: ['After the call', 'Change what they need and which aircon they have. The price shows as soon as every service has a price for that aircon type. It is frozen onto the job when you make it.'],
-  types: ['Aircon & Other Appliances', 'What a customer taps on the booking page — Window, Split, a chiller, a freezer… — in this order. Add one with its name, the services it offers (a freezer is not “installed” like a split) and a picture — one of ours, or ＋ Your own PNG; its prices go in Services & prices. A new service starts on every appliance — untick it where it does not belong.\n\nRemove takes it off the booking page only. Jobs that already have it keep it, and so do its prices; Bring it back puts it all back. Renaming changes the name everywhere, old jobs too.'],
+  types: ['Aircon & Other Appliances', 'What a customer taps on the booking page — Window, Split, a chiller, a freezer… — in this order. Add one with its name, the services it offers (a freezer is not “installed” like a split) and a picture — one of ours, or ＋ Your own PNG; its prices go in Services & prices. A new service starts on the appliances ticked on its own screen; add or untick it here any time.\n\nRemove takes it off the booking page only. Jobs that already have it keep it, and so do its prices; Bring it back puts it all back. Renaming changes the name everywhere, old jobs too.'],
   pagephotos: ['Page photos', 'The photos at the top of the booking page — the first thing a customer sees. Add up to six; with two or more the page fades from one to the next every 6 seconds, on its own. With none, the page shows its own photo.\n\nAnyone who opens the page can see these photos: never a customer’s house, a face or a plate number without their say-so. The phone makes each photo smaller before sending, so the page stays quick on mobile data. Remove deletes the photo for good.'],
   quote: ['Quotation', 'The shop’s own quotation, made from this booking: the lines start as the customer’s aircons at the price list’s prices, and every word, Qty and price is yours to change. The page on top is exactly the paper.\n\nSave keeps it on the booking. Send as PDF: in the app, the quotation goes as a PDF file straight to Messenger, Viber, email, Bluetooth or Drive — pick one. Print or save as PDF: the print screen, for paper.\n\nSigned by the customer on the Conforme line, it is your agreement. Accept, left blank, takes its TOTAL as the job’s price.'],
   quoteshop: ['Letterhead and signer', 'The lines at the top of every quotation, and the name under the signature. Blank lines are left out. Kept on the server for admins only, not in the public page.'],
@@ -1570,6 +1572,13 @@ function eventRow(e){
     case 'job_seen':  return ['👀', 'Seen', null, by];   // one per person who opened the job (20)
     case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
     case 'job_photo': return ['📷', before.had ? 'New gate photo' : 'Gate photo', null, by];   // L3: the gate, for the next visit
+    case 'job_workphoto': return after.photo ? ['📷', 'Work photo added', null, by] : ['🗑️', 'Work photo taken off', null, by];   // 39
+    case 'job_assign': {   // 39: the names as they were at the time
+      const to = after.name || ROLE_NAME[after.role] || 'someone';
+      if (!after.uid) return ['👤', 'No assign — taken off ' + (before.name || 'everyone') + (by ? ' by ' + by : ''), null, ''];
+      if (after.self) return ['🙋', 'Assigned to ' + to + ' (self assigned)', null, ''];
+      return ['👤', (before.uid ? 'Transferred to ' : 'Assigned to ') + to + (by ? ' by ' + by : ''), null, ''];
+    }
     case 'job_price': return ['₱', 'Price', [['Price', before.price != null ? peso(before.price) : 'not set', after.price != null ? peso(after.price) : 'not set']], by];
   }
   return ['•', e.kind, null, by];
@@ -1707,18 +1716,23 @@ function seenStore(){
 }
 function markSeen(kind, id, value){
   const s = seenStore(); if (!s || !id) return;
+  s[kind] = s[kind] || {};   // 'assign' came later (39)
   if (s[kind][id] === (value || 1)) return;
   s[kind][id] = value || 1;
   lsSet(seenKey(), s);
 }
 const isOpenJob = j => !['done', 'cancelled'].includes(j.status);
 const jobUnseen = j => { const s = seenStore(); return !!s && isOpenJob(j) && !s.jobs[j.id]; };
+// ⚠️ a job someone else gave THIS person, not opened since (39) — on this phone, like the rest
+const assignUnseen = j => { const s = seenStore(); return !!s && !!session && isOpenJob(j) && !!j.assigned_at
+  && j.assigned_uid === session.uid && j.assigned_by !== session.uid && (s.assign || {})[j.id] !== j.assigned_at; };
 const userUnseen = t => { const s = seenStore(); return !!s && t.id !== session.uid && !s.users[t.id]; };
 const checkupUnseen = k => { const s = seenStore(); return !!s && s.checkups[k.c.id] !== k.due; };
 function unseenCounts(){
   return {
     inbox: newBookings().filter(b => !b.seen_at).length,   // shared by the office (15)
-    jobs: Object.values(db.jobs).filter(jobUnseen).length,
+    jobs: Object.values(db.jobs).filter(j => jobUnseen(j) || assignUnseen(j)).length,
+    assigned: Object.values(db.jobs).filter(assignUnseen).length,   // 39
     // the after-job calls count until made (idea 11): they leave the list once rung
     checkups: db.role === 'admin' ? checkups().filter(checkupUnseen).length + followups().length : 0,
     team: db.role === 'admin' ? Object.values(db.team).filter(userUnseen).length : 0,
@@ -1970,18 +1984,61 @@ function paidPill(j){
   if (j.paid_method) return pill('paid', 'Paid');
   return pill('unpaid', 'Not paid');
 }
+/* ---------------------------------------------------------------- Assigned to (39)
+   Guile, 2026-10-10, replacing "No assignment": a job may say who it is on. Everyone still
+   sees every job. The badge IS the button — the office gives it to anyone of the shop, a
+   technician takes it or hands it on; a helper only reads it. ⚠️ until the person it was
+   given to opens it. Every change is a line in its history, with both names. */
+const staffOf = uid => uid ? (db.staff || []).find(s => s.id === uid) : null;
+function staffName(uid){
+  const s = staffOf(uid);
+  if (s) return s.name || ROLE_NAME[s.role] || 'Someone';
+  return uid === (session && session.uid) ? (db.profile && db.profile.display_name) || 'you' : 'someone no longer here';
+}
+// on the field's screen and the office's; a helper's (or the admin's View as Helper) only reads
+const canAssign = j => !!j && isOpenJob(j) && ['admin', 'technician'].includes(viewRole());
+function assignBadge(j, big){
+  if (!db || !j || !(db.role === 'admin' || inField(db.role)) || !db.staff) return '';   // a server from before 39
+  const who = j.assigned_uid, can = canAssign(j);
+  if (!who && !can) return '';
+  const warn = assignUnseen(j);
+  const text = who ? (warn ? '⚠️ ' : '') + 'Assigned to ' + staffName(who) : '＋ Assign';
+  const cls = 'pill assign' + (who ? '' : ' none') + (warn ? ' warn' : '') + (big ? ' big' : '');
+  return can ? `<button type="button" class="${cls}" data-act="assignopen" data-id="${esc(j.id)}" aria-label="${esc(text + (who ? ' — tap to transfer' : ''))}">${esc(text)}</button>`
+             : `<span class="${cls}">${esc(text)}</span>`;
+}
+function panelAssign(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Assign', body: empty('This job is no longer on this phone.')};
+  const me = session.uid, cur = j.assigned_uid, tech = db.role === 'technician';
+  const order = {technician: 0, helper: 1, admin: 2};
+  const people = (db.staff || []).slice().sort((a, b) => (order[a.role] - order[b.role]) || String(a.name || '').localeCompare(String(b.name || '')));
+  const row = s => `<button type="button" class="menu-row pick${s.id === cur ? ' on' : ''}" data-act="assignto" data-id="${esc(j.id)}" data-v="${esc(s.id)}"${s.id === cur ? ' disabled' : ''}>
+      <span class="menu-main"><span class="menu-title">${esc(s.name || ROLE_NAME[s.role])}${s.id === me ? ' (you)' : ''}</span>
+      <span class="menu-sub">${esc(ROLE_NAME[s.role] || s.role)}</span></span>${s.id === cur ? '<span class="pick-now">✓ Now</span>' : ''}</button>`;
+  // the office's first choice: nobody (Guile, 2026-10-10: "they can select no assign")
+  const noAssign = `<button type="button" class="menu-row pick${cur ? '' : ' on'}" data-act="assignto" data-id="${esc(j.id)}" data-v=""${cur ? '' : ' disabled'}>
+      <span class="menu-main"><span class="menu-title">No assign</span><span class="menu-sub">Not on anyone — everyone still sees it</span></span>${cur ? '' : '<span class="pick-now">✓ Now</span>'}</button>`;
+  return {title: cur ? 'Transfer the job' : 'Assign the job', sub: jobCust(j).full_name || '', body: `
+    ${cur ? `<p class="hint">Now: <b>${esc(staffName(cur))}</b>.</p>` : ''}
+    ${tech && cur !== me ? `<button type="button" class="b primary wide" data-act="assignto" data-id="${esc(j.id)}" data-v="${esc(me)}">🙋 Take it myself</button>` : ''}
+    <div class="fieldlabel">${cur ? 'Hand it to' : 'Give it to'}</div>
+    <div class="menu">${db.role === 'admin' ? noAssign : ''}${people.map(row).join('') || '<p class="hint">Nobody of the shop is on this phone yet.</p>'}</div>
+    <p class="hint">Everyone still sees every job. Its history says who it went to, and who gave it.</p>`};
+}
 function jobRow(j){
-  const c = jobCust(j);
-  return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+  const c = jobCust(j), ab = assignBadge(j);
+  return `<div class="lrow${ab ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
     <div class="lrow-when">${j.scheduled_on
       ? `<b>${esc(slotShort(j.slot))}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
       : '<b>—</b><span>no date</span>'}</div>
     <div class="lrow-main">
-      <div class="lrow-title">${newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
+      <div class="lrow-title">${assignUnseen(j) ? '<span class="warn-mark" title="Assigned to you">⚠️</span>' : newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
       <div class="lrow-sub">${esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — '))}</div>
       <div class="lrow-sub">${esc(place(c))}</div>
       ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
+    ${ab ? `<div class="lrow-assign">${ab}</div>` : ''}
     <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null && seesPrice() ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
   </div>`;
 }
@@ -2028,6 +2085,7 @@ function panelJob(p){
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo && !tech ? housePhoto(photo) : ''}
       ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
+      ${assignBadge(j, true) ? kv('Assigned', assignBadge(j, true)) : ''}
       ${j.on_way_at && ['booked', 'scheduled'].includes(j.status) ? kv('On the way', esc('since ' + new Date(j.on_way_at).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit'}))) : ''}
       ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
       ${kv('Number', esc(c.contact || ''))}
@@ -2042,8 +2100,10 @@ function panelJob(p){
             `<button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="${m}">${m === 'cash' ? '💵 Cash' : m === 'gcash' ? '📱 GCash' : 'Other'}</button>`).join('')}`}</div>`}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
       ${j.status === 'cancelled' && !helper ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
-      ${helper ? '' : `<div class="actions">${callBtn(c.contact)}${tech ? '' : textBtn(j)}${mapBtn(c)}${cid && c.full_name !== '(removed)' && (!tech || j.scheduled_on) ? photoBtn(cid, photo) : ''}${!tech || (j.scheduled_on && j.status !== 'cancelled') ? editBtn('editjob', j.id) : ''}</div>`}
+      ${helper ? '' : `<div class="actions">${callBtn(c.contact)}${tech ? '' : textBtn(j)}${mapBtn(c)}${canAssign(j) && db.staff
+        ? `<button type="button" class="b" data-act="assignopen" data-id="${esc(j.id)}">👤 ${j.assigned_uid ? 'Transfer' : 'Assign'}</button>` : ''}${canWorkPhoto(j) ? workPhotoBtn(j) : ''}${!tech || (j.scheduled_on && j.status !== 'cancelled') ? editBtn('editjob', j.id) : ''}</div>`}
     </div>
+    ${helper ? '' : workPhotosHtml(j)}
     ${tech ? '' : wantNote(j)}
     ${tech ? '' : textsDoneHtml(j)}
     ${acts.length ? `<div class="actions fill">${acts.join('')}</div>` : ''}
@@ -2249,7 +2309,7 @@ function panelCustomer(p){
       ${kv('Address', esc(c.address))}
       ${kv('Landmark', esc(c.landmark || ''))}
       ${kv('Customer since', esc(c.created_at ? new Date(c.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : ''))}
-      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}${removed ? '' : photoBtn(c.id, c.photo_path)}</div>
+      <div class="actions">${callBtn(c.contact)}${mapBtn(c)}</div>
     </div>
     ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>
     <div class="sec">📅 Regular check${cu ? ` <span class="plan-now${k && k.due <= today ? ' due' : ''}">${esc(cu)}</span>` : ''}</div>
@@ -2269,7 +2329,7 @@ function panelForget(p){
   const n = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
   return {title: 'Delete customer', sub: c.full_name, body: `
     <p class="hint" style="font-size:14px"><b>${esc(c.full_name)}</b> is deleted with ${esc(n(bs.length, 'booking'))},
-      ${esc(n(js.length, 'job'))}, their history and their gate photo — from every phone. Numbers stop
+      ${esc(n(js.length, 'job'))}, their history, their gate photo and their jobs’ work photos — from every phone. Numbers stop
       counting those jobs. <b>This cannot be undone.</b> A job on today or in progress stops it.</p>
     <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, delete ${esc(c.full_name)}</label>
     <div class="stack"><button type="button" class="b danger wide" data-act="forget" data-id="${esc(c.id)}">Delete for good</button></div>`};
@@ -2805,13 +2865,18 @@ function panelService(p){
   if (p.label == null){
     p.label = r ? r.label : ''; p.active = r && !r.active ? '0' : '1';
     p.check = r ? checklistOf(r.key) : []; p.check0 = JSON.stringify(p.check);   // 37
+    p.types = [];   // 39: a new one is on the appliances ticked, none to start with
     activeTypes().forEach(t => { p['price_' + t.key] = r && r.prices && r.prices[t.key] != null ? String(r.prices[t.key]) : ''; });
   }
+  const priced = r ? priceTypes(r) : activeTypes().filter(t => p.types.includes(t.key));
   return {title: r ? r.label : 'New service', sub: r ? 'Service' : 'Shows on the booking page', info: 'service', body: `
     <label>Name <input data-pf="label" maxlength="60" value="${esc(p.label)}" placeholder="Freon recharge"></label>
-    <div class="fieldlabel">Price for each one ${r ? '<span class="opt">— the appliances that offer it; which ones is in Admin → Appliances</span>' : '<span class="opt">— a new service starts on every appliance</span>'}</div>
-    <div class="price-grid">${priceTypes(r).map(t => `<label class="price-cell"><span>${esc(t.label)}</span>
-      <span class="peso-in"><i>₱</i><input data-pf="price_${esc(t.key)}" inputmode="decimal" value="${esc(p['price_' + t.key] || '')}" placeholder="—"></span></label>`).join('')}</div>
+    ${r ? '' : `<div class="fieldlabel">Offered on <span class="opt">— tick the appliances it is for</span></div>
+    <div class="tabbar tight">${activeTypes().map(t => `<button type="button" class="tab-btn${p.types.includes(t.key) ? ' active' : ''}" data-act="svctype" data-v="${esc(t.key)}">${p.types.includes(t.key) ? '✓ ' : ''}${esc(t.label)}</button>`).join('')}</div>`}
+    <div class="fieldlabel">Price for each one ${r ? '<span class="opt">— the appliances that offer it; which ones is in Admin → Appliances</span>' : '<span class="opt">— the appliances ticked</span>'}</div>
+    ${priced.length ? `<div class="price-grid">${priced.map(t => `<label class="price-cell"><span>${esc(t.label)}</span>
+      <span class="peso-in"><i>₱</i><input data-pf="price_${esc(t.key)}" inputmode="decimal" value="${esc(p['price_' + t.key] || '')}" placeholder="—"></span></label>`).join('')}</div>`
+      : '<p class="hint">Tick an appliance above, and its price box shows here.</p>'}
     <div class="fieldlabel">On the booking page</div>
     <div class="segment">${[['1', 'Shown'], ['0', 'Hidden']].map(([k, t]) =>
       `<button type="button" class="${p.active === k ? 'active' : ''}" data-act="pset" data-f="active" data-v="${k}">${t}</button>`).join('')}</div>
@@ -3098,7 +3163,8 @@ function panelQuote(p){
   // Send as PDF (TODO 13): in the app, the paper as a file straight to the share sheet; on the
   // website there is no file maker, so it opens the print screen like the button above it
   const printBtn = `<button type="button" class="b${open ? '' : ' primary'} wide" data-act="printquote">🖨️ Print or save as PDF</button>
-    <button type="button" class="b wide" data-act="sharequote">📤 Send as PDF — Messenger, email…</button>`;
+    <button type="button" class="b wide" data-act="sharequote">📤 Send as PDF — Messenger, email…</button>
+    ${src.ref ? '<button type="button" class="b wide" data-act="wordquote">📝 Send as Word (.docx)</button>' : ''}`;   // 39
   if (!open) return {title: 'Quotation', sub, info: 'quote', body: `
     ${quoteBox(quoteView(p.q), 'quotePreview')}
     <p class="hint">${said}. The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.</p>
@@ -3270,6 +3336,139 @@ function quotePaper(share){
   if (src.open && (p.dirty || !src.saved) && !ACTIONS.savequote()) return;
   printHtml(quoteHtml(quoteView(p.q)), 'Quotation ' + src.ref + ' ' + src.name, share);
 }
+/* ---------------------------------------------------------------- the quotation as Word (39)
+   Guile, 2026-10-10: "Send as DOCX". The same q as quoteHtml, written as a .docx — a zip of
+   a few XML files and the three pictures (logo, QR, his signature). The zip is made here
+   with no compression (Word reads it either way), so no library. DOC, Word's old binary
+   format, cannot be made without one: DOCX only. */
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b){ let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipStore(files){   // [{name, data: Uint8Array}] → Blob
+  const enc = new TextEncoder(), parts = [], dir = [];
+  let off = 0;
+  const d = new Date(), time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  for (const f of files){
+    const name = enc.encode(f.name), crc = crc32(f.data), n = f.data.length;
+    const h = new DataView(new ArrayBuffer(30));
+    [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, time, 2], [12, date, 2], [14, crc, 4], [18, n, 4], [22, n, 4], [26, name.length, 2], [28, 0, 2]]
+      .forEach(([o, v, w]) => w === 4 ? h.setUint32(o, v, true) : h.setUint16(o, v, true));
+    const c = new DataView(new ArrayBuffer(46));
+    [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, time, 2], [14, date, 2], [16, crc, 4], [20, n, 4], [24, n, 4],
+     [28, name.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, off, 4]]
+      .forEach(([o, v, w]) => w === 4 ? c.setUint32(o, v, true) : c.setUint16(o, v, true));
+    parts.push(h, name, f.data); dir.push(c, name);
+    off += 30 + name.length + n;
+  }
+  const size = dir.reduce((s, x) => s + x.byteLength, 0), e = new DataView(new ArrayBuffer(22));
+  [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, files.length, 2], [10, files.length, 2], [12, size, 4], [16, off, 4], [20, 0, 2]]
+    .forEach(([o, v, w]) => w === 4 ? e.setUint32(o, v, true) : e.setUint16(o, v, true));
+  return new Blob([...parts, ...dir, e], {type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+}
+async function docxPic(src){   // {data, w, h} or null — a missing picture leaves its place empty
+  try {
+    // a data: picture (his signature) is decoded here: the page's CSP lets fetch reach 'self' only
+    const data = src.startsWith('data:') ? Uint8Array.from(atob(src.split(',')[1]), ch => ch.charCodeAt(0))
+                                         : new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+    return {data, w: img.naturalWidth, h: img.naturalHeight};
+  } catch (e) { return null; }
+}
+async function quoteDocx(q){
+  const s = quoteShop(), sigSrc = quoteSig(), total = qtTotal(q.lines);
+  const [logo, qr, sig] = await Promise.all([docxPic('img/winter-air-logo.png'), docxPic('img/quote-qr.png'), sigSrc ? docxPic(sigSrc) : null]);
+  const x = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const EMU = 914400, pics = [];
+  const pic = (p, inchH, maxW) => {
+    if (!p) return '';
+    let h = inchH * EMU, w = h * p.w / p.h;
+    if (maxW && w > maxW * EMU){ w = maxW * EMU; h = w * p.h / p.w; }
+    pics.push(p); const n = pics.length, id = 'rIdP' + n;
+    return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${Math.round(w)}" cy="${Math.round(h)}"/><wp:docPr id="${n}" name="Picture ${n}"/>
+      <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+      <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${n}" name="p${n}.png"/><pic:cNvPicPr/></pic:nvPicPr>
+      <pic:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+      <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(w)}" cy="${Math.round(h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>
+      </a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+  };
+  const run = (t, o = {}) => `<w:r><w:rPr>${o.b ? '<w:b/>' : ''}${o.i ? '<w:i/>' : ''}${o.sz ? `<w:sz w:val="${o.sz}"/><w:szCs w:val="${o.sz}"/>` : ''}</w:rPr><w:t xml:space="preserve">${x(t)}</w:t></w:r>`;
+  const para = (inner, o = {}) => `<w:p><w:pPr><w:spacing w:before="0" w:after="${o.after != null ? o.after : 120}"/>${o.jc ? `<w:jc w:val="${o.jc}"/>` : ''}${o.ind ? `<w:ind w:left="${o.ind}"/>` : ''}</w:pPr>${inner}</w:p>`;
+  const P = (t, o) => para(run(t, o), o);
+  const cell = (inner, w, o = {}) => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${o.span ? `<w:gridSpan w:val="${o.span}"/>` : ''}${o.fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${o.fill}"/>` : ''}<w:vAlign w:val="center"/></w:tcPr>${inner}</w:tc>`;
+  const longDate = ymd => ymd ? new Date(ymd + 'T00:00:00').toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}) : '';
+  const note = String(q.note || '').split('\n').filter(t => t.trim());
+  const none = '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>';
+  const lines = '<w:tblBorders>' + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(k => `<w:${k} w:val="single" w:sz="6" w:space="0" w:color="000000"/>`).join('') + '</w:tblBorders>';
+  // letterhead: logo | the shop's words | his QR, side by side (2026-09-28)
+  const head = `<w:tbl><w:tblPr><w:tblW w:w="9900" w:type="dxa"/>${none}<w:tblLayout w:type="fixed"/></w:tblPr>
+    <w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="6300"/><w:gridCol w:w="1800"/></w:tblGrid><w:tr>
+    ${cell(para(pic(logo, 0.95, 1.2), {after: 0}), 1800)}
+    ${cell([P(s.name, {b: true, sz: 30, jc: 'center', after: 40}), s.tagline ? P(s.tagline, {i: true, jc: 'center', after: 20}) : '',
+            s.address ? P(s.address, {jc: 'center', after: 20}) : '', s.contact ? P(s.contact, {sz: 20, jc: 'center', after: 20}) : '',
+            s.tin ? P(s.tin, {sz: 20, jc: 'center', after: 0}) : ''].join(''), 6300)}
+    ${cell(para(pic(qr, 0.95, 1.2), {after: 0, jc: 'right'}), 1800)}</w:tr></w:tbl>`;
+  const W = [5900, 900, 1300, 1800];
+  const tr = cells => `<w:tr>${cells.join('')}</w:tr>`;
+  const items = `<w:tbl><w:tblPr><w:tblW w:w="9900" w:type="dxa"/>${lines}<w:tblLayout w:type="fixed"/></w:tblPr>
+    <w:tblGrid>${W.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>
+    ${tr([cell(P('Supply of Labor, Materials and Services', {b: true, after: 0}), W[0], {fill: 'D9E2F3'}), cell(P('Qty.', {b: true, jc: 'center', after: 0}), W[1], {fill: 'D9E2F3'}),
+          cell(P('Unit Price', {b: true, jc: 'center', after: 0}), W[2], {fill: 'D9E2F3'}), cell(P('Amount', {b: true, jc: 'center', after: 0}), W[3], {fill: 'D9E2F3'})])}
+    ${q.lines.map(l => tr([cell(P(l.text || '', {after: 0}), W[0]), cell(P(l.qty != null ? String(l.qty) : '—', {jc: 'center', after: 0}), W[1]),
+          cell(P(l.price != null ? qtNum(l.price) : '—', {jc: 'center', after: 0}), W[2]),
+          cell(P(qtAmount(l) != null ? qtMoney(qtAmount(l)) : '—', {jc: 'right', after: 0}), W[3])])).join('')}
+    ${tr([cell(P('TOTAL', {b: true, jc: 'center', after: 0}), W[0] + W[1] + W[2], {span: 3}), cell(P(total != null ? 'PHP ' + qtMoney(total) : '—', {b: true, jc: 'right', after: 0}), W[3])])}
+    </w:tbl>`;
+  const body = [head, P(''), P(longDate(q.date)),
+    ...String(q.to_address || '').split('\n').filter(t => t.trim()).map((t, i, a) => P(t, {after: i === a.length - 1 ? 120 : 0})),
+    P('SUBJECT: ' + (q.subject || ''), {b: true}), q.salutation ? P(q.salutation) : '',
+    P('Thank you for considering ' + SHOP_SHORT + ' as your service provider! We are pleased to present this proposal and will furnish the equipment, labor and materials necessary as well as our expertise to do the following in compliance with your service request:', {jc: 'both'}),
+    items, P(''),
+    note.length ? P('Note:', {b: true, after: 40}) : '', ...note.map(t => P('•  ' + t.trim(), {ind: /^\s/.test(t) ? 720 : 360, after: 20})),
+    P(''), P('We strive to satisfy our clients to the best of our abilities and we hope you’ll find our proposal suitable to your business needs.', {jc: 'both'}),
+    P('Should you find the above agreement acceptable, we have provided a space below for your valued signature. This will then serve as our contract.', {jc: 'both'}),
+    P('Sincerely yours,'), sig ? para(pic(sig, 0.6, 2.2), {after: 0}) : P('') + P(''),
+    P(s.signer || '', {b: true, after: 0}), s.title ? P(s.title, {after: 0}) : '', P(s.name, {after: 360}),
+    P('Conforme: ________________________________________', {after: 0}), P('Signature over Printed Name & Title', {sz: 18, ind: 1100}),
+    P('Date: ________________________')].join('');
+  const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}
+<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1000" w:bottom="1000" w:left="1000" w:header="500" w:footer="500" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="en-PH"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="252" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
+  const enc = new TextEncoder();
+  return zipStore([
+    {name: '[Content_Types].xml', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`)},
+    {name: '_rels/.rels', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`)},
+    {name: 'word/document.xml', data: enc.encode(doc)},
+    {name: 'word/styles.xml', data: enc.encode(styles)},
+    {name: 'word/_rels/document.xml.rels', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${pics.map((p, i) =>
+      `<Relationship Id="rIdP${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/p${i + 1}.png"/>`).join('')}</Relationships>`)},
+    ...pics.map((p, i) => ({name: 'word/media/p' + (i + 1) + '.png', data: p.data})),
+  ]);
+}
+async function quoteWord(){
+  const p = topPanel(), src = p && p.q && quoteSrc(p);
+  if (!src) return;
+  if (src.open && (p.dirty || !src.saved) && !ACTIONS.savequote()) return;   // the file is what is saved, as the paper
+  const name = 'Quotation ' + src.ref + ' ' + src.name;
+  try {
+    const blob = await quoteDocx(quoteView(p.q));
+    if (window.AndroidBridge && window.AndroidBridge.shareDocx){
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+      window.AndroidBridge.shareDocx(name, b64);
+    } else if (window.AndroidBridge){
+      toast('This app is older than Send as Word. Press Update first, then try again.', true);
+    } else {   // the website: the file downloads
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name.replace(/[\\/:*?"<>|]/g, '').trim() + '.docx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+  } catch (e) { toast('The Word file was not made: ' + e.message, true); }
+}
 async function printHtml(html, name, share){
   $('#printArea').innerHTML = html;
   await Promise.all($$('#printArea img').map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })));
@@ -3287,10 +3486,6 @@ async function printHtml(html, name, share){
    time and are asked for again when dropped (docs/rules/pictures.md). */
 const photoBusy = new Set();
 function housePhoto(path, cls){ return `<img class="${cls || 'house-photo'}" data-house="${esc(path)}" alt="The gate">`; }
-function photoBtn(cid, has){
-  return photoBusy.has(cid) ? `<span class="b" aria-busy="true">Sending photo…</span>`
-    : `<label class="b">📷 ${has ? 'New gate photo' : 'Gate photo'}<input type="file" accept="image/*" data-photo-for="${esc(cid)}" hidden></label>`;
-}
 function fitPhoto(file, maxSide){
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file), img = new Image();
@@ -3331,7 +3526,7 @@ function hydratePhotos(){
   $$('img[data-house]').forEach(img => {
     const p = img.dataset.house;
     if (photoUrls[p]){ if (img.getAttribute('src') !== photoUrls[p]) img.src = photoUrls[p]; }
-    else if (!photoWant.has(p)){ photoWant.add(p); photoQueue.push({p, tries: 0}); pumpPhotos(); }
+    else if (!photoWant.has(p)){ photoWant.add(p); photoQueue.push({p, b: img.dataset.bucket || 'house-photos', tries: 0}); pumpPhotos(); }
   });
 }
 function pumpPhotos(){
@@ -3343,7 +3538,7 @@ function pumpPhotos(){
         let blob = null;
         try { const c = await caches.open('ws-photos'); const m = await c.match('photo/' + job.p); if (m) blob = await m.blob(); } catch (e) {}
         if (!blob){
-          const r = await storage('GET', job.p);
+          const r = await storage('GET', job.p, null, false, job.b);   // work photos have their own bucket (39)
           if (!r.ok) throw new Error('http ' + r.status);
           blob = await r.blob();
         }
@@ -3387,6 +3582,220 @@ document.addEventListener('change', async e => {
     notice(err instanceof TypeError ? 'The photo needs signal to send. Nothing was saved — try again when there is signal.'
                                     : 'The photo was not saved: ' + err.message, true);
   } finally { photoBusy.delete(cid); render(); }
+});
+
+/* ---------------------------------------------------------------- work photos (39)
+   Guile, 2026-10-10: the gate photo became Work photos — several per job (12 at most), from
+   the office or a technician, seen full screen with swipe and pinch. pictures.md: the expiry
+   before the upload — a photo goes 90 days after its job is done or cancelled; the office's
+   phone runs work_photo_sweep once a day, deletes the files it is handed and crosses them
+   off. 1280 px at the house photo's 0.72. Downloads ride the house photos' queue. */
+const WORK_BUCKET = 'work-photos', WORK_MAX = 12;
+const workBusy = {};   // job id → photos still on their way up
+const workList = j => Array.isArray(j && j.work_photos) ? j.work_photos : [];
+// the office any time; a technician on a job with a day, not cancelled — as the server says
+const canWorkPhoto = j => !!j && 'work_photos' in j && (viewRole() === 'admin'
+  || (viewRole() === 'technician' && !!j.scheduled_on && j.status !== 'cancelled'));
+const canDropWork = x => db.role === 'admin' || (db.role === 'technician' && x.by === session.uid);
+const workImg = (path, cls) => `<img class="${cls || 'work-thumb'}" data-house="${esc(path)}" data-bucket="${WORK_BUCKET}" alt="Work photo" draggable="false">`;
+function workPhotoBtn(j){
+  const busy = workBusy[j.id];
+  if (busy) return `<span class="b" aria-busy="true">Sending ${busy} photo${busy === 1 ? '' : 's'}…</span>`;
+  if (workList(j).length >= WORK_MAX) return '';
+  return `<label class="b">📷 Work photo<input type="file" accept="image/*" multiple data-work-for="${esc(j.id)}" hidden></label>`;
+}
+function workPhotosHtml(j){
+  const list = workList(j);
+  if (!list.length) return '';
+  return `<div class="sec">📷 Work photos <span class="prep-count">${list.length}</span></div>
+    <div class="work-grid">${list.map((x, i) => `<button type="button" class="work-cell" data-act="workview" data-id="${esc(j.id)}" data-v="${i}" aria-label="Work photo ${i + 1} — full screen">${workImg(x.path)}</button>`).join('')}</div>`;
+}
+/* Mark done asks, once: "Wanna add work photos?" — optional, Cancel any time (Guile). */
+function panelDonePhoto(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Done', body: empty('This job is no longer on this phone.')};
+  return {title: '✓ Marked done', sub: jobCust(j).full_name || '', body: `
+    <p class="done-ask">Wanna add work photos?</p>
+    <p class="hint">Optional — the finished work, for the office and the next visit.</p>
+    <div class="stack">
+      <label class="b primary wide">📷 Take a picture<input type="file" accept="image/*" capture="environment" data-work-for="${esc(j.id)}" hidden></label>
+      <button type="button" class="b wide grey" data-act="back">Cancel</button></div>`};
+}
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-work-for]')) return;
+  const jid = inp.dataset.workFor, files = [...(inp.files || [])];
+  inp.value = '';
+  const j = db.jobs[jid];
+  if (!files.length || !session || !j) return;
+  const top = topPanel(); if (top && top.kind === 'donephoto') closePanel();
+  const room = Math.max(0, WORK_MAX - workList(j).length - (workBusy[jid] || 0));
+  if (files.length > room) notice('A job keeps ' + WORK_MAX + ' work photos. ' + (room ? 'The first ' + room + ' are going; the rest were left out.' : 'Take one off first.'), true);
+  const take = files.slice(0, room);
+  if (!take.length) return;
+  workBusy[jid] = (workBusy[jid] || 0) + take.length; render();
+  let sent = 0;
+  for (const file of take){
+    try {
+      const blob = await fitPhoto(file, 1280);
+      const path = 'work/' + jid + '/' + await hashOf(blob) + '.jpg';
+      const r = await storage('POST', path, blob, false, WORK_BUCKET);
+      // the same file twice is already there: fine (as the house photo)
+      if (!r.ok && r.status !== 409 && r.status !== 400){
+        const b = await r.json().catch(() => ({}));
+        throw new Error(b.message || b.error || 'HTTP ' + r.status);
+      }
+      if (r.status === 400){ const b = await r.json().catch(() => ({})); if (!/exist/i.test(b.message || b.error || '')) throw new Error(b.message || b.error || 'HTTP 400'); }
+      await keepPhoto(path, blob);
+      write('add_work_photo', {p_job: jid, p_path: path}, 'Work photo — ' + (jobCust(j).full_name || ''), [jid], db => {
+        const x = db.jobs[jid]; if (!x) return;
+        x.work_photos = workList(x).filter(w => w.path !== path).concat([{path, by: session.uid, at: new Date().toISOString()}]);
+      });
+      sent++;
+    } catch (err) {
+      notice(err instanceof TypeError ? 'A work photo needs signal to send. It was not saved — try again when there is signal.'
+                                      : 'A work photo was not saved: ' + err.message, true);
+    } finally {
+      if (!--workBusy[jid]) delete workBusy[jid];
+      render();
+    }
+  }
+  if (sent) toast(sent === 1 ? 'Work photo added.' : sent + ' work photos added.');
+});
+/* The office's phone, once a day: what the server hands back is deleted from Storage, then
+   crossed off. A file already gone counts as deleted. The rest waits for tomorrow. */
+async function sweepWorkPhotos(){
+  if (!db || db.role !== 'admin' || !db.staff || !online) return;   // db.staff: a server with 39
+  const day = manilaDate(0), key = 'ws_sweep_' + session.uid;
+  if (lsGet(key, '') === day) return;
+  lsSet(key, day);
+  try {
+    const r = await rpc('work_photo_sweep', {});
+    const gone = [];
+    for (const p of (r && r.paths) || []){
+      const x = await storage('DELETE', p, null, false, WORK_BUCKET);
+      if (x.ok || x.status === 404 || x.status === 400) gone.push(p);
+    }
+    if (gone.length) await rpc('work_photo_swept', {p_paths: gone});
+  } catch (e) { lsSet(key, ''); }   // tried again on the next refresh
+}
+
+/* The viewer: full screen, swipe left and right, pinch or double-tap to zoom, drag to look
+   around a zoomed photo. Android's back closes it. Written here, no library. */
+let viewer = null;
+function openViewer(jid, i){
+  viewer = {jid, i: +i || 0, s: 1, x: 0, y: 0};
+  try { history.pushState({wsv: 1}, ''); } catch (e) {}
+  drawViewer();
+}
+function closeViewer(fromPop){
+  if (!viewer) return;
+  viewer = null; drawViewer();
+  if (!fromPop && history.state && history.state.wsv){ ignorePop++; history.back(); }
+}
+function drawViewer(){
+  let el = $('#viewer');
+  const j = viewer && db.jobs[viewer.jid], list = workList(j);
+  if (!viewer || !list.length){
+    viewer = null;
+    if (el) el.remove();
+    document.body.classList.toggle('vw-open', false);
+    return;
+  }
+  if (!el){
+    el = document.createElement('div'); el.id = 'viewer';
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Work photos');
+    document.body.appendChild(el); wireViewer(el);
+  }
+  document.body.classList.toggle('vw-open', true);
+  viewer.i = Math.min(Math.max(0, viewer.i), list.length - 1);
+  el.innerHTML = `<div class="vw-track">${list.map((w, k) => `<div class="vw-slide">${workImg(w.path, 'vw-img')}</div>`).join('')}</div>
+    <div class="vw-top"><button type="button" class="vw-btn" data-vw="close" aria-label="Close">✕</button>
+      <span class="vw-count"></span><button type="button" class="vw-btn vw-del" data-vw="del" aria-label="Take this photo off">🗑️</button></div>
+    <div class="vw-cap"></div>
+    <button type="button" class="vw-nav prev" data-vw="prev" aria-label="Previous photo">‹</button>
+    <button type="button" class="vw-nav next" data-vw="next" aria-label="Next photo">›</button>`;
+  hydratePhotos();
+  vwGo(viewer.i, false);
+}
+function vwGo(i, animate){
+  const el = $('#viewer'), list = workList(db.jobs[viewer.jid]);
+  viewer.i = Math.min(Math.max(0, i), list.length - 1);
+  viewer.s = 1; viewer.x = 0; viewer.y = 0;
+  const track = $('.vw-track', el), x = list[viewer.i];
+  track.style.transition = animate === false ? 'none' : '';
+  track.style.transform = `translateX(${-viewer.i * 100}%)`;
+  $$('.vw-img', el).forEach(img => { img.style.transform = ''; });
+  $('.vw-count', el).textContent = (viewer.i + 1) + ' / ' + list.length;
+  $('.vw-cap', el).textContent = staffName(x.by) + ' · ' + new Date(x.at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+  $('.vw-del', el).style.visibility = canDropWork(x) ? '' : 'hidden';
+  $('.vw-nav.prev', el).hidden = viewer.i === 0;
+  $('.vw-nav.next', el).hidden = viewer.i === list.length - 1;
+}
+function vwZoom(){
+  const img = $$('#viewer .vw-img')[viewer.i]; if (!img) return;
+  const w = img.clientWidth, h = img.clientHeight, mx = (viewer.s - 1) * w / 2, my = (viewer.s - 1) * h / 2;
+  viewer.x = Math.max(-mx, Math.min(mx, viewer.x)); viewer.y = Math.max(-my, Math.min(my, viewer.y));
+  img.style.transform = viewer.s > 1 ? `translate(${viewer.x}px, ${viewer.y}px) scale(${viewer.s})` : '';
+}
+function wireViewer(el){
+  const pts = new Map();
+  let start = null, lastTap = 0, moved = false;
+  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-vw]'); if (!b || !viewer) return;
+    const what = b.dataset.vw, j = db.jobs[viewer.jid], x = workList(j)[viewer.i];
+    if (what === 'close') closeViewer();
+    else if (what === 'prev') vwGo(viewer.i - 1);
+    else if (what === 'next') vwGo(viewer.i + 1);
+    else if (what === 'del' && x && canDropWork(x)){
+      if (!confirmTwice(b, 'Take it off?')) return;
+      write('remove_work_photo', {p_job: j.id, p_path: x.path}, 'Work photo off — ' + (jobCust(j).full_name || ''), [j.id], db => {
+        const y = db.jobs[j.id]; if (y) y.work_photos = workList(y).filter(w => w.path !== x.path);
+      });
+      drawViewer();
+    }
+  });
+  el.addEventListener('pointerdown', e => {
+    if (e.target.closest('[data-vw]') || !viewer) return;
+    el.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+    moved = false;
+    start = {x: e.clientX, y: e.clientY, s: viewer.s, vx: viewer.x, vy: viewer.y, d: pts.size === 2 ? dist() : 0};
+    $('.vw-track', el).style.transition = 'none';
+  });
+  el.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId) || !viewer || !start) return;
+    pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+    if (pts.size === 2 && start.d){ viewer.s = Math.max(1, Math.min(4, start.s * dist() / start.d)); vwZoom(); }
+    else if (pts.size === 1 && viewer.s > 1){ viewer.x = start.vx + dx; viewer.y = start.vy + dy; vwZoom(); }
+    else if (pts.size === 1){ $('.vw-track', el).style.transform = `translateX(calc(${-viewer.i * 100}% + ${dx}px))`; }
+  });
+  const up = e => {
+    if (!pts.has(e.pointerId) || !viewer) return;
+    pts.delete(e.pointerId);
+    const dx = e.clientX - start.x;
+    if (pts.size === 1){   // one finger left after a pinch: carry on from here
+      const [p] = [...pts.values()]; start = {x: p.x, y: p.y, s: viewer.s, vx: viewer.x, vy: viewer.y, d: 0}; return;
+    }
+    $('.vw-track', el).style.transition = '';
+    if (start.d){ if (viewer.s < 1.05){ viewer.s = 1; viewer.x = viewer.y = 0; vwZoom(); } return; }
+    if (viewer.s === 1 && moved){ vwGo(dx < -50 ? viewer.i + 1 : dx > 50 ? viewer.i - 1 : viewer.i); return; }
+    if (!moved){   // a double tap zooms in, or back out
+      if (Date.now() - lastTap < 300){ viewer.s = viewer.s > 1 ? 1 : 2.5; viewer.x = viewer.y = 0; vwZoom(); lastTap = 0; }
+      else lastTap = Date.now();
+    }
+  };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}
+document.addEventListener('keydown', e => {
+  if (!viewer) return;
+  if (e.key === 'Escape') closeViewer();
+  else if (e.key === 'ArrowLeft') vwGo(viewer.i - 1);
+  else if (e.key === 'ArrowRight') vwGo(viewer.i + 1);
 });
 
 /* ---------------------------------------------------------------- numbers */
@@ -3468,9 +3877,11 @@ function exportMonth(delta){
 /* ---------------------------------------------------------------- technician
    No assignment (2026-09-26): every technician sees every job on the schedule. */
 function drawTech(){
-  const unseen = unseenCounts().jobs;
+  const n = unseenCounts(), unseen = n.jobs - n.assigned;
   // no bottom bar here, so the red number sits by the heading: jobs THIS technician has not opened
-  return pageHead('Jobs', 'tech', unseen ? `<span class="tech-new">${unseen} new</span>` : '') + jobTabsHtml();
+  // — and ⚠️ the ones given to them, apart (39)
+  return pageHead('Jobs', 'tech', (n.assigned ? `<span class="tech-new warn">⚠️ ${n.assigned} assigned to you</span>` : '')
+    + (unseen > 0 ? `<span class="tech-new">${unseen} new</span>` : '')) + jobTabsHtml();
 }
 
 /* ---------------------------------------------------------------- customer */
@@ -3926,8 +4337,9 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
-  deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll};
-const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking']);
+  deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
+  assign: panelAssign, donephoto: panelDonePhoto};   // 39
+const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
 const topPanel = () => stack[stack.length - 1];
@@ -3958,6 +4370,7 @@ function closePanels(n){
 }
 window.addEventListener('popstate', () => {
   if (ignorePop){ ignorePop--; return; }
+  if (viewer){ closeViewer(true); return; }   // the work photo viewer (39)
   if (stack.length){ stack.pop(); render(); }
 });
 function drawPanels(){
@@ -4238,6 +4651,7 @@ const ACTIONS = {
   },
   printquote: () => quotePaper(false),
   sharequote: () => quotePaper(true),
+  wordquote: () => quoteWord(),   // 39
   savequoteshop: () => {
     const cur = (db.settings || {}).quote_shop || {}, v = {};
     ['name', 'tagline', 'address', 'contact', 'tin', 'signer', 'title'].forEach(k => { v[k] = (($('#qs_' + k) || {}).value || '').trim(); });
@@ -4304,13 +4718,20 @@ const ACTIONS = {
     closePanel();
     toast('Saved — ' + name);
   },
+  svctype: (id, el) => {   // 39: New service, the appliances it is on
+    const p = topPanel(); if (!p || p.kind !== 'service') return;
+    const k = el.dataset.v;
+    p.types = p.types.includes(k) ? p.types.filter(x => x !== k) : [...p.types, k];
+    render();
+  },
   saveservice: () => {
     const p = topPanel(); if (!p || p.kind !== 'service') return;
     const label = (p.label || '').trim();
     if (label.length < 2){ notice('Give the service a name. Nothing was saved.', true); return; }
+    if (!p.id && !(p.types || []).length){ notice('Tick at least one appliance it is offered on. Nothing was saved.', true); return; }
     const prices = {};
-    // the shown ones only: a removed one is not sent, so its prices stay (27)
-    for (const t of priceTypes(p.id ? svcRows().find(x => x.key === p.id) : null).map(x => x.key)){
+    // the shown ones only: a removed one is not sent, so its prices stay (27); new: the ticked (39)
+    for (const t of (p.id ? priceTypes(svcRows().find(x => x.key === p.id)) : activeTypes().filter(x => p.types.includes(x.key))).map(x => x.key)){
       const raw = (p['price_' + t] || '').trim();
       if (!raw){ prices[t] = null; continue; }
       const v = parsePrice(raw);
@@ -4320,12 +4741,13 @@ const ACTIONS = {
     const key = p.id || (label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'svc')
       + '_' + Math.random().toString(16).slice(2, 6);
     const active = p.active !== '0';
-    const op = write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices}, 'Service — ' + label, ['svc:' + key], db => {
+    const ticked = p.id ? null : [...p.types];
+    const op = write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices, ...(ticked ? {p_types: ticked} : {})}, 'Service — ' + label, ['svc:' + key], db => {
       const list = db.services || (db.services = []);
       let r = list.find(x => x.key === key);
       if (!r){ r = {key, sort: 9999}; list.push(r);
-        // a new service starts on every appliance (28)
-        (db.types || []).forEach(t => { if (Array.isArray(t.services) && !t.services.includes(key)) t.services.push(key); }); }
+        // a new service starts on the appliances ticked (39)
+        (db.types || []).forEach(t => { if (Array.isArray(t.services) && ticked.includes(t.key) && !t.services.includes(key)) t.services.push(key); }); }
       const kept = {...(r.prices || {})};
       Object.entries(prices).forEach(([t, v]) => { if (v == null) delete kept[t]; else kept[t] = v; });
       Object.assign(r, {label, active, prices: kept});
@@ -4383,6 +4805,7 @@ const ACTIONS = {
       if (j && jobUnseen(j) && (db.role === 'admin' || inField(db.role)))   // 38: no day too
         write('mark_job_seen', {p_job: id}, 'Seen — ' + (jobCust(j).full_name || 'job'), [id]);
       markSeen('jobs', id);
+      if (j && assignUnseen(j)) markSeen('assign', id, j.assigned_at);   // the ⚠️ goes (39)
     }
     if (k === 'member') markSeen('users', id);
     if (k === 'customer') seenCheckup(id);
@@ -4708,7 +5131,22 @@ const ACTIONS = {
         (j._prev = j._prev || []).push(j.status);
         j.status = to; j.status_by = session.uid; if (to === 'done') j.done_at = new Date().toISOString();
       });
+    // "Wanna add work photos?" — optional, Cancel any time (39)
+    if (to === 'done' && canWorkPhoto(j) && workList(j).length < WORK_MAX) openPanel({kind: 'donephoto', id});
   },
+  // ---- Assigned to (39)
+  assignopen: id => { if (db.jobs[id]) openPanel({kind: 'assign', id}); },
+  assignto: (id, el) => {
+    const j = db.jobs[id]; if (!j || !canAssign(j)) return;
+    const to = el.dataset.v || null, name = jobCust(j).full_name || 'job';
+    const what = to ? (to === session.uid && db.role === 'technician' ? 'Assigned to you' : (j.assigned_uid ? 'Transferred to ' : 'Assigned to ') + staffName(to)) : 'No assign';
+    write('assign_job', {p_job: id, p_to: to}, what + ' — ' + name, [id], () => {
+      j.assigned_uid = to; j.assigned_by = session.uid; j.assigned_at = new Date().toISOString();
+    });
+    closePanel();
+    toast(what + '.');
+  },
+  workview: (id, el) => openViewer(id, el.dataset.v),
   cancel: id => {
     const j = db.jobs[id], p = topPanel(); if (!j) return;
     // Guile, 2026-09-27: an empty box is not a question — it goes as "No reason"
@@ -5268,7 +5706,7 @@ updateOnLaunch();
 /* Android's Back, inside the APK: close what is on top, then the login door. False means
    there is nowhere left to go, and the app may close. */
 // the APK could not make or send the quotation PDF (MainActivity.sharePdf)
-window.wsShareFailed = why => toast('The PDF did not go: ' + why + '. Print or save as PDF still works.', true);
+window.wsShareFailed = why => toast('It did not go: ' + why + '. Print or save as PDF still works.', true);
 window.wsBack = () => {
   if (!$('#unitSheet').hidden){ unitEd = null; drawUnitSheet(); return true; }
   if (!$('#cartSheet').hidden){ $('#cartSheet').hidden = true; lockBody(); return true; }

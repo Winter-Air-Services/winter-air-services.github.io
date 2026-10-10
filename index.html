@@ -266,6 +266,47 @@
   .pill.unpaid{background:var(--bad-bg);color:var(--bad)}
   .pill.gcash{background:var(--st-sched-bg);color:var(--st-sched)}
   .pill.paid{background:var(--good-bg);color:var(--good)}
+  /* Assigned to (39): long enough for the whole name; the badge is the button */
+  .pill.assign{background:var(--primary-soft);color:var(--primary);border:1.5px solid transparent;font:inherit;font-size:13px;font-weight:700;
+    margin:0;width:auto;min-height:0;line-height:1.35;padding:3px 11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  span.pill.assign{cursor:default}
+  .pill.assign.none{background:transparent;color:var(--ink-soft);border:1.5px dashed var(--border)}
+  .pill.assign.warn{background:var(--warn-bg);color:var(--warn)}
+  .pill.assign.big{font-size:14px;padding:5px 13px;white-space:normal;text-align:left;border-radius:14px}
+  /* a phone: its own line under the row, beneath Not paid / Scheduled — inline it left the name
+     80 px at 375 (measured 2026-10-10); a wide screen: beside them, as Guile drew it */
+  .lrow.has-assign{flex-wrap:wrap;row-gap:6px}
+  .lrow-assign{order:5;flex:0 0 100%;min-width:0;display:flex;justify-content:flex-end}
+  @media (min-width:600px){
+    .lrow.has-assign{flex-wrap:nowrap}
+    .lrow-assign{order:0;flex:0 1 auto;max-width:44%;align-self:flex-start}
+  }
+  .warn-mark{margin-right:4px}
+  .tech-new.warn{background:var(--warn-bg);color:var(--warn)}
+  .menu-row.pick.on{background:var(--primary-soft)}
+  .menu-row.pick:disabled{opacity:1}
+  .pick-now{font-size:12.5px;font-weight:700;color:var(--primary);white-space:nowrap}
+  /* work photos (39) */
+  .work-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:6px 0 4px}
+  .work-cell{display:block;margin:0;padding:0;border:0;border-radius:var(--radius-sm);overflow:hidden;aspect-ratio:1;background:var(--surface-alt);min-height:0;width:auto}
+  .work-thumb{display:block;width:100%;height:100%;object-fit:cover}
+  .done-ask{font-size:18px;font-weight:700;margin:4px 0 2px}
+  .b.grey{background:var(--surface-alt);color:var(--ink-soft);border-color:var(--border)}
+  #viewer{position:fixed;inset:0;z-index:200;background:#000;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  body.vw-open{overflow:hidden}
+  .vw-track{display:flex;height:100%;transition:transform .25s ease}
+  .vw-slide{flex:0 0 100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .vw-img{max-width:100%;max-height:100%;object-fit:contain;transform-origin:center;will-change:transform}
+  .vw-top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:10px 12px;
+    background:linear-gradient(rgba(0,0,0,.6),transparent);color:#fff}
+  .vw-btn{width:44px;height:44px;min-height:0;margin:0;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font-size:20px}
+  .vw-count{font-size:15px;font-weight:700}
+  .vw-cap{position:absolute;left:0;right:0;bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));color:#fff;font-size:13.5px;text-align:center;
+    background:linear-gradient(transparent,rgba(0,0,0,.6))}
+  .vw-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;min-height:0;margin:0;padding:0;border:0;border-radius:12px;
+    background:rgba(255,255,255,.12);color:#fff;font-size:34px;line-height:1}
+  .vw-nav.prev{left:8px} .vw-nav.next{right:8px}
+  .vw-nav[hidden]{display:none}
   .pill.rejected,.pill.cancelled,.pill.off{background:var(--st-off-bg);color:var(--st-off)}
   .pill.unsent{background:var(--warn-bg);color:var(--warn)}
   .pill.kind{background:var(--st-sched-bg);color:var(--st-sched)}
