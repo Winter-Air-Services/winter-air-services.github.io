@@ -168,6 +168,7 @@ let lastChangeAt = null;   // when a pull last brought something (R5)
 const dbKey = () => 'ws_db_' + session.uid;
 const qKey  = () => 'ws_queue_' + session.uid;
 const nKey  = () => 'ws_notices_' + session.uid;
+const DB_SHAPE = 46;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew)
 function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}}; }
 /* docs/rules/sync.md: when what the server sends changes shape, bump this, so every phone
    takes one full fresh copy instead of keeping rows that predate the change. 2026-09-26:
@@ -267,6 +268,7 @@ async function flush(){
     if (lost) db.cursor = null;   // our local guess was wrong somewhere: take a full fresh copy
     await pull();
     sweepWorkPhotos();   // 39
+    reportHaves(); fetchMissingPhotos();   // 46
     carryOver();         // 41
   } finally {
     flushing = false;
@@ -282,6 +284,11 @@ async function pull(){
   // 38: the field now gets the jobs with no day too — older ones changed before this phone's
   // last refresh would never arrive by "what changed since", so one full copy, once
   if (inField(db.role) && !db.nodate38){ db.cursor = null; db.nodate38 = true; }
+  // A new column never arrives by "what changed since" either: a row untouched since the
+  // server got it keeps the old shape on this phone (measured 2026-10-10 on the owner's tablet:
+  // 15 of 30 jobs had no work_photos, so no Work photo button). One full copy whenever this
+  // app knows a newer server than the copy was made from. Raise DB_SHAPE with each new column.
+  if ((db.shape || 0) < DB_SHAPE){ db.cursor = null; db.shape = DB_SHAPE; }
   let res;
   try { res = await rpc('pull', {p_since: db.cursor}); }
   catch (e) {
@@ -314,6 +321,12 @@ async function pull(){
     for (const k of ['bookings', 'customers', 'jobs', 'team'])
       for (const id of Object.keys(db[k])) if (!busy.has(id)) delete db[k][id];
   }
+  // 46: a work photo taken off a job, or a deleted job's photos, leave this phone too
+  for (const row of res.jobs || []) if (!busy.has(row.id) && before.jobs[row.id] && Array.isArray(row.work_photos)){
+    const now = new Set(row.work_photos.map(w => w.path));
+    workList(before.jobs[row.id]).forEach(w => { if (!now.has(w.path)) dropKept(w.path); });
+  }
+  for (const id of res.removed_jobs || []) if (!busy.has(id) && db.jobs[id]) workList(db.jobs[id]).forEach(w => dropKept(w.path));
   for (const k of ['bookings', 'customers', 'jobs'])
     for (const row of res[k] || []) if (!busy.has(row.id)) db[k][row.id] = row;
   for (const row of res.team || []) db.team[row.id] = row;
@@ -838,17 +851,22 @@ function mapBtn(c){
   const pinned = c.lat != null && c.lng != null;
   const q = pinned ? c.lat + ',' + c.lng : [c.address, c.landmark, 'Bacolod'].filter(Boolean).join(', ');
   const href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
-  if (pinned) return `<a class="b" target="_blank" rel="noopener" href="${href}">🗺️ Map</a>`;
-  // No pin: say so first (Guile, 2026-09-27) — a search for the address stops at the street
-  return `<button type="button" class="b" data-act="nopin" data-href="${esc(href)}" data-landmark="${esc(c.landmark || '')}">🗺️ Map</button>`;
+  // Waze too, asked every time (Guile, 2026-10-10): a pin goes as a point, an address as a search
+  const waze = 'https://waze.com/ul?' + (pinned ? 'll=' + q : 'q=' + encodeURIComponent(q)) + '&navigate=yes';
+  return `<button type="button" class="b" data-act="mapopen" data-href="${esc(href)}" data-waze="${esc(waze)}" data-pinned="${pinned ? 1 : ''}" data-landmark="${esc(c.landmark || '')}">🗺️ Map</button>`;
 }
-function showNoPin(href, landmark){
-  $('#infoTitle').textContent = 'No pin on the map';
-  $('#infoText').textContent = 'The customer did not pin a map. Map can only search the address, so it may stop at the street, not the house.'
-    + (landmark ? '\n\nLandmark: ' + landmark : '\n\nThere is no landmark either — ring them to ask.');
-  const a = $('#infoLink'); a.href = href; a.textContent = 'Search the address'; a.hidden = false;
+// No pin: say so first (Guile, 2026-09-27) — a search for the address stops at the street
+function showMapChoice(href, waze, pinned, landmark){
+  $('#infoTitle').textContent = pinned ? 'Open the map' : 'No pin on the map';
+  $('#infoText').textContent = pinned ? 'The customer pinned the house. Open it in:'
+    : 'The customer did not pin a map. Map can only search the address, so it may stop at the street, not the house.'
+      + (landmark ? '\n\nLandmark: ' + landmark : '\n\nThere is no landmark either — ring them to ask.') + '\n\nSearch the address in:';
+  const a = $('#infoLink'); a.href = href; a.textContent = '🗺️ Google Maps'; a.hidden = false;
+  const w = $('#infoLink2'); w.href = waze; w.textContent = '🚗 Waze'; w.hidden = false;
+  [a, w].forEach(x => x.classList.add('primary'));
+  $('#infoOk').textContent = 'Cancel'; $('#infoOk').classList.remove('primary');
   $('#infoBox').hidden = false;
-  $('#infoOk').focus();
+  a.focus();
 }
 function menuRow(kind, id, icon, title, sub, cls){
   return `<button type="button" class="menu-row ${cls || ''}" data-act="open" data-kind="${kind}" data-id="${esc(id || '')}">
@@ -887,7 +905,7 @@ const INFO = {
   people: ['Customers', 'Everyone the shop has worked for. Tap one for their history, or to book them again.'],
   checkups: ['Check-ups', 'Customers whose regular check has come — set on each customer: Customers → tap them → 📅 Regular check (every month, 2, 3, 6 months or yearly, from a date you choose). Ring them, or Book it. ✓ Done moves them to their next date. Nobody with a job already booked shows here. At the top: jobs done a week ago, to ask “is it working well?”.'],
   team: ['Users', 'Anyone can make an account, and starts as a customer. Tap a person to make them a technician, a helper or an admin. “Says they work here” means they ticked that box when they signed up — it gives them nothing on its own.'],
-  admin: ['Admin', 'Only admins see this tab. The price list and the services the booking page offers, the receipt, and the three numbers the app was built to answer.'],
+  admin: ['Admin', 'Only admins see this tab. The price list and the services the booking page offers, the billing statement, and the three numbers the app was built to answer.'],
   showprices: ['Show prices', 'Off: customers never see a price; you tell them on the call.\n\nOn: once a customer picks the aircon type and the services, the booking page shows the total from this list. If a service has no price for their aircon type, it says you will tell them on the call.'],
   service: ['A service', 'A price for each aircon type. Leave a type empty if the shop does not do it for that type — a booking with that type then shows no price until you set one. Customers never see prices.'],
   editbooking: ['After the call', 'Change what they need and which aircon they have. The price shows as soon as every service has a price for that aircon type. It is frozen onto the job when you make it.'],
@@ -897,7 +915,7 @@ const INFO = {
   quoteshop: ['Letterhead and signer', 'The lines at the top of every quotation, and the name under the signature. Blank lines are left out. Kept on the server for admins only, not in the public page.'],
   quotenote: ['The usual note', 'Every new quotation starts with this Note; change it on one quotation without changing it here. Each line is one ➢ point. A line that starts with a space is indented under the one above, like a price that belongs to it.'],
   quotesig: ['Signature', 'A photo of the signature on white paper: the white is taken out and the ink kept. It prints on every quotation.\n\nIt is kept on the server for admins only — never on the public page, never on a technician’s phone. Remove it and the quotation leaves the space to sign by hand.'],
-  receipt: ['Receipt','A sample layout for now — say what to change. Amounts come from the price list; if the job’s price was changed by hand, the difference shows as an adjustment.'],
+  bill: ['Billing statement', 'What the customer is billed — for a service, not a receipt. It starts from the job’s quotation; add the extra work found on the day (piping, wires, parts and materials), then Save: the job’s price becomes its TOTAL.\n\nThe letterhead and the signature are the quotation’s (Admin → Quotation). Technicians see it, without changing it, while “Show prices to technicians” is on.'],
   tech: ['Jobs', 'Every job on the schedule. Anyone can take it — the job remembers who pressed Start and Done. Ring the office to change a day or cancel.'],
   schedule: ['Schedule', 'Every technician sees the job as soon as it has a day.'],
   book: ['Book a job', 'For a call you took yourself. It goes to the Inbox first, marked “By phone”: look it over, make the quotation, then Accept — as for a booking from the page.\n\nThe Numbers count the page’s bookings only, so these are left out of them.'],
@@ -912,11 +930,11 @@ const INFO = {
   texter: ['Sends texts to customers', 'On: this person sees Texts to customers in Settings, 💬 Text on a job and Text all of Tomorrow, and their phone may be the sending phone. Off: none of it — and if their phone was the sending phone, it stops at its next refresh. Any admin can change it, for themselves too.'],
   textauto: ['Send texts by themselves', 'The phone with "This phone sends the texts" on sends them, at your times, even with the app closed — never the same text twice. A job is texted from the time this is turned on; jobs scheduled before then are not.\n\nThe reminders are written each time the app is open on that phone: a job cancelled on another phone after that can still get one. Open the app once in the evening and it is up to date.\n\nOff: nothing is sent unless you press 💬 Text on a job.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
-  showpricestech: ['Show prices to technicians & helpers', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or share the receipt. A helper sees the price on the job, nothing more.\n\nOff: technicians and helpers never see a price; the server does not even send it.'],
+  showpricestech: ['Show prices to technicians & helpers', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or send the billing statement. A helper sees the price on the job, nothing more.\n\nOff: technicians and helpers never see a price; the server does not even send it.'],
   closedwd: ['Closed every week', 'Tap the weekdays the shop never works. The booking page greys them out and will not take a booking for one. Book a job (a call you take) only warns you.'],
   closeddates: ['Days off', 'A holiday, a fiesta, a day off: tap the day in the calendar. Type a reason first if you want the customer to see it ("Christmas"). Past days drop off by themselves.'],
   shopfb: ['Facebook page', 'With a link here, the booking page shows “Message us on Facebook” beside the call button. Leave it empty to hide it.'],
-  shopgcash: ['GCash', 'The receipt shows the number and the name, so the customer can pay on the spot. With a picture named gcash-qr.png in web/img, the receipt shows the QR code too.'],
+  shopgcash: ['GCash', 'The billing statement shows the number and the name, so the customer can pay on the spot. With a picture named gcash-qr.png in web/img, it shows the QR code too.'],
   gap: ['Check-up gap', 'Counted from a customer’s last finished job. Every admin phone uses the same number.'],
   reset: ['Take the office’s copy', 'Throws away everything on this phone that has not been sent, and takes the office’s copy again. Nothing else ever overwrites what you did here.'],
 };
@@ -925,11 +943,13 @@ function showInfo(k){
   const it = INFO[k]; if (!it) return;
   $('#infoTitle').textContent = it[0];
   $('#infoText').textContent = typeof it[1] === 'function' ? it[1]() : it[1];
-  $('#infoLink').hidden = true;
+  $('#infoLink').hidden = true; $('#infoLink2').hidden = true; $('#infoOk').textContent = 'OK'; $('#infoOk').classList.add('primary');
   $('#infoBox').hidden = false;
   $('#infoOk').focus();
 }
 const hideInfo = () => { $('#infoBox').hidden = true; };
+// a map app chosen: the box has done its job
+document.addEventListener('click', e => { if (e.target.closest && e.target.closest('#infoLink, #infoLink2')) setTimeout(hideInfo, 0); });
 
 /* ---------------------------------------------------------------- the aircons: a cart (15)
    Decided 2026-09-27 (docs/scope.md), Suki's Store Visit: tap an aircon type, a small window
@@ -1273,10 +1293,10 @@ function bookFormHtml(ctx, s){
   if (existing){
     const c = db.customers[s.customer_id];
     who += `<div class="bk-sec${bkCls(s, 'customer')}" data-bkf="customer">${c
-      ? `<div class="lrow flat"><div class="avatar">${esc(initials(c.full_name))}</div>
-          <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
+      ? `<div class="lrow flat">${custAvatar(c)}
+          <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub cs">${custSub(c)}</div></div>
           <button type="button" class="b" data-act="pset" data-f="customer_id" data-v="">Change</button></div>`
-      : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name or number" value="${esc(s.q || '')}" autocomplete="off">
+      : `<input type="search" class="find" data-pf="q" placeholder="🔎 Name, number, address, brand…" value="${esc(s.q || '')}" autocomplete="off">
           <div class="list" id="bookMatches">${bookMatches(s)}</div>`}${bkWhy(s, 'customer')}</div>`;
   } else if (!s._removed){   // a customer whose details were removed on request stays removed
     const lock = s._lockWho ? ' readonly class="locked"' : '';
@@ -1641,6 +1661,15 @@ function eventRow(e){
       before.scheduled_on ? niceDate(before.scheduled_on) : '', after.scheduled_on ? niceDate(after.scheduled_on) : '']], ''];
     case 'job_workphoto': return after.photo ? ['📷', 'Work photo added', null, by] : ['🗑️', 'Work photo taken off', null, by];   // 39
     case 'job_assign': {   // 39: the names as they were at the time
+      if (Array.isArray(after.crew)){   // 46: the crew, head first
+        const nm = x => x.name || 'someone', c = after.crew, who = (c.find(x => x.uid === after.who) || {}).name
+          || ((before.crew || []).find(x => x.uid === after.who) || {}).name || 'someone';
+        if (after.do === 'join') return ['🙋', who + ' joined as a helper', null, ''];
+        if (after.do === 'leave') return ['🚪', who + ' left the crew', null, ''];
+        if (after.do === 'head') return ['👑', who + ' is the head' + (by && !after.self ? ' — by ' + by : ''), null, ''];
+        if (!c.length) return ['👤', 'No assign' + (by ? ' — by ' + by : ''), null, ''];
+        return ['👤', 'Crew: ' + nm(c[0]) + ' (head)' + (c.length > 1 ? ', ' + c.slice(1).map(nm).join(', ') : '') + (by ? ' — by ' + by : ''), null, ''];
+      }
       const to = after.name || ROLE_NAME[after.role] || 'someone';
       if (!after.uid) return ['👤', 'No assign — taken off ' + (before.name || 'everyone') + (by ? ' by ' + by : ''), null, ''];
       if (after.self) return ['🙋', 'Assigned to ' + to + ' (self assigned)', null, ''];
@@ -1791,8 +1820,10 @@ function markSeen(kind, id, value){
 const isOpenJob = j => !['done', 'cancelled'].includes(j.status);
 const jobUnseen = j => { const s = seenStore(); return !!s && isOpenJob(j) && !s.jobs[j.id]; };
 // ⚠️ a job someone else gave THIS person, not opened since (39) — on this phone, like the rest
+// the crew (46): the head first, then the helpers; a job from before 46 has its one person
+const crewOf = j => !j ? [] : Array.isArray(j.crew) && j.crew.length ? j.crew : j.assigned_uid ? [j.assigned_uid] : [];
 const assignUnseen = j => { const s = seenStore(); return !!s && !!session && isOpenJob(j) && !!j.assigned_at
-  && j.assigned_uid === session.uid && j.assigned_by !== session.uid && (s.assign || {})[j.id] !== j.assigned_at; };
+  && crewOf(j).includes(session.uid) && j.assigned_by !== session.uid && (s.assign || {})[j.id] !== j.assigned_at; };
 const userUnseen = t => { const s = seenStore(); return !!s && t.id !== session.uid && !s.users[t.id]; };
 const checkupUnseen = k => { const s = seenStore(); return !!s && s.checkups[k.c.id] !== k.due; };
 function unseenCounts(){
@@ -2068,30 +2099,55 @@ function assignBadge(j, big){
   if (!db || !j || !(db.role === 'admin' || inField(db.role)) || !db.staff) return '';   // a server from before 39
   const who = j.assigned_uid, can = canAssign(j);
   if (!who && !can) return '';
-  const warn = assignUnseen(j);
-  const text = who ? (warn ? '⚠️ ' : '') + 'Assigned to ' + staffName(who) : '＋ Assign';
+  const warn = assignUnseen(j), n = crewOf(j).length;
+  // the head by name, the helpers counted: "Assigned to Ana +2" (Guile, 2026-10-11)
+  const text = who ? (warn ? '⚠️ ' : '') + 'Assigned to ' + staffName(who) + (n > 1 ? ' +' + (n - 1) : '') : '＋ Assign';
   const cls = 'pill assign' + (who ? '' : ' none') + (warn ? ' warn' : '') + (big ? ' big' : '');
-  return can ? `<button type="button" class="${cls}" data-act="assignopen" data-id="${esc(j.id)}" aria-label="${esc(text + (who ? ' — tap to transfer' : ''))}">${esc(text)}</button>`
+  return can ? `<button type="button" class="${cls}" data-act="assignopen" data-id="${esc(j.id)}" aria-label="${esc(text + (who ? ' — tap to change the crew' : ''))}">${esc(text)}</button>`
              : `<span class="${cls}">${esc(text)}</span>`;
+}
+/* The crew (Guile, 2026-10-11, 46): the first picked is the HEAD — the name on the badge — the
+   rest are helpers, as many as wanted. The office picks in order and saves; a technician joins
+   or leaves himself and hands the head to anyone of the shop, each at once. */
+function crewWrite(j, how, who, list, what){
+  const cur = crewOf(j);
+  const next = how === 'set' ? list : how === 'join' ? cur.filter(x => x !== who).concat([who])
+    : how === 'leave' ? cur.filter(x => x !== who) : [who, ...cur.filter(x => x !== who)];
+  write('crew_job', {p_job: j.id, p_do: how, p_who: who, p_list: list}, what + ' — ' + (jobCust(j).full_name || 'job'), [j.id], () => {
+    j.crew = next; j.assigned_uid = next[0] || null; j.assigned_by = session.uid; j.assigned_at = new Date().toISOString();
+  });
+  toast(what + '.');
 }
 function panelAssign(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Assign', body: empty('This job is no longer on this phone.')};
-  const me = session.uid, cur = j.assigned_uid, tech = db.role === 'technician';
+  const me = session.uid, office = db.role === 'admin', crew = crewOf(j);
+  if (office && !p.sel) p.sel = crew.slice();
+  const sel = office ? p.sel : crew;
   const order = {technician: 0, helper: 1, admin: 2};
   const people = (db.staff || []).slice().sort((a, b) => (order[a.role] - order[b.role]) || String(a.name || '').localeCompare(String(b.name || '')));
-  const row = s => `<button type="button" class="menu-row pick${s.id === cur ? ' on' : ''}" data-act="assignto" data-id="${esc(j.id)}" data-v="${esc(s.id)}"${s.id === cur ? ' disabled' : ''}>
-      <span class="menu-main"><span class="menu-title">${esc(s.name || ROLE_NAME[s.role])}${s.id === me ? ' (you)' : ''}</span>
-      <span class="menu-sub">${esc(ROLE_NAME[s.role] || s.role)}</span></span>${s.id === cur ? '<span class="pick-now">✓ Now</span>' : ''}</button>`;
-  // the office's first choice: nobody (Guile, 2026-10-10: "they can select no assign")
-  const noAssign = `<button type="button" class="menu-row pick${cur ? '' : ' on'}" data-act="assignto" data-id="${esc(j.id)}" data-v=""${cur ? '' : ' disabled'}>
-      <span class="menu-main"><span class="menu-title">No assign</span><span class="menu-sub">Not on anyone — everyone still sees it</span></span>${cur ? '' : '<span class="pick-now">✓ Now</span>'}</button>`;
-  return {title: cur ? 'Transfer the job' : 'Assign the job', sub: jobCust(j).full_name || '', body: `
-    ${cur ? `<p class="hint">Now: <b>${esc(staffName(cur))}</b>.</p>` : ''}
-    ${tech && cur !== me ? `<button type="button" class="b primary wide" data-act="assignto" data-id="${esc(j.id)}" data-v="${esc(me)}">🙋 Take it myself</button>` : ''}
-    <div class="fieldlabel">${cur ? 'Hand it to' : 'Give it to'}</div>
-    <div class="menu">${db.role === 'admin' ? noAssign : ''}${people.map(row).join('') || '<p class="hint">Nobody of the shop is on this phone yet.</p>'}</div>
-    <p class="hint">Everyone still sees every job. Its history says who it went to, and who gave it.</p>`};
+  const tag = i => i === 0 ? '<span class="crew-no head">👑 Head</span>' : `<span class="crew-no">${i + 1} · Helper</span>`;
+  const row = s => {
+    const i = sel.indexOf(s.id), on = i >= 0, name = esc(s.name || ROLE_NAME[s.role]) + (s.id === me ? ' (you)' : '');
+    const head = on && i > 0 || (!office && !on)
+      ? `<button type="button" class="b crew-head" data-act="crewhead" data-id="${esc(j.id)}" data-v="${esc(s.id)}">👑 Make head</button>` : '';
+    return office
+      ? `<div class="crew-row${on ? ' on' : ''}"><button type="button" class="menu-row pick" data-act="crewtoggle" data-id="${esc(j.id)}" data-v="${esc(s.id)}">
+          <span class="crew-box">${on ? '✓' : ''}</span><span class="menu-main"><span class="menu-title">${name}</span>
+          <span class="menu-sub">${esc(ROLE_NAME[s.role] || s.role)}</span></span>${on ? tag(i) : ''}</button>${head}</div>`
+      : `<div class="crew-row${on ? ' on' : ''}"><div class="menu-row pick"><span class="menu-main"><span class="menu-title">${name}</span>
+          <span class="menu-sub">${esc(ROLE_NAME[s.role] || s.role)}</span></span>${on ? tag(i) : ''}</div>${i === 0 ? '' : head}</div>`;
+  };
+  const changed = office && JSON.stringify(sel) !== JSON.stringify(crew);
+  const mine = crew.includes(me);
+  return {title: crew.length ? 'The crew' : 'Assign the job', sub: jobCust(j).full_name || '', body: `
+    <p class="hint">${office ? 'Tap in order: the <b>first is the head</b> — the name on the badge — the rest are helpers. As many as you like.'
+      : 'The head is the name on the badge; the rest are helpers.'}</p>
+    ${office ? '' : `<button type="button" class="b ${mine ? '' : 'primary '}wide" data-act="${mine ? 'crewleave' : 'crewjoin'}" data-id="${esc(j.id)}">${mine ? '🚪 Leave the crew' : '🙋 Join as a helper'}</button>`}
+    <div class="menu crew">${people.map(row).join('') || '<p class="hint">Nobody of the shop is on this phone yet.</p>'}</div>
+    ${office ? `<div class="stack"><button type="button" class="b primary wide" data-act="crewsave" data-id="${esc(j.id)}"${changed ? '' : ' disabled'}>${sel.length ? 'Save the crew (' + sel.length + ')' : 'Save — no assign'}</button>
+      ${sel.length ? `<button type="button" class="b wide" data-act="crewclear" data-id="${esc(j.id)}">Clear — no assign</button>` : ''}</div>` : ''}
+    <p class="hint">Everyone still sees every job. Its history says who was put on it, and by whom.</p>`};
 }
 function jobRow(j){
   const c = jobCust(j), ab = assignBadge(j);
@@ -2132,15 +2188,18 @@ function panelJob(p){
   const cid = j.customer_id, photo = c.photo_path;
   // No "Change the time" row: ✏️ Edit changes the day with everything else (Guile, 2026-09-27)
   // L5: a technician sees the price only with the office's switch on — the server sends it
-  // then and only then — and gives the receipt from it
+  // then and only then — and gives the billing statement from it (45, was the receipt)
   const techPrice = tech && j.price != null && seesPrice();
-  const menu = helper ? '' : tech ? (techPrice ?`<div class="menu">${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print or share it with the customer')}</div>` : '') : `<div class="menu">
+  const billRow = menuRow('jobbill', j.id, '🧾', 'Billing statement', j.billing
+    ? 'Saved ' + niceDate(manilaDay(j.billing.saved_at)) + ' · ' + peso(j.billing.total)
+    : tech ? 'Print or send it to the customer' : j.status === 'cancelled' ? 'Nothing to bill' : 'From the quotation — add extra work, print or send');
+  const menu = helper ? '' : tech ? (techPrice ?`<div class="menu">${billRow}</div>` : '') : `<div class="menu">
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
       ${open || j.quote ? menuRow('jobquote', j.id, '📄', 'Quotation', j.quote
         ? 'Saved ' + niceDate(manilaDay(j.quote.saved_at)) + ' · ' + peso(j.quote.total)
         : 'Make one to send — its total becomes the price') : ''}
       ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'Customer’s history', c.full_name) : ''}
-      ${menuRow('receipt', j.id, '🧾', 'Receipt', 'Print on A4')}
+      ${billRow}
       ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
       ${menuRow('deljob', j.id, '🗑️', 'Delete this job', (bookingOfJob(j) ? 'With its booking. ' : '') + 'You will be warned first.', 'is-danger')}
     </div>`;
@@ -2152,7 +2211,8 @@ function panelJob(p){
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo && !tech ? housePhoto(photo) : ''}
       ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
-      ${assignBadge(j, true) ? kv('Assigned', assignBadge(j, true)) : ''}
+      ${assignBadge(j, true) ? kv('Assigned', assignBadge(j, true) + (crewOf(j).length > 1
+        ? `<div class="crew-line">👑 ${esc(staffName(crewOf(j)[0]))} · Helpers: ${esc(crewOf(j).slice(1).map(staffName).join(', '))}</div>` : '')) : ''}
       ${j.on_way_at && ['booked', 'scheduled'].includes(j.status) ? kv('On the way', esc('since ' + new Date(j.on_way_at).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit'}))) : ''}
       ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
       ${kv('Number', esc(c.contact || ''))}
@@ -2330,34 +2390,150 @@ function panelDelete(p){
 }
 
 /* ---------------------------------------------------------------- customers */
-function custList(){
-  const q = (ui.search || '').toLowerCase().trim();
-  return Object.values(db.customers)
-    .filter(c => !q || (c.full_name + ' ' + c.contact + ' ' + c.address).toLowerCase().includes(q)
-                    || (digits(q) && digits(c.contact).includes(digits(q))))
-    .sort((a, b) => a.full_name.localeCompare(b.full_name));
+/* One search for the customers and what they own (Guile, 2026-10-10): name, number, address,
+   landmark, and every saved appliance — type, brand, model, serial, Additionals, notes, the
+   owner's boxes. Forgiving: a word may be the start of one ("dai" finds Daikin), and a
+   misspelt word finds the nearest ("daiken", "carier"), one slip in five letters, two in
+   seven. Every word typed must be found somewhere, or the closest customers are shown under
+   "No exact match". The Customers screen and Book a job's Customer files both use it. */
+const fold = s => String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+// "Victoria's" is one word, victorias
+const words = s => fold(s).replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+// Damerau–Levenshtein (a swap counts as one slip), stopped early past `max`
+function slips(a, b, max){
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2 = null, prev = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++){
+    const cur = [i]; let low = i;
+    for (let j = 1; j <= b.length; j++){
+      let d = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, prev2[j - 2] + 1);
+      cur.push(d); if (d < low) low = d;
+    }
+    if (low > max) return max + 1;
+    prev2 = prev; prev = cur;
+  }
+  return prev[b.length];
+}
+// one typed word against one word of a customer: 1 the same, .9 its start, .7 inside it,
+// less for a near spelling, 0 not it
+function wordScore(q, w){
+  if (w === q) return 1;
+  if (w.startsWith(q)) return 0.9;
+  if (q.length >= 3 && w.includes(q)) return 0.7;
+  const max = q.length <= 3 ? 0 : q.length <= 6 ? 1 : 2;
+  if (!max || /^\d+$/.test(q)) return 0;
+  const d = Math.min(slips(q, w, max), w.length > q.length ? slips(q, w.slice(0, q.length), max) : max + 1);
+  return d <= max ? 0.6 - 0.1 * d : 0;
+}
+const liveUnits = c => (c.units || []).filter(x => !x.removed);
+// what can be found on a customer: [where, its words, weight]; an appliance's own place says which
+function custFields(c){
+  const out = [['name', words(c.full_name), 3], ['address', words(c.address), 2], ['landmark', words(c.landmark), 1]];
+  liveUnits(c).forEach((x, i) => {
+    out.push(['u' + i, words([typeLabel(x.type), x.brand, x.model, x.serial].join(' ')), 3]);
+    out.push(['u' + i, words([x.extra, x.problem, x.notes, ...Object.values(x.specs || {})].join(' ')), 1]);
+  });
+  return out;
+}
+function custSearch(q, keepRemoved){
+  const qs = [...new Set(words(q))];
+  const all = Object.values(db.customers).filter(c => keepRemoved || c.full_name !== '(removed)');
+  if (!qs.length) return {rows: all.sort((a, b) => a.full_name.localeCompare(b.full_name)).map(c => ({c})), exact: true, near: []};
+  const near = {};   // a typed word → the word it was taken for, when not spelt the same
+  const scored = all.map(c => {
+    const fields = custFields(c), num = digits(c.contact);
+    let total = 0, found = 0;
+    const hitUnits = new Set(), marks = new Set();
+    qs.forEach(qw => {
+      let best = 0, bestW = '', where = [];
+      // a number: the contact number, wherever the digits sit in it
+      if (/^\d{3,}$/.test(qw) && num.includes(qw)){ best = 1; where = ['contact']; }
+      fields.forEach(([k, ws, wt]) => ws.forEach(w => {
+        const s = wordScore(qw, w) * (0.75 + wt / 12);
+        if (s > best + 1e-9){ best = s; bestW = w; where = [k]; }
+        else if (s && Math.abs(s - best) < 1e-9 && !where.includes(k)) where.push(k);
+      }));
+      if (best){
+        found++; total += best;
+        where.forEach(k => { if (k[0] === 'u') hitUnits.add(+k.slice(1)); });
+        if (bestW){ marks.add(bestW); if (bestW !== qw && !bestW.startsWith(qw) && !bestW.includes(qw)) near[qw] = bestW; }
+      }
+    });
+    return {c, total, found, units: [...hitUnits], marks};
+  }).filter(r => r.found);
+  const exact = scored.filter(r => r.found === qs.length);
+  const rows = (exact.length ? exact : scored).sort((a, b) => b.found - a.found || b.total - a.total || a.c.full_name.localeCompare(b.c.full_name));
+  return {rows, exact: !!exact.length, near: Object.entries(near)};
+}
+// the words found, marked where they show
+function markWords(text, marks){
+  if (!marks || !marks.size) return esc(text);
+  return String(text || '').split(/([^A-Za-z0-9\u00C0-\u024F'’]+)/).map(part => marks.has(fold(part).replace(/['’]/g, '')) ? `<mark>${esc(part)}</mark>` : esc(part)).join('');
+}
+/* A customer's picture is their appliance's (Guile, 2026-10-10: instead of "AF", "AC"); none
+   saved yet, their initials. The count when they have more than one. */
+function custAvatar(c){
+  const us = liveUnits(c);
+  if (!us.length) return `<div class="avatar cu">${esc(initials(c.full_name))}</div>`;
+  const n = {}; us.forEach(x => { n[x.type] = (n[x.type] || 0) + 1; });
+  const top = Object.keys(n).sort((a, b) => n[b] - n[a])[0];
+  return `<div class="avatar pic"><img src="${esc(typePic(top))}" alt="${esc(typeLabel(top))}">${us.length > 1 ? `<span class="avatar-n">${us.length}</span>` : ''}</div>`;
+}
+// 433-5680 · Victorias Public Market · Split ×2 · Window — one line; a long address gives way
+// first, so the appliances stay in sight (measured at 375 px: they were cut off)
+const custSub = (c, marks) => [c.contact ? `<span class="cs-n">${markWords(c.contact, marks)}</span>` : '',
+  c.address ? `<span class="cs-a">${markWords(c.address, marks)}</span>` : '',
+  liveUnits(c).length ? `<span class="cs-u">${esc(unitsLine(liveUnits(c)))}</span>` : ''].filter(Boolean).join('<span class="cs-dot">·</span>');
+// the appliances the search found on them, each with its picture — tap one to open it
+function custHitUnits(c, r){
+  if (!r || !r.units || !r.units.length) return '';
+  const us = liveUnits(c);
+  return `<div class="cu-hits">${r.units.map(i => us[i]).filter(Boolean).map(x => `<div class="cu-hit" role="button" tabindex="0" data-act="open" data-kind="custunit" data-id="${esc(c.id + '|' + x.id)}">
+      <img class="type-ico sm" src="${esc(typePic(x.type))}" alt=""><span><b>${markWords(typeLabel(x.type), r.marks)}</b> ${markWords(savedLine(x), r.marks)}${
+        x.extra ? ' <span class="muted">· ' + markWords(x.extra, r.marks) + '</span>' : ''}</span></div>`).join('')}</div>`;
 }
 function custListHtml(){
-  const list = custList();
-  return `<p class="count">${list.length} customer${list.length === 1 ? '' : 's'}</p>` +
-    (list.length ? `<div class="list">${list.map(custRow).join('')}</div>`
-                 : empty((ui.search || '').trim() ? 'Nobody matches that.' : 'No customers yet.'));
+  const q = (ui.search || '').trim(), res = custSearch(q, true), n = res.rows.length;
+  const said = !q ? `${n} customer${n === 1 ? '' : 's'}`
+    : !n ? '' : res.exact ? `${n} found` : 'No exact match — the closest:';
+  const near = res.near.length ? `<p class="hint near">Showing results for ${res.near.map(([a, b]) => `<b>${esc(b)}</b>`).join(', ')} — you typed ${res.near.map(([a]) => esc(a)).join(', ')}</p>` : '';
+  return (said ? `<p class="count">${said}</p>` : '') + near +
+    (n ? `<div class="list">${res.rows.map(r => custRow(r.c, r)).join('')}</div>`
+       : empty(q ? 'Nobody matches “' + q + '”. Try fewer letters, or a brand, a model or a number.' : 'No customers yet.'));
+}
+// the owner's appliance types as chips with their pictures: one tap searches for it
+function custTypeChips(){
+  const have = {};
+  Object.values(db.customers).forEach(c => new Set(liveUnits(c).map(x => x.type)).forEach(k => { have[k] = (have[k] || 0) + 1; }));
+  const ts = typeRows().filter(x => have[x.key]);
+  if (!ts.length) return '';
+  const cur = fold((ui.search || '').trim());
+  return `<div class="type-chips">${ts.map(x => `<button type="button" class="type-chip${cur === fold(x.label) ? ' active' : ''}" data-act="custtype" data-v="${esc(x.label)}">
+      <img src="${esc(typePic(x.key))}" alt="">${esc(x.label)} <span class="muted">${have[x.key]}</span></button>`).join('')}</div>`;
+}
+function custSearchDraw(){
+  $('#custList').innerHTML = custListHtml();
+  const ch = $('#custChips'); if (ch) ch.innerHTML = custTypeChips();
+  const x = $('.find-x'); if (x) x.hidden = !(ui.search || '');
 }
 function drawPeople(){
   const pinned = Object.values(db.customers).filter(c => c.lat != null && c.full_name !== '(removed)').length;
   return `<div class="menu"><button type="button" class="menu-row" data-act="custmap">
       <span class="menu-ico">🗺️</span><span class="menu-main"><span class="menu-title">Customers on the map</span>
       <span class="menu-sub">${pinned} pinned · days since each one's last visit</span></span><span class="menu-chev">›</span></button></div>
-    <input type="search" class="find" id="custSearch" placeholder="🔎 Name, number or address" value="${esc(ui.search || '')}" autocomplete="off">
+    <div class="find-wrap"><input type="search" class="find" id="custSearch" placeholder="🔎 Name, number, brand, model…" value="${esc(ui.search || '')}" autocomplete="off" enterkeyhint="search">
+      <button type="button" class="find-x" data-act="custclear" aria-label="Clear the search"${(ui.search || '') ? '' : ' hidden'}>×</button></div>
+    <div id="custChips">${custTypeChips()}</div>
     <div id="custList">${custListHtml()}</div>
     <div class="menu">${menuRow('tidy', '', '🧹', 'Tidy up old bookings', 'Delete rejected and cancelled ones')}</div>`;
 }
-function custRow(c){
-  const n = jobsOf(c.id).length;
+function custRow(c, r){
+  const n = jobsOf(c.id).length, marks = r && r.marks;
   return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="customer" data-id="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
-    <div class="avatar">${esc(initials(c.full_name))}</div>
-    <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}${unsentPill(c.id)}</div>
-      <div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div>
+    ${custAvatar(c)}
+    <div class="lrow-main"><div class="lrow-title">${markWords(c.full_name, marks)}${unsentPill(c.id)}</div>
+      <div class="lrow-sub cs">${custSub(c, marks)}</div>${custHitUnits(c, r)}</div>
     <div class="lrow-side"><span class="lrow-time">${n} job${n === 1 ? '' : 's'}</span></div>
   </div>`;
 }
@@ -2442,6 +2618,7 @@ function appliancesHtml(c){
     return Object.entries(out).map(([k, d]) => svcLabel(k) + ' ' + shortDate(d)).join(' · '); };
   return `<div class="sec">🗂️ Appliances <span class="prep-count">${list.filter(x => !x.removed).length}</span></div>
     ${list.length ? `<div class="list">${list.map(x => `<div class="lrow${x.removed ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="custunit" data-id="${esc(c.id + '|' + x.id)}">
+        <img class="type-ico unit-pic" src="${esc(typePic(x.type))}" alt="">
         <div class="lrow-main"><div class="lrow-title">${esc(typeLabel(x.type))} <span class="muted">${esc(savedLine(x))}</span></div>
           ${x.extra ? `<div class="lrow-sub">${esc(x.extra)}</div>` : ''}
           ${x.notes ? `<div class="lrow-sub">📝 ${esc(x.notes.split('\n')[0])}</div>` : ''}
@@ -2595,13 +2772,11 @@ function openBook(customerId, services){
     full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', units, notes: '', date: null, slot: 'am'});
 }   // date null = not chosen yet: Save asks (2026-09-27, the job saved as Not scheduled unseen)
 function bookMatches(p){
-  const q = (p.q || '').toLowerCase().trim();
-  const list = Object.values(db.customers).filter(c => c.full_name !== '(removed)')
-    .filter(c => !q || c.full_name.toLowerCase().includes(q) || (digits(q) && digits(c.contact).includes(digits(q))))
-    .sort((a, b) => a.full_name.localeCompare(b.full_name)).slice(0, 8);
-  return list.map(c => `<div class="lrow" role="button" tabindex="0" data-act="pset" data-f="customer_id" data-v="${esc(c.id)}">
-      <div class="avatar">${esc(initials(c.full_name))}</div>
-      <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}</div><div class="lrow-sub">${esc(c.contact)} · ${esc(c.address)}</div></div></div>`).join('')
+  const q = (p.q || '').trim(), res = custSearch(q);
+  return (q && !res.exact && res.rows.length ? '<p class="count">No exact match — the closest:</p>' : '')
+    + res.rows.slice(0, 8).map(({c, marks}) => `<div class="lrow" role="button" tabindex="0" data-act="pset" data-f="customer_id" data-v="${esc(c.id)}">
+      ${custAvatar(c)}
+      <div class="lrow-main"><div class="lrow-title">${markWords(c.full_name, marks)}</div><div class="lrow-sub cs">${custSub(c, marks)}</div></div></div>`).join('')
     || empty(q ? 'Nobody matches that.' : 'No customers yet.');
 }
 function bookSame(p){
@@ -2723,10 +2898,10 @@ function panelMember(p){
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
   const secs = [['services', 'Services & prices'], ['types', 'Appliances'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['texts', 'Texts'], ['job', 'Job'], ['specs', 'Specs'], ['numbers', 'Numbers']];   // job: 41, specs: 44
+    ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['texts', 'Texts'], ['job', 'Job'], ['specs', 'Specs'], ['numbers', 'Numbers']];   // job: 41, specs: 44
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
-    ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, receipt: drawReceiptSample, quote: drawQuoteAdmin,
+    ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, billing: drawBillSample, quote: drawQuoteAdmin,
       texts: drawTexts, job: drawJobMover, specs: drawSpecs, numbers: drawNumbers})[v]();
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
@@ -2763,7 +2938,7 @@ function drawClosed(){
         <div class="lrow-main"><div class="lrow-title">${esc(niceDate(x.on))}</div><div class="lrow-sub">${esc(x.why || 'Closed')}</div></div>
         <button type="button" class="b" data-act="closeddate" data-v="${esc(x.on)}">Open it</button></div>`).join('')}</div>` : ''}`;
 }
-/* Ideas 6 and 8: the shop's GCash for the receipt, and its Facebook page for the booking page. */
+/* Ideas 6 and 8: the shop's GCash for the billing statement, and its Facebook page for the booking page. */
 /* Admin → Page photos (30, TODO 16): he adds and removes the photos at the top of the booking
    page. The phone shrinks each to 1600 px before sending; six at most. Needs signal to add. */
 let pagePhotoBusy = false;
@@ -2892,7 +3067,7 @@ function drawShop(){
       <div class="actions"><button type="button" class="b primary" data-act="saveshop" data-v="facebook_url">Save</button></div>
     </div>
     <div class="card">
-      <div class="menu-title">GCash, on the receipt ${infoBtn('shopgcash')}</div>
+      <div class="menu-title">GCash, on the billing statement ${infoBtn('shopgcash')}</div>
       ${field('gcash_number', 'GCash number', '09XX XXX XXXX', 'inputmode="tel" maxlength="20"')}
       ${field('gcash_name', 'Name on the account', 'e.g. J. Dela Cruz', 'maxlength="60"')}
       <div class="actions"><button type="button" class="b primary" data-act="saveshop" data-v="gcash">Save</button></div>
@@ -3020,10 +3195,10 @@ const STARTER_LISTS = {
 };
 const checklistOf = key => { const l = (db.checklists || []).find(x => x.key === key); return l ? [...(l.items || [])] : []; };
 
-/* ---------------------------------------------------------------- the receipt
-   A sample for Guile to mark up (2026-09-26): A4, from any printer's menu. The lines come
-   from the price list; the total is the job's own frozen price, and any difference between
-   the two is shown as an adjustment rather than hidden. */
+/* ---------------------------------------------------------------- a job's lines (was the receipt)
+   Each aircon's services at the price list's price; the total is the job's own frozen price, and
+   any difference is an adjustment. The texts' {appliances} and {price}, and the CSV's number,
+   come from here; the paper is the billing statement now (45). */
 function receiptOf(j){
   const c = jobCust(j), b = j.booking_id && db.bookings[j.booking_id];
   const units = unitsOf(j), names = unitNames(units);
@@ -3047,74 +3222,6 @@ function receiptSample(){
           unit_type: 'Split', unit_count: 2, unit_brand: 'ZZ Brand', unit_model: 'ZZ-1', scheduled_on: manilaDate(0), slot: 'am', notes: 'Sample only.'},
     lines, total: sum - 100, adjust: -100};
 }
-function receiptHtml(r){
-  const d = ymd => new Date(ymd + 'T00:00:00').toLocaleDateString('en-PH', {day: 'numeric', month: 'long', year: 'numeric'});
-  const money = n => n == null ? '—' : peso(n);
-  const j = r.job, c = r.customer;
-  return `<div class="receipt">
-    ${r.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
-    <div class="rc-head">
-      <div><img class="rc-logo" src="img/winter-air-logo.png" alt="${esc(SHOP_NAME)}">
-        <div class="rc-small">Aircon cleaning · repair · installation<br>Bacolod City · ${esc(SHOP_PHONE)}</div></div>
-      <div class="rc-right"><div class="rc-title">SERVICE RECEIPT</div>
-        <div class="rc-small">No. <b>${esc(r.no)}</b><br>Date: ${esc(d(r.date))}</div></div>
-    </div>
-    <div class="rc-parties">
-      <div><div class="rc-label">Customer</div><b>${esc(c.full_name || '')}</b><br>${esc(c.address || '')}${c.landmark ? '<br>' + esc(c.landmark) : ''}<br>${esc(c.contact || '')}</div>
-      <div><div class="rc-label">Aircons</div>${esc(unitsLine(unitsOf(j)) || '—')}
-        <div class="rc-label" style="margin-top:10px">Service date</div>${esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : '—')}</div>
-    </div>
-    <table class="rc-table">
-      <thead><tr><th style="width:7%">#</th><th style="width:26%">Aircon</th><th>Service</th><th class="rc-num" style="width:22%">Amount</th></tr></thead>
-      <tbody>${r.lines.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.unit || l.type)}</td><td>${esc(l.label)}</td><td class="rc-num">${esc(money(l.amount))}</td></tr>`).join('')}</tbody>
-      <tfoot>
-        ${r.adjust != null ? `<tr><td></td><td colspan="2" class="rc-num">Adjustment</td><td class="rc-num">${esc(money(r.adjust))}</td></tr>` : ''}
-        <tr class="rc-total"><td></td><td colspan="2" class="rc-num">TOTAL</td><td class="rc-num">${esc(money(r.total))}</td></tr>
-      </tfoot>
-    </table>
-    ${j.notes ? `<div class="rc-notes"><span class="rc-label">Notes</span> ${esc(j.notes)}</div>` : ''}
-    <div class="rc-sign"><div>Received by (customer)</div><div>Technician</div></div>
-    ${j.paid_method ? `<div class="rc-paid">PAID — ${esc(PAY[j.paid_method])}${j.paid_at ? ', ' + esc(d(manilaDay(j.paid_at))) : ''}</div>` : ''}
-    ${(db && db.settings || {}).gcash_number && !j.paid_method ? `<div class="rc-gcash"><img src="img/gcash-qr.png" alt="" data-gone-if-missing>
-      <div>Pay by GCash: <b>${esc(db.settings.gcash_number)}</b>${db.settings.gcash_name ? '<br>' + esc(db.settings.gcash_name) : ''}</div></div>` : ''}
-    <div class="rc-foot">Thank you for choosing ${esc(SHOP_NAME)}.<br>This is not an official receipt.</div>
-  </div>`;
-}
-function drawReceiptSample(){
-  return `<div class="receipt-wrap">${receiptHtml(receiptSample())}</div>
-    <div class="stack"><button type="button" class="b primary wide" data-act="print" data-id="">🖨️ Print the sample (A4)</button></div>`;
-}
-function panelReceipt(p){
-  const j = db.jobs[p.id];
-  if (!j) return {title: 'Receipt', body: empty('This job is no longer on this phone.')};
-  return {title: 'Receipt', sub: jobCust(j).full_name, info: 'receipt', body: `
-    <div class="receipt-wrap">${receiptHtml(receiptOf(j))}</div>
-    <div class="stack"><button type="button" class="b primary wide" data-act="sharereceipt" data-id="${esc(j.id)}">📤 Share with the customer</button>
-      <button type="button" class="b wide" data-act="print" data-id="${esc(j.id)}">🖨️ Print (A4)</button></div>`};
-}
-
-/* L5 (2026-09-27): on a job there is rarely a printer. Share sends the receipt as text to the
-   customer's Messenger or Viber — the phone's own share sheet (the APK's, or the browser's);
-   with neither, it is copied to paste. */
-function receiptText(j){
-  const r = receiptOf(j), c = r.customer || {};
-  return [SHOP_NAME + ' — service receipt ' + r.no, 'Date: ' + niceDate(r.date), c.full_name ? 'Customer: ' + c.full_name : '',
-    '', ...r.lines.map(l => '• ' + (l.unit || l.type) + ' — ' + l.label + (l.amount != null ? ': ' + peso(l.amount) : '')),
-    r.adjust != null ? 'Adjustment: ' + peso(r.adjust) : '', 'TOTAL: ' + (r.total != null ? peso(r.total) : '—'),
-    j.paid_method ? 'PAID — ' + PAY[j.paid_method] : ((db.settings || {}).gcash_number ? 'Pay by GCash: ' + db.settings.gcash_number + (db.settings.gcash_name ? ' (' + db.settings.gcash_name + ')' : '') : ''),
-    '', 'Thank you for choosing ' + SHOP_NAME + '. ' + SHOP_PHONE, 'This is not an official receipt.'].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
-}
-async function shareReceipt(id){
-  const j = db.jobs[id]; if (!j) return;
-  const text = receiptText(j), title = 'Receipt ' + receiptOf(j).no;
-  try {
-    if (window.AndroidBridge && window.AndroidBridge.shareText){ window.AndroidBridge.shareText(title, text); return; }
-    if (navigator.share){ await navigator.share({title, text}); return; }
-  } catch (e) { if (e && e.name === 'AbortError') return; }
-  const btn = $('[data-act="sharereceipt"]');
-  if (btn) copyText(text, btn); else toast('Could not share from this phone.', true);
-}
-
 /* ---------------------------------------------------------------- the quotation (25)
    The owner's own quotation, laid out as his Word one (2026-09-28): letterhead, date, the
    address, SUBJECT, "Dear …", the table, a Note, his signature, the customer's Conforme
@@ -3157,19 +3264,28 @@ function qtTotal(lines){
 }
 /* q: {date, to_address, salutation, subject, lines: [{text, qty, price}], note, sample} with
    numbers (or null) in qty and price. */
-function quoteHtml(q){
-  const s = quoteShop(), sig = quoteSig(), total = qtTotal(q.lines);
-  const longDate = ymd => ymd ? new Date(ymd + 'T00:00:00').toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}) : '';
-  const note = String(q.note || '').split('\n').filter(x => x.trim());
-  return `<div class="quote">
-    ${q.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
-    <div class="qt-head"><img class="qt-logo" src="img/winter-air-logo.png" alt="">
+const qtLongDate = ymd => ymd ? new Date(ymd + 'T00:00:00').toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}) : '';
+const qtNoteHtml = q => { const note = String(q.note || '').split('\n').filter(x => x.trim());
+  return note.length ? `<div class="qt-note">Note:<ul>${note.map(x => `<li${/^\s/.test(x) ? ' class="qt-in"' : ''}>${esc(x.trim())}</li>`).join('')}</ul></div>` : ''; };
+/* The letterhead: logo | the shop's words | his QR (2026-09-28) — the quotation's and the
+   billing statement's (45). */
+function qtHeadHtml(s){
+  return `<div class="qt-head"><img class="qt-logo" src="img/winter-air-logo.png" alt="">
       <div class="qt-lh"><div class="qt-name">${esc(s.name)}</div>
         ${s.tagline ? `<div class="qt-tag">${esc(s.tagline)}</div>` : ''}
         ${s.address ? `<div>${esc(s.address)}</div>` : ''}
         ${s.contact ? `<div class="qt-s">${esc(s.contact)}</div>` : ''}
         ${s.tin ? `<div class="qt-s">${esc(s.tin)}</div>` : ''}</div>
-      <img class="qt-qr" src="img/quote-qr.png" alt="QR code: the shop's Facebook page"></div>
+      <img class="qt-qr" src="img/quote-qr.png" alt="QR code: the shop's Facebook page"></div>`;
+}
+function quoteHtml(q){
+  if (q.bill) return billHtml(q);
+  const s = quoteShop(), sig = quoteSig(), total = qtTotal(q.lines);
+  const longDate = qtLongDate;
+  const note = String(q.note || '').split('\n').filter(x => x.trim());
+  return `<div class="quote">
+    ${q.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
+    ${qtHeadHtml(s)}
     <div class="qt-date">${esc(longDate(q.date))}</div>
     ${q.to_address ? `<div class="qt-to">${esc(q.to_address)}</div>` : ''}
     <div class="qt-subj">SUBJECT: ${esc(q.subject || '')}</div>
@@ -3194,6 +3310,56 @@ function quoteHtml(q){
     <div class="qt-conf"><div>Conforme: <span class="ln" style="width:320px"></span><small>Signature over Printed Name &amp; Title</small></div>
       <div>Date: <span class="ln" style="width:170px"></span></div></div>
   </div>`;
+}
+/* The Billing Statement (the owner via Guile, 2026-10-10, 45), replacing the receipt — a
+   receipt is for shops and food; a service is billed. The quotation's paper: the same
+   letterhead, table, note and signature; q.bill carries what the job says (billMeta). Not an
+   official receipt until the BIR question is answered. */
+function billHtml(q){
+  const s = quoteShop(), sig = quoteSig(), total = qtTotal(q.lines), m = q.bill;
+  return `<div class="quote bill">
+    ${q.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
+    ${qtHeadHtml(s)}
+    <div class="bl-title">BILLING STATEMENT</div>
+    <div class="bl-meta">
+      <div><div class="bl-label">Bill to</div><b>${esc(m.name || '')}</b>
+        ${q.to_address ? `<div class="qt-to" style="margin:0">${esc(q.to_address)}</div>` : ''}${m.contact ? `<div>${esc(m.contact)}</div>` : ''}</div>
+      <table class="bl-facts"><tr><td>Statement No.</td><td><b>${esc(m.no || '')}</b></td></tr>
+        <tr><td>Date</td><td>${esc(qtLongDate(q.date))}</td></tr>
+        ${m.service ? `<tr><td>Service date</td><td>${esc(m.service)}</td></tr>` : ''}
+        ${m.units ? `<tr><td>Units</td><td>${esc(m.units)}</td></tr>` : ''}</table>
+    </div>
+    <div class="qt-subj">SUBJECT: ${esc(q.subject || '')}</div>
+    ${q.salutation ? `<div class="qt-dear">${esc(q.salutation)}</div>` : ''}
+    <p class="qt-p">Please find below the statement of charges for the labor, materials and services rendered by ${esc(SHOP_SHORT)}:</p>
+    <table class="qt-table">
+      <thead><tr><th style="width:6%">#</th><th>Description of Labor, Materials and Services</th><th style="width:9%">Qty.</th><th style="width:14%">Unit Price</th><th style="width:19%">Amount</th></tr></thead>
+      <tbody>${q.lines.map((l, i) => `<tr><td class="qt-c">${i + 1}</td><td>${esc(l.text || '')}</td><td class="qt-c">${l.qty != null ? esc(String(l.qty)) : '—'}</td>
+        <td class="qt-c">${l.price != null ? esc(qtNum(l.price)) : '—'}</td><td class="qt-r">${qtAmount(l) != null ? esc(qtMoney(qtAmount(l))) : '—'}</td></tr>`).join('')}</tbody>
+      <tfoot><tr class="qt-tot"><td colspan="4" class="qt-r">TOTAL AMOUNT DUE</td><td class="qt-r">${total != null ? 'PHP ' + esc(qtMoney(total)) : '—'}</td></tr></tfoot>
+    </table>
+    ${m.paid ? `<div class="bl-paid">PAID — ${esc(m.paid)}</div>`
+      : m.gcash ? `<div class="rc-gcash bl-gcash"><img src="img/gcash-qr.png" alt="" data-gone-if-missing>
+        <div>Pay by GCash: <b>${esc(m.gcash.number)}</b>${m.gcash.name ? '<br>' + esc(m.gcash.name) : ''}</div></div>` : ''}
+    ${qtNoteHtml(q)}
+    <div class="bl-sign">
+      <div><div>Prepared by:</div>
+        ${sig ? `<img class="qt-sig" src="${esc(sig)}" alt="">` : '<div class="qt-sigspace"></div>'}
+        <div class="bl-ln"><b>${esc(s.signer || '')}</b></div>${s.title ? `<div>${esc(s.title)}</div>` : ''}<div>${esc(s.name)}</div></div>
+      <div><div>Received by:</div><div class="qt-sigspace"></div>
+        <div class="bl-ln">Signature over Printed Name</div><div>Date: <span class="ln" style="width:150px"></span></div></div>
+    </div>
+    <div class="bl-foot">Thank you for choosing ${esc(SHOP_NAME)}. This is not an official receipt.</div>
+  </div>`;
+}
+/* What the job says on its billing statement, at the moment it is drawn. */
+function billMeta(j){
+  const c = jobCust(j), b = bookingOfJob(j), set = (db && db.settings) || {};
+  return {no: b ? b.ref : j.booking_ref || 'J-' + String(j.id).slice(0, 6).toUpperCase(),
+    name: c.full_name || '', contact: c.contact || '', units: unitsLine(unitsOf(j)) || '',
+    service: j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : '',
+    paid: j.paid_method ? PAY[j.paid_method] + (j.paid_at ? ', ' + qtLongDate(manilaDay(j.paid_at)) : '') : '',
+    gcash: set.gcash_number ? {number: set.gcash_number, name: set.gcash_name || ''} : null};
 }
 let qtFull = false;
 const quoteBox = (q, id) => `<div class="qt-wrap${qtFull ? ' full' : ''}"${id ? ` id="${id}"` : ''} data-act="qtzoom"
@@ -3228,28 +3394,48 @@ function quoteLinesFrom(units){
 /* Where a quotation lives: a New booking (the Inbox), or a job until it is Done (26). A
    job's starts from its booking's, when it had one. Saving a job's sets its price. */
 function quoteSrc(p){
+  // the billing statement (45): the job's, saved on it; it starts from the job's quotation
+  if (p.kind === 'jobbill'){
+    const j = db.jobs[p.id]; if (!j) return null;
+    const b = bookingOfJob(j), c = jobCust(j), m = billMeta(j);
+    return {row: j, job: true, bill: true, name: c.full_name || '', ref: m.no,
+      open: db.role === 'admin' && j.status !== 'cancelled', state: (STATUS_LABEL[j.status] || j.status).toLowerCase(),
+      saved: j.billing, start: j.billing || j.quote || (b && b.quote) || null, address: c.address || '', units: unitsOf(j),
+      fn: 'save_job_bill', arg: 'p_job', field: 'billing', word: 'billing statement', title: 'Billing statement'};
+  }
   if (p.kind === 'jobquote'){
     const j = db.jobs[p.id]; if (!j) return null;
     const b = bookingOfJob(j), c = jobCust(j);
     return {row: j, job: true, name: c.full_name || '', ref: b ? b.ref : 'J-' + String(j.id).slice(0, 6).toUpperCase(),
       open: ['booked', 'scheduled', 'in_progress'].includes(j.status), state: (STATUS_LABEL[j.status] || j.status).toLowerCase(),
       saved: j.quote, start: j.quote || (b && b.quote) || null, address: c.address || '', units: unitsOf(j),
-      fn: 'save_job_quote', arg: 'p_job'};
+      fn: 'save_job_quote', arg: 'p_job', field: 'quote', word: 'quotation', title: 'Quotation'};
   }
   const b = db.bookings[p.id]; if (!b) return null;
   return {row: b, job: false, name: b.full_name, ref: b.ref, open: b.status === 'new', state: b.status,
-    saved: b.quote, start: b.quote, address: b.address || '', units: unitsOf(b), fn: 'save_quote', arg: 'p_booking'};
+    saved: b.quote, start: b.quote, address: b.address || '', units: unitsOf(b), fn: 'save_quote', arg: 'p_booking',
+    field: 'quote', word: 'quotation', title: 'Quotation'};
 }
 /* What the screen edits: strings, as typed. */
 function quoteStart(src){
   const q = src.start;
-  if (q) return {date: q.date, to_address: q.to_address || '', salutation: q.salutation || '', subject: q.subject || '',
+  // a billing statement taken from the quotation is dated the day it is made (45)
+  const date = q && !(src.bill && !src.saved) ? q.date : manilaDate(0);
+  if (q) return {date, to_address: q.to_address || '', salutation: q.salutation || '', subject: q.subject || '',
     note: q.note || '', lines: (q.lines || []).map(l => ({text: l.text, qty: String(l.qty), price: String(l.price)}))};
-  const set = db.settings || {};
-  return {date: manilaDate(0), to_address: src.address, salutation: 'Dear ' + src.name + ',',
+  const set = db.settings || {}, lines = quoteLinesFrom(src.units);
+  // no quotation to start from: the price list's lines, and the job's own price where it differs
+  if (src.bill && src.row.price != null){
+    const sum = qtTotal(quoteView({lines}).lines), diff = sum != null ? Math.round((Number(src.row.price) - sum) * 100) / 100 : null;
+    // (a price under the list's shows in the hint under the page: a line cannot be below zero)
+    if (diff > 0) lines.push({text: 'Other charges', qty: '1', price: String(diff)});
+  }
+  return {date, to_address: src.address, salutation: 'Dear ' + src.name + ',',
     subject: 'ACU ' + unionServices(src.units).map(svcLabel).join(' & ').toUpperCase(),
-    note: set.quote_note != null ? set.quote_note : QUOTE_NOTE, lines: quoteLinesFrom(src.units)};
+    note: set.quote_note != null ? set.quote_note : QUOTE_NOTE, lines};
 }
+/* The page as drawn: the typed copy, and for a billing statement what the job says. */
+const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMeta(src.row) : null});
 /* Typed → drawn: a price that cannot be read shows as — (and Save refuses it). */
 const quoteView = pq => ({...pq, lines: pq.lines.map(l => ({text: l.text,
   qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price)}))});
@@ -3269,31 +3455,33 @@ function quoteCheck(pq){
     note: pq.note, lines: v.lines.map(l => ({text: l.text.trim(), qty: l.qty, price: l.price}))}};
 }
 function panelQuote(p){
-  const src = quoteSrc(p);
-  if (!src) return {title: 'Quotation', body: empty('This ' + (p.kind === 'jobquote' ? 'job' : 'booking') + ' is no longer on this phone.')};
+  const src = quoteSrc(p), bill = p.kind === 'jobbill';
+  if (!src) return {title: bill ? 'Billing statement' : 'Quotation', body: empty('This ' + (p.kind === 'quote' ? 'booking' : 'job') + ' is no longer on this phone.')};
   if (!p.q) p.q = quoteStart(src);
   const open = src.open, saved = src.saved, sub = src.name + ' · ' + src.ref;
   const said = saved ? esc('Saved ' + timeAgo(saved.saved_at) + (saved.saved_by_name ? ' by ' + saved.saved_by_name : '')) + unsentPill(src.row.id)
+    : bill ? (src.start ? 'From the quotation — add any extra work, then save' : 'Not saved yet')
     : src.start ? 'From the booking’s quotation — not saved on the job yet' : 'Not saved yet';
   // Send as PDF (TODO 13): in the app, the paper as a file straight to the share sheet; on the
   // website there is no file maker, so it opens the print screen like the button above it
   const printBtn = `<button type="button" class="b${open ? '' : ' primary'} wide" data-act="printquote">🖨️ Print or save as PDF</button>
     <button type="button" class="b wide" data-act="sharequote">📤 Send as PDF — Messenger, email…</button>
     ${src.ref ? '<button type="button" class="b wide" data-act="wordquote">📝 Send as Word (.docx)</button>' : ''}`;   // 39
-  if (!open) return {title: 'Quotation', sub, info: 'quote', body: `
-    ${quoteBox(quoteView(p.q), 'quotePreview')}
-    <p class="hint">${said}. The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.</p>
+  if (!open) return {title: src.title, sub, info: bill ? 'bill' : 'quote', body: `
+    ${quoteBox(docView(p, src), 'quotePreview')}
+    <p class="hint">${said}. ${bill ? (db.role === 'admin' ? 'The job is cancelled: nothing to bill.' : 'Only the office changes it.')
+      : `The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.`}</p>
     <div class="stack">${printBtn}</div>`};
   const tot = qtTotal(quoteView(p.q).lines);
   const priceHint = src.job ? `<p class="hint">Saving it makes the job’s price its TOTAL${src.row.price != null ? ' (now ' + esc(peso(src.row.price)) + ')' : ''}.</p>` : '';
-  return {title: 'Quotation', sub, info: 'quote', body: `
-    ${quoteBox(quoteView(p.q), 'quotePreview')}
+  return {title: src.title, sub, info: bill ? 'bill' : 'quote', body: `
+    ${quoteBox(docView(p, src), 'quotePreview')}
     <p class="hint">${said}. Tap the page to see it full size.</p>
     <label>Date <input type="date" data-qf="date" value="${esc(p.q.date)}"></label>
     <label>Address <textarea data-qf="to_address" rows="2" maxlength="300">${esc(p.q.to_address)}</textarea></label>
     <label>Greeting <input data-qf="salutation" maxlength="160" value="${esc(p.q.salutation)}" autocomplete="off"></label>
     <label>Subject <input data-qf="subject" maxlength="150" value="${esc(p.q.subject)}" autocomplete="off"></label>
-    <div class="fieldlabel">Supply of Labor, Materials and Services</div>
+    <div class="fieldlabel">${bill ? 'Labor, materials and services — add the extra work: piping, wires, parts' : 'Supply of Labor, Materials and Services'}</div>
     ${p.q.lines.map((l, i) => `<div class="qt-line">
       <textarea data-ql="${i}:text" rows="2" maxlength="200" aria-label="Line ${i + 1}">${esc(l.text)}</textarea>
       <div class="qt-nums"><label class="qty">Qty <input data-ql="${i}:qty" inputmode="numeric" maxlength="3" value="${esc(l.qty)}"></label>
@@ -3302,17 +3490,17 @@ function panelQuote(p){
     </div>`).join('')}
     <div id="qtTotal" class="qt-total">${tot != null ? 'TOTAL ' + esc(peso(tot)) : 'TOTAL — a price is missing'}</div>
     <div class="actions"><button type="button" class="b" data-act="qtline" data-v="add">+ Add a line</button>
-      <button type="button" class="b" data-act="qtfill">↺ Lines from the booking</button></div>
+      <button type="button" class="b" data-act="qtfill">↺ Lines from the ${bill ? 'job' : 'booking'}</button></div>
     <label>Note <span class="opt">— one point per line; start a line with a space to indent it</span>
       <textarea data-qf="note" rows="6" maxlength="3000">${esc(p.q.note)}</textarea></label>
     ${priceHint}
-    <div class="stack"><button type="button" class="b primary wide" data-act="savequote">Save the quotation</button>
+    <div class="stack"><button type="button" class="b primary wide" data-act="savequote">Save the ${src.word}</button>
       ${printBtn}</div>`};
 }
 /* Typing redraws the page and the total only, never the box being typed in (ui.md). */
 function drawQuotePreview(p){
   const w = $('#quotePreview');
-  if (w) w.firstElementChild.innerHTML = quoteHtml(quoteView(p.q));
+  if (w) w.firstElementChild.innerHTML = quoteHtml(docView(p, quoteSrc(p)));
   const t = $('#qtTotal'), tot = qtTotal(quoteView(p.q).lines);
   if (t) t.textContent = tot != null ? 'TOTAL ' + peso(tot) : 'TOTAL — a price is missing';
   fitQuotes();
@@ -3324,6 +3512,18 @@ function quoteSample(){
     lines: ks.map((k, i) => ({text: svcLabel(k) + ' of ' + (i ? 'Window' : 'Split') + ' Type Aircon', qty: i + 1,
       price: officePrice(k, i ? 'Window' : 'Split') ?? 1000})),
     note: set.quote_note != null ? set.quote_note : QUOTE_NOTE};
+}
+/* Admin → Billing statement: the sample, from the same letterhead and signature (45). */
+function billSample(){
+  const q = quoteSample();
+  return {...q, subject: q.subject, lines: q.lines.concat([{text: 'ZZ Copper pipe, per foot (extra work)', qty: 10, price: 150}]),
+    bill: {no: 'WA-0000', name: 'ZZ Sample Customer', contact: '0999 000 0000', units: '2 Split', service: niceDate(manilaDate(0)) + ', morning',
+           paid: '', gcash: (db.settings || {}).gcash_number ? {number: db.settings.gcash_number, name: db.settings.gcash_name || ''} : null}};
+}
+function drawBillSample(){
+  return `<p class="hint">The letterhead, the note and the signature are the quotation’s — change them in Admin → Quotation. ${infoBtn('bill')}</p>
+    ${quoteBox(billSample())}
+    <div class="stack"><button type="button" class="b primary wide" data-act="printquote" data-id="">🖨️ Print the sample (A4)</button></div>`;
 }
 function drawQuoteAdmin(){
   const set = db.settings || {}, s = set.quote_shop || {}, sig = quoteSig();
@@ -3446,10 +3646,10 @@ document.addEventListener('change', async e => {
 // The quotation on paper (print) or as a PDF file (share). Admin's sample has no booking.
 function quotePaper(share){
   const p = topPanel(), src = p && p.q && quoteSrc(p);
-  if (!src) return printHtml(quoteHtml(quoteSample()), 'Quotation sample', share);
+  if (!src){ const bill = ui.adminSec === 'billing'; return printHtml(quoteHtml(bill ? billSample() : quoteSample()), (bill ? 'Billing statement' : 'Quotation') + ' sample', share); }
   // what is on the paper is what is saved: a changed (or never saved) quotation saves first
   if (src.open && (p.dirty || !src.saved) && !ACTIONS.savequote()) return;
-  printHtml(quoteHtml(quoteView(p.q)), 'Quotation ' + src.ref + ' ' + src.name, share);
+  printHtml(quoteHtml(docView(p, src)), src.title + ' ' + src.ref + ' ' + src.name, share);
 }
 /* ---------------------------------------------------------------- the quotation as Word (39)
    Guile, 2026-10-10: "Send as DOCX". The same q as quoteHtml, written as a .docx — a zip of
@@ -3533,7 +3733,36 @@ async function quoteDocx(q){
           cell(P(qtAmount(l) != null ? qtMoney(qtAmount(l)) : '—', {jc: 'right', after: 0}), W[3])])).join('')}
     ${tr([cell(P('TOTAL', {b: true, jc: 'center', after: 0}), W[0] + W[1] + W[2], {span: 3}), cell(P(total != null ? 'PHP ' + qtMoney(total) : '—', {b: true, jc: 'right', after: 0}), W[3])])}
     </w:tbl>`;
-  const body = [head, P(''), P(longDate(q.date)),
+  // the billing statement (45): the same letterhead, table and signature; its own words
+  const m = q.bill, half = (l, r) => `<w:tbl><w:tblPr><w:tblW w:w="9900" w:type="dxa"/>${none}<w:tblLayout w:type="fixed"/></w:tblPr>
+    <w:tblGrid><w:gridCol w:w="4950"/><w:gridCol w:w="4950"/></w:tblGrid><w:tr>${cell(l, 4950)}${cell(r, 4950)}</w:tr></w:tbl>`;
+  const billItems = m && `<w:tbl><w:tblPr><w:tblW w:w="9900" w:type="dxa"/>${lines}<w:tblLayout w:type="fixed"/></w:tblPr>
+    <w:tblGrid>${[600, 5300, 900, 1300, 1800].map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>
+    ${tr([cell(P('#', {b: true, jc: 'center', after: 0}), 600, {fill: 'D9E2F3'}), cell(P('Description of Labor, Materials and Services', {b: true, after: 0}), 5300, {fill: 'D9E2F3'}),
+          cell(P('Qty.', {b: true, jc: 'center', after: 0}), 900, {fill: 'D9E2F3'}), cell(P('Unit Price', {b: true, jc: 'center', after: 0}), 1300, {fill: 'D9E2F3'}),
+          cell(P('Amount', {b: true, jc: 'center', after: 0}), 1800, {fill: 'D9E2F3'})])}
+    ${q.lines.map((l, i) => tr([cell(P(String(i + 1), {jc: 'center', after: 0}), 600), cell(P(l.text || '', {after: 0}), 5300),
+          cell(P(l.qty != null ? String(l.qty) : '—', {jc: 'center', after: 0}), 900), cell(P(l.price != null ? qtNum(l.price) : '—', {jc: 'center', after: 0}), 1300),
+          cell(P(qtAmount(l) != null ? qtMoney(qtAmount(l)) : '—', {jc: 'right', after: 0}), 1800)])).join('')}
+    ${tr([cell(P('TOTAL AMOUNT DUE', {b: true, jc: 'right', after: 0}), 8100, {span: 4}), cell(P(total != null ? 'PHP ' + qtMoney(total) : '—', {b: true, jc: 'right', after: 0}), 1800)])}
+    </w:tbl>`;
+  const body = m ? [head, P(''), P('BILLING STATEMENT', {b: true, sz: 30, jc: 'center', after: 200}),
+    half([P('BILL TO', {b: true, sz: 18, after: 20}), P(m.name, {b: true, after: 0}),
+          ...String(q.to_address || '').split('\n').filter(t => t.trim()).map(t => P(t, {after: 0})), m.contact ? P(m.contact, {after: 0}) : ''].join(''),
+         [P('Statement No.: ' + m.no, {b: true, jc: 'right', after: 0}), P('Date: ' + longDate(q.date), {jc: 'right', after: 0}),
+          m.service ? P('Service date: ' + m.service, {jc: 'right', after: 0}) : '', m.units ? P('Units: ' + m.units, {jc: 'right', after: 0}) : ''].join('')),
+    P(''), P('SUBJECT: ' + (q.subject || ''), {b: true}), q.salutation ? P(q.salutation) : '',
+    P('Please find below the statement of charges for the labor, materials and services rendered by ' + SHOP_SHORT + ':', {jc: 'both'}),
+    billItems, P(''),
+    m.paid ? P('PAID — ' + m.paid, {b: true}) : m.gcash ? P('Pay by GCash: ' + m.gcash.number + (m.gcash.name ? ' (' + m.gcash.name + ')' : ''), {b: true}) : '',
+    note.length ? P('Note:', {b: true, after: 40}) : '', ...note.map(t => P('•  ' + t.trim(), {ind: /^\s/.test(t) ? 720 : 360, after: 20})),
+    P(''),
+    half([P('Prepared by:', {after: 0}), sig ? para(pic(sig, 0.6, 2.2), {after: 0}) : P('') + P(''),
+          P(s.signer || '', {b: true, after: 0}), s.title ? P(s.title, {after: 0}) : '', P(s.name, {after: 0})].join(''),
+         [P('Received by:', {after: 0}), P('') + P(''), P('________________________________', {after: 0}),
+          P('Signature over Printed Name', {sz: 18, after: 120}), P('Date: ____________________', {after: 0})].join('')),
+    P(''), P('Thank you for choosing ' + s.name + '. This is not an official receipt.', {sz: 18, jc: 'center'})].join('')
+  : [head, P(''), P(longDate(q.date)),
     ...String(q.to_address || '').split('\n').filter(t => t.trim()).map((t, i, a) => P(t, {after: i === a.length - 1 ? 120 : 0})),
     P('SUBJECT: ' + (q.subject || ''), {b: true}), q.salutation ? P(q.salutation) : '',
     P('Thank you for considering ' + SHOP_SHORT + ' as your service provider! We are pleased to present this proposal and will furnish the equipment, labor and materials necessary as well as our expertise to do the following in compliance with your service request:', {jc: 'both'}),
@@ -3568,9 +3797,9 @@ async function quoteWord(){
   const p = topPanel(), src = p && p.q && quoteSrc(p);
   if (!src) return;
   if (src.open && (p.dirty || !src.saved) && !ACTIONS.savequote()) return;   // the file is what is saved, as the paper
-  const name = 'Quotation ' + src.ref + ' ' + src.name;
+  const name = src.title + ' ' + src.ref + ' ' + src.name;
   try {
-    const blob = await quoteDocx(quoteView(p.q));
+    const blob = await quoteDocx(docView(p, src));
     if (window.AndroidBridge && window.AndroidBridge.shareDocx){
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
       window.AndroidBridge.shareDocx(name, b64);
@@ -3600,7 +3829,27 @@ async function printHtml(html, name, share){
    the new path. The phone shrinks it to 1000 px before sending. Downloads go four at a
    time and are asked for again when dropped (docs/rules/pictures.md). */
 const photoBusy = new Set();
-function housePhoto(path, cls){ return `<img class="${cls || 'house-photo'}" data-house="${esc(path)}" alt="The gate">`; }
+/* A picture comes back to a button that is no longer on the screen (Guile, 2026-10-10: "cannot
+   add work photo"). Coming back from the camera, the app refreshes and redraws the screen —
+   measured on the owner's tablet: the redraw 60 ms BEFORE the picture arrived — so the
+   picture lands on the old <input>, out of the page, and its change never reaches the page's
+   listeners. Every picture button, once: when that happens, the old input is put back (out of
+   sight) just long enough to be heard, then taken out again. */
+document.addEventListener('click', e => {
+  const inp = e.target && e.target.closest && e.target.closest('input[type="file"]');
+  if (!inp || inp.dataset.heard) return;
+  inp.dataset.heard = '1';
+  inp.addEventListener('change', () => {
+    if (inp.isConnected || !(inp.files && inp.files.length)) return;
+    let hold = $('#fileHold');
+    if (!hold){ hold = document.createElement('div'); hold.id = 'fileHold'; hold.hidden = true; document.body.appendChild(hold); }
+    hold.appendChild(inp);
+    inp.dispatchEvent(new Event('change', {bubbles: true}));
+    setTimeout(() => inp.remove(), 0);
+  });
+}, true);
+// a tap opens it full screen, in the work photos' viewer (Guile, 2026-10-10: "cannot zoom")
+function housePhoto(path, cls){ return `<img class="${cls || 'house-photo'}" data-house="${esc(path)}" alt="The gate" role="button" tabindex="0" data-act="houseview" data-v="${esc(path)}" draggable="false">`; }
 function fitPhoto(file, maxSide){
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file), img = new Image();
@@ -3633,16 +3882,71 @@ async function storage(method, path, body, retried, bucket = 'house-photos'){
 }
 const photoUrls = {}, photoWant = new Set(), photoQueue = [];
 let photoActive = 0;
+/* Photos live on the phones (Guile, 2026-10-11, 46): the shop is on Supabase's free plan, so
+   the server only relays a work photo until every shop phone has it (or 14 days). In the app
+   each photo is a file of its own (AndroidBridge.keepPhoto), kept until the app is removed —
+   the WebView's own cache can be cleared by Android when space runs low (persist() refused,
+   measured on the owner's tablet). The page reads a kept one as kept/<path>. The website has
+   no such files: it keeps its browser cache, as before. */
+const KEEPS = !!(window.AndroidBridge && window.AndroidBridge.keepPhoto);
+let keptSet = null;
+function kept(){
+  if (!keptSet){ keptSet = new Set(); try { JSON.parse(window.AndroidBridge.keptList() || '[]').forEach(x => keptSet.add(x)); } catch (e) {} }
+  return keptSet;
+}
+const isKept = path => KEEPS && kept().has(path);
 async function keepPhoto(path, blob){
+  if (KEEPS){
+    try {
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+      if (window.AndroidBridge.keepPhoto(path, b64)){ kept().add(path); photoUrls[path] = 'kept/' + path; if (path.startsWith('work/')) haveAdd(path); return; }
+    } catch (e) {}
+  }
   try { const c = await caches.open('ws-photos'); await c.put('photo/' + path, new Response(blob, {headers: {'Content-Type': 'image/jpeg'}})); } catch (e) {}
   if (!photoUrls[path]) photoUrls[path] = URL.createObjectURL(blob);
+}
+// a photo taken off the job (on any phone) leaves this one too
+function dropKept(path){
+  if (!path) return;
+  if (KEEPS){ try { window.AndroidBridge.dropKept(path); } catch (e) {} kept().delete(path); }
+  caches.open('ws-photos').then(c => c.delete('photo/' + path)).catch(() => {});
+  delete photoUrls[path];
 }
 function hydratePhotos(){
   $$('img[data-house]').forEach(img => {
     const p = img.dataset.house;
+    if (!photoUrls[p] && isKept(p)) photoUrls[p] = 'kept/' + p;
     if (photoUrls[p]){ if (img.getAttribute('src') !== photoUrls[p]) img.src = photoUrls[p]; }
+    // off the server (46): only a copy on this phone can show it
+    else if (img.dataset.off){ if (!photoWant.has(p)){ photoWant.add(p); photoQueue.push({p, b: null, tries: 3}); pumpPhotos(); } }
     else if (!photoWant.has(p)){ photoWant.add(p); photoQueue.push({p, b: img.dataset.bucket || 'house-photos', tries: 0}); pumpPhotos(); }
   });
+}
+/* Which work photos this phone keeps, told to the server so it can let go of them (46). The
+   phone's id is made once; the list waits here until it is sent. */
+const deviceId = () => { let d = lsGet('ws_device', ''); if (!d){ d = uuid(); lsSet('ws_device', d); } return d; };
+function haveAdd(path){ const h = lsGet('ws_have', []); if (!h.includes(path)){ h.push(path); lsSet('ws_have', h); } }
+async function reportHaves(){
+  if (!KEEPS || !db || !['admin', 'technician'].includes(db.role) || !online || !session) return;
+  if (!lsGet('ws_have_init', false)){   // the first time: everything this phone already keeps
+    lsSet('ws_have_init', true); kept().forEach(x => { if (x.startsWith('work/')) haveAdd(x); });
+  }
+  const h = lsGet('ws_have', []), day = manilaDate(0);
+  if (!h.length && lsGet('ws_have_day', '') === day) return;   // and once a day to say "still here"
+  const send = h.slice(0, 500);
+  try {
+    await rpc('photos_have', {p_device: deviceId(), p_paths: send});
+    lsSet('ws_have', lsGet('ws_have', []).filter(x => !send.includes(x))); lsSet('ws_have_day', day);
+  } catch (e) {}   // a server before 46, or no signal: next refresh
+}
+// every work photo this phone does not keep yet, while the server still has it
+function fetchMissingPhotos(){
+  if (!KEEPS || !db || !['admin', 'technician'].includes(db.role) || !online) return;
+  Object.values(db.jobs).forEach(j => workList(j).forEach(w => {
+    if (w.off || isKept(w.path) || photoWant.has(w.path)) return;
+    photoWant.add(w.path); photoQueue.push({p: w.path, b: WORK_BUCKET, tries: 0});
+  }));
+  pumpPhotos();
 }
 function pumpPhotos(){
   while (photoActive < 4 && photoQueue.length){
@@ -3652,6 +3956,7 @@ function pumpPhotos(){
       try {
         let blob = null;
         try { const c = await caches.open('ws-photos'); const m = await c.match('photo/' + job.p); if (m) blob = await m.blob(); } catch (e) {}
+        if (!blob && !job.b) throw new Error('not on this phone');   // off the server (46)
         if (!blob){
           const r = await storage('GET', job.p, null, false, job.b);   // work photos have their own bucket (39)
           if (!r.ok) throw new Error('http ' + r.status);
@@ -3661,7 +3966,7 @@ function pumpPhotos(){
         hydratePhotos();
       } catch (e) {
         if (++job.tries < 4) setTimeout(() => { photoQueue.push(job); pumpPhotos(); }, 1000 * 2 ** job.tries);
-        else photoWant.delete(job.p);   // asked for again the next time a screen shows it
+        else if (job.b) photoWant.delete(job.p);   // asked for again the next time a screen shows it (one only kept elsewhere: not)
       } finally { photoActive--; pumpPhotos(); }
     })();
   }
@@ -3712,7 +4017,7 @@ const workList = j => Array.isArray(j && j.work_photos) ? j.work_photos : [];
 const canWorkPhoto = j => !!j && 'work_photos' in j && (viewRole() === 'admin'
   || (viewRole() === 'technician' && !!j.scheduled_on && j.status !== 'cancelled'));
 const canDropWork = x => db.role === 'admin' || (db.role === 'technician' && x.by === session.uid);
-const workImg = (path, cls) => `<img class="${cls || 'work-thumb'}" data-house="${esc(path)}" data-bucket="${WORK_BUCKET}" alt="Work photo" draggable="false">`;
+const workImg = (path, cls, off) => `<img class="${cls || 'work-thumb'}" data-house="${esc(path)}" data-bucket="${WORK_BUCKET}"${off ? ' data-off="1"' : ''} alt="Work photo" draggable="false">`;
 function workPhotoBtn(j){
   const busy = workBusy[j.id];
   if (busy) return `<span class="b" aria-busy="true">Sending ${busy} photo${busy === 1 ? '' : 's'}…</span>`;
@@ -3723,7 +4028,8 @@ function workPhotosHtml(j){
   const list = workList(j);
   if (!list.length) return '';
   return `<div class="sec">📷 Work photos <span class="prep-count">${list.length}</span></div>
-    <div class="work-grid">${list.map((x, i) => `<button type="button" class="work-cell" data-act="workview" data-id="${esc(j.id)}" data-v="${i}" aria-label="Work photo ${i + 1} — full screen">${workImg(x.path)}</button>`).join('')}</div>`;
+    <div class="work-grid">${list.map((x, i) => `<button type="button" class="work-cell" data-act="workview" data-id="${esc(j.id)}" data-v="${i}" aria-label="Work photo ${i + 1} — full screen">${
+      x.off && KEEPS && !isKept(x.path) ? '<span class="work-gone">📷<small>On the other phones</small></span>' : workImg(x.path, null, x.off)}</button>`).join('')}</div>`;
 }
 /* Mark done asks, once: "Wanna add work photos?" — optional, Cancel any time (Guile). */
 function panelDonePhoto(p){
@@ -3812,8 +4118,11 @@ async function carryOver(){
 /* The viewer: full screen, swipe left and right, pinch or double-tap to zoom, drag to look
    around a zoomed photo. Android's back closes it. Written here, no library. */
 let viewer = null;
-function openViewer(jid, i){
-  viewer = {jid, i: +i || 0, s: 1, x: 0, y: 0};
+// what it shows: a job's work photos, or one gate photo (house) — the same swipe, pinch and zoom
+const vwList = () => !viewer ? [] : viewer.house ? [{path: viewer.house, bucket: 'house-photos', house: true}]
+  : workList(db.jobs[viewer.jid]).map(w => ({...w, bucket: WORK_BUCKET, gone: !!w.off && KEEPS && !isKept(w.path)}));
+function openViewer(jid, i, house){
+  viewer = {jid, house: house || null, i: +i || 0, s: 1, x: 0, y: 0};
   try { history.pushState({wsv: 1}, ''); } catch (e) {}
   drawViewer();
 }
@@ -3824,7 +4133,7 @@ function closeViewer(fromPop){
 }
 function drawViewer(){
   let el = $('#viewer');
-  const j = viewer && db.jobs[viewer.jid], list = workList(j);
+  const list = vwList();
   if (!viewer || !list.length){
     viewer = null;
     if (el) el.remove();
@@ -3833,12 +4142,16 @@ function drawViewer(){
   }
   if (!el){
     el = document.createElement('div'); el.id = 'viewer';
-    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Work photos');
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Photos');
     document.body.appendChild(el); wireViewer(el);
   }
   document.body.classList.toggle('vw-open', true);
   viewer.i = Math.min(Math.max(0, viewer.i), list.length - 1);
-  el.innerHTML = `<div class="vw-track">${list.map((w, k) => `<div class="vw-slide">${workImg(w.path, 'vw-img')}</div>`).join('')}</div>
+  el.innerHTML = `<div class="vw-track">${list.map(w => `<div class="vw-slide">${w.gone
+      ? '<div class="vw-gone">📷<br>This photo is on the other shop phones only.<br><small>It left the server once they all had it.</small></div>'
+      : `<img class="vw-img" data-house="${esc(w.path)}" data-bucket="${w.bucket}"${w.off ? ' data-off="1"' : ''} alt="" draggable="false">`}</div>`).join('')}</div>
+    <div class="vw-ask" hidden><p><b>Delete this photo?</b><br>It is taken off this job on every phone — the office’s and the technicians’ — and cannot be brought back.</p>
+      <div class="vw-ask-btns"><button type="button" class="b" data-vw="delno">Cancel</button><button type="button" class="b danger" data-vw="delyes">🗑️ Delete</button></div></div>
     <div class="vw-top"><button type="button" class="vw-btn" data-vw="close" aria-label="Close">✕</button>
       <span class="vw-count"></span><button type="button" class="vw-btn vw-del" data-vw="del" aria-label="Take this photo off">🗑️</button></div>
     <div class="vw-cap"></div>
@@ -3848,7 +4161,7 @@ function drawViewer(){
   vwGo(viewer.i, false);
 }
 function vwGo(i, animate){
-  const el = $('#viewer'), list = workList(db.jobs[viewer.jid]);
+  const el = $('#viewer'), list = vwList();
   viewer.i = Math.min(Math.max(0, i), list.length - 1);
   viewer.s = 1; viewer.x = 0; viewer.y = 0;
   const track = $('.vw-track', el), x = list[viewer.i];
@@ -3856,13 +4169,14 @@ function vwGo(i, animate){
   track.style.transform = `translateX(${-viewer.i * 100}%)`;
   $$('.vw-img', el).forEach(img => { img.style.transform = ''; });
   $('.vw-count', el).textContent = (viewer.i + 1) + ' / ' + list.length;
-  $('.vw-cap', el).textContent = staffName(x.by) + ' · ' + new Date(x.at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
-  $('.vw-del', el).style.visibility = canDropWork(x) ? '' : 'hidden';
+  $('.vw-cap', el).textContent = x.house ? 'The gate — to find the house'
+    : staffName(x.by) + ' · ' + new Date(x.at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+  $('.vw-del', el).style.visibility = !x.house && canDropWork(x) ? '' : 'hidden';
   $('.vw-nav.prev', el).hidden = viewer.i === 0;
   $('.vw-nav.next', el).hidden = viewer.i === list.length - 1;
 }
 function vwZoom(){
-  const img = $$('#viewer .vw-img')[viewer.i]; if (!img) return;
+  const s = $$('#viewer .vw-slide')[viewer.i], img = s && $('.vw-img', s); if (!img) return;
   const w = img.clientWidth, h = img.clientHeight, mx = (viewer.s - 1) * w / 2, my = (viewer.s - 1) * h / 2;
   viewer.x = Math.max(-mx, Math.min(mx, viewer.x)); viewer.y = Math.max(-my, Math.min(my, viewer.y));
   img.style.transform = viewer.s > 1 ? `translate(${viewer.x}px, ${viewer.y}px) scale(${viewer.s})` : '';
@@ -3873,12 +4187,14 @@ function wireViewer(el){
   const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   el.addEventListener('click', e => {
     const b = e.target.closest('[data-vw]'); if (!b || !viewer) return;
-    const what = b.dataset.vw, j = db.jobs[viewer.jid], x = workList(j)[viewer.i];
+    const what = b.dataset.vw, j = db.jobs[viewer.jid], x = vwList()[viewer.i];
     if (what === 'close') closeViewer();
     else if (what === 'prev') vwGo(viewer.i - 1);
     else if (what === 'next') vwGo(viewer.i + 1);
-    else if (what === 'del' && x && canDropWork(x)){
-      if (!confirmTwice(b, 'Take it off?')) return;
+    else if (what === 'del' && x && !x.house && j && canDropWork(x)){ $('.vw-ask', el).hidden = false; }
+    else if (what === 'delno') $('.vw-ask', el).hidden = true;
+    else if (what === 'delyes' && x && !x.house && j && canDropWork(x)){
+      dropKept(x.path);
       write('remove_work_photo', {p_job: j.id, p_path: x.path}, 'Work photo off — ' + (jobCust(j).full_name || ''), [j.id], db => {
         const y = db.jobs[j.id]; if (y) y.work_photos = workList(y).filter(w => w.path !== x.path);
       });
@@ -3989,7 +4305,7 @@ function exportMonth(delta){
   // what the public page typed must never run as a formula (=, +, -, @ first): a ' before it
   const cell = (v, i) => { let t = String(v == null ? '' : v); if (i !== 3 && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
     return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
-  const lines = [['Done', 'Receipt no.', 'Customer', 'Number', 'Address', 'Aircons', 'Services', 'Price', 'Paid', 'Paid on', 'Done by']]
+  const lines = [['Done', 'Statement no.', 'Customer', 'Number', 'Address', 'Aircons', 'Services', 'Price', 'Paid', 'Paid on', 'Done by']]
     .concat(rows.map(j => { const c = jobCust(j);
       // ="0917…": a number with its leading 0 kept — Excel and Sheets drop it otherwise
       return [manilaDay(j.done_at), receiptOf(j).no, c.full_name, c.contact ? '="' + digits(c.contact) + '"' : '', place(c),
@@ -4553,7 +4869,7 @@ document.addEventListener('input', e => {
    (docs/rules/ui.md). Android's own back button closes the top one (history). */
 let stack = [];
 const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, schedule: panelSchedule, price: panelPrice,
-  editbooking: panelEditBooking, service: panelService, receipt: panelReceipt, quote: panelQuote, jobquote: panelQuote, utype: panelUtype, ppcrop: panelPpcrop,
+  editbooking: panelEditBooking, service: panelService, quote: panelQuote, jobquote: panelQuote, jobbill: panelQuote, utype: panelUtype, ppcrop: panelPpcrop,
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
@@ -4792,10 +5108,6 @@ const ACTIONS = {
     write('set_shop_setting', {p_key: 'show_prices', p_value: on}, on ? 'Show prices on the booking page' : 'Hide prices from the booking page',
       ['show_prices'], db => { db.settings = {...(db.settings || {}), show_prices: on}; });
   },
-  print: id => {
-    const j = id && db.jobs[id];
-    printHtml(receiptHtml(j ? receiptOf(j) : receiptSample()), 'Receipt');
-  },
   // ---- the appliance list (27)
   savetype: id => {
     const p = topPanel(); if (!p || p.kind !== 'utype') return;
@@ -4859,20 +5171,22 @@ const ACTIONS = {
     const p = topPanel(), src = p && p.q && quoteSrc(p); if (!src) return;
     p.q.lines = quoteLinesFrom(src.units);
     p.dirty = true;
-    render(); toast('The lines are the booking’s aircons again, at the price list’s prices.');
+    render(); toast('The lines are the ' + (src.bill ? 'job' : 'booking') + '’s aircons again, at the price list’s prices.');
   },
   savequote: () => {
     const p = topPanel(), src = p && p.q && quoteSrc(p); if (!src) return false;
-    if (!src.open){ toast('This ' + (src.job ? 'job' : 'booking') + ' is ' + src.state + ': the quotation stays as it was.', true); return false; }
+    const Word = src.word[0].toUpperCase() + src.word.slice(1);
+    if (!src.open){ toast(src.bill ? 'Only the office changes the billing statement.' : 'This ' + (src.job ? 'job' : 'booking') + ' is ' + src.state + ': the quotation stays as it was.', true); return false; }
     const {q, bad} = quoteCheck(p.q);
     if (bad){ toast(bad + ' Nothing was saved.', true); return false; }
-    const row = src.row, v = (row.quote && row.quote.v) || 0, total = qtTotal(q.lines);
-    write(src.fn, {[src.arg]: row.id, p_quote: q, p_based_on: v}, 'Quotation for ' + src.name, [row.id], () => {
-      row.quote = {...q, v: v + 1, total, saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
-      if (src.job) row.price = total;   // a job's quotation is its price (26)
+    const row = src.row, v = (row[src.field] && row[src.field].v) || 0, total = qtTotal(q.lines);
+    // the billing statement goes through the quotation's own cleaner on the server (45)
+    write(src.fn, {[src.arg]: row.id, [src.bill ? 'p_bill' : 'p_quote']: q, p_based_on: v}, Word + ' for ' + src.name, [row.id], () => {
+      row[src.field] = {...q, v: v + 1, total, saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
+      if (src.job) row.price = total;   // a job's quotation — or billing statement — is its price (26, 45)
     });
     p.dirty = false;
-    toast(src.job ? 'Quotation saved — the job’s price is now ' + peso(total) + '.' : 'Quotation saved.');
+    toast(src.job ? Word + ' saved — the job’s price is now ' + peso(total) + '.' : 'Quotation saved.');
     return true;
   },
   printquote: () => quotePaper(false),
@@ -5279,7 +5593,7 @@ const ACTIONS = {
     write('set_job_price', {p_job: id, p_price: v, p_decided_at: null}, 'Price ' + peso(v), [id], () => { j.price = v; });
     toast('Price set to ' + peso(v) + ', the price list’s.');
   },
-  nopin: (id, el) => showNoPin(el.dataset.href, el.dataset.landmark),
+  mapopen: (id, el) => showMapChoice(el.dataset.href, el.dataset.waze, !!el.dataset.pinned, el.dataset.landmark),
   onway: id => {   // idea 1 (19)
     const j = db.jobs[id]; if (!j || j.on_way_at) return;
     write('set_on_way', {p_job: id}, 'On the way — ' + (jobCust(j).full_name || 'job'), [id], () => { j.on_way_at = new Date().toISOString(); });
@@ -5296,7 +5610,6 @@ const ACTIONS = {
     write('set_shop_setting', {p_key: 'slot_capacity', p_value: n}, n ? 'At most ' + n + ' job' + (n === 1 ? '' : 's') + ' a morning or afternoon' : 'No limit on jobs a morning',
       ['slot_capacity'], db => { db.settings = {...(db.settings || {}), slot_capacity: n}; });
   },
-  sharereceipt: id => shareReceipt(id),
   closedwd: (id, el) => {   // idea 4: a weekday closed every week, on or off
     const i = Number(el.dataset.v), cur = (db.settings || {}).closed_days || [];
     const next = cur.includes(i) ? cur.filter(x => x !== i) : [...cur, i].sort();
@@ -5377,17 +5690,32 @@ const ACTIONS = {
   },
   // ---- Assigned to (39)
   assignopen: id => { if (db.jobs[id]) openPanel({kind: 'assign', id}); },
-  assignto: (id, el) => {
-    const j = db.jobs[id]; if (!j || !canAssign(j)) return;
-    const to = el.dataset.v || null, name = jobCust(j).full_name || 'job';
-    const what = to ? (to === session.uid && db.role === 'technician' ? 'Assigned to you' : (j.assigned_uid ? 'Transferred to ' : 'Assigned to ') + staffName(to)) : 'No assign';
-    write('assign_job', {p_job: id, p_to: to}, what + ' — ' + name, [id], () => {
-      j.assigned_uid = to; j.assigned_by = session.uid; j.assigned_at = new Date().toISOString();
-    });
+  // ---- the crew (46)
+  crewtoggle: (id, el) => {
+    const p = topPanel(); if (!p || p.kind !== 'assign' || !p.sel) return;
+    const v = el.dataset.v, i = p.sel.indexOf(v);
+    if (i >= 0) p.sel.splice(i, 1); else p.sel.push(v);
+    render();
+  },
+  crewclear: () => { const p = topPanel(); if (p && p.sel){ p.sel = []; render(); } },
+  crewhead: (id, el) => {
+    const p = topPanel(), j = db.jobs[id], v = el.dataset.v; if (!j || !canAssign(j)) return;
+    if (db.role === 'admin' && p && p.sel){ p.sel = [v, ...p.sel.filter(x => x !== v)]; render(); return; }
+    crewWrite(j, 'head', v, null, staffName(v) + ' is the head');
+  },
+  crewjoin: id => { const j = db.jobs[id]; if (j && canAssign(j)) crewWrite(j, 'join', session.uid, null, 'You joined as a helper'); },
+  crewleave: id => { const j = db.jobs[id]; if (j && canAssign(j)) crewWrite(j, 'leave', session.uid, null, 'You left the crew'); },
+  crewsave: id => {
+    const p = topPanel(), j = db.jobs[id]; if (!p || !p.sel || !j) return;
+    crewWrite(j, 'set', null, p.sel.slice(), p.sel.length ? 'Crew: ' + p.sel.map(staffName).join(', ') : 'No assign');
     closePanel();
-    toast(what + '.');
   },
   workview: (id, el) => openViewer(id, el.dataset.v),
+  // the search's chips and its × (2026-10-10)
+  custtype: (id, el) => { const s = $('#custSearch'); ui.search = fold(ui.search || '').trim() === fold(el.dataset.v) ? '' : el.dataset.v; saveUi();
+    if (s) s.value = ui.search; custSearchDraw(); },
+  custclear: () => { ui.search = ''; saveUi(); const s = $('#custSearch'); if (s){ s.value = ''; s.focus(); } custSearchDraw(); },
+  houseview: (id, el) => openViewer(null, 0, el.dataset.v),
   ufieldtype: (id, el) => {   // 44
     const p = topPanel(); if (!p || p.kind !== 'unitfield') return;
     const k = el.dataset.v; p.types = p.types.includes(k) ? p.types.filter(x => x !== k) : [...p.types, k]; render();
@@ -5553,7 +5881,7 @@ document.addEventListener('input', e => {
     if (f === 'date' || t.type === 'checkbox'){ t.blur(); render(); }
     return;
   }
-  if (t.id === 'custSearch'){ ui.search = t.value; saveUi(); $('#custList').innerHTML = custListHtml(); }
+  if (t.id === 'custSearch'){ ui.search = t.value; saveUi(); custSearchDraw(); }
   if (t.id === 'teamSearch'){ ui.teamSearch = t.value; saveUi(); $('#teamList').innerHTML = teamListHtml(); }
 });
 
