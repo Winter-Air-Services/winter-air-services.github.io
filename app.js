@@ -330,6 +330,7 @@ async function pull(){
   }
   if (res.services) db.services = res.services; // the price list, sent whole (admin only)
   if (res.staff) db.staff = res.staff;          // the shop's people by name, for Assigned to (39)
+  if (res.unit_fields && !queue.some(o => o.fn === 'set_unit_fields')) db.unitFields = res.unit_fields;   // the owner's boxes (44)
   // what to bring, per service, the shop's three roles (37) — not while a change is on its way
   if (res.checklists && !queue.some(o => o.fn === 'save_checklist')) db.checklists = res.checklists;
   // the appliance list, every role (27) — not while a change to it is still on its way: two
@@ -970,7 +971,8 @@ function unitsOf(x){
    a new field is added once. */
 const unitCopy = u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null,
                         serial: u.serial || null, extra: u.extra || null, problem: u.problem || null,
-                        ...(u.cu ? {cu: u.cu} : {})});   // 43: which saved appliance it is
+                        ...(u.cu ? {cu: u.cu} : {}),     // 43: which saved appliance it is
+                        ...(u.specs && Object.keys(u.specs).length ? {specs: {...u.specs}} : {})});   // 44: the owner's boxes
 /* "Window #1", "Window #2", "Split #1". */
 function unitNames(units){
   const seen = {};
@@ -1043,12 +1045,31 @@ function cartHtml(cart, units, opts){
           return `<span class="svc-chip">${esc(svcLabel(k))}${p != null ? ` <i>${esc(peso0(p))}</i>` : ''}${editable
             ? `<button type="button" data-act="unitsvcx" data-cart="${cart}" data-i="${i}" data-v="${esc(k)}" aria-label="Take off ${esc(svcLabel(k))}">×</button>` : ''}</span>`; }).join('')}</div>
         ${u.extra ? `<div class="cart-problem"><b>Additionals:</b> ${esc(u.extra)}</div>` : ''}
+        ${specsHtml(u)}
         ${u.problem ? `<div class="cart-problem"><b>Problem:</b> ${esc(u.problem)}</div>` : ''}
         ${opts.saved && u.cu ? notesHtml(opts.saved(u.cu), 'cart:' + u.cu) : ''}
       </div>`; }).join('')}
     ${pf ? `<div class="cart-total"><span>Total</span><b>${total != null ? esc(peso(total)) : esc(opts.missing || 'We will tell you on the call')}</b></div>` : ''}
   </div>`;
 }
+/* ---------------------------------------------------------------- the owner's own boxes (44)
+   Admin → Specs (the owner via Guile, 2026-10-10): boxes he makes himself — Horsepower,
+   Refrigerant… — each on the appliances he ticks, one line or a bigger box, and shown on the
+   booking page only if he says so. The page gets those from list_services; the shop, all. */
+const staffDb = () => !!db && ['admin', 'technician', 'helper'].includes(db.role);
+const allFields = () => staffDb() ? (db.unitFields || []) : (pubShop.unit_fields || []);
+// the boxes a cart shows for this type: the page only its own, the shop every one not removed
+const fieldsFor = (cart, type) => (cart === 'pub' ? (pubShop.unit_fields || []) : (db && db.unitFields || []))
+  .filter(f => !f.removed && (f.types || []).includes(type));
+const fieldLabel = k => (allFields().find(f => f.key === k) || (pubShop.unit_fields || []).find(f => f.key === k) || {}).label || '';
+const specsHtml = u => Object.entries(u.specs || {}).filter(([k, v]) => v && fieldLabel(k))
+  .map(([k, v]) => `<div class="cart-problem"><b>${esc(fieldLabel(k))}:</b> ${esc(v)}</div>`).join('');
+function specBoxes(fields, vals, attr){
+  return fields.map(f => `<label>${esc(f.label)} <span class="opt">— optional</span>${f.long
+    ? `<textarea ${attr}="${esc(f.key)}" maxlength="1000" rows="3">${esc(vals[f.key] || '')}</textarea>`
+    : `<input ${attr}="${esc(f.key)}" maxlength="100" value="${esc(vals[f.key] || '')}" autocomplete="off">`}</label>`).join('');
+}
+
 /* ---------------------------------------------------------------- saved appliances (43)
    The owner via Guile, 2026-10-10: a customer's aircons are kept on their file — brand,
    model, serial, additionals, problem, and his own notes ("changed the capacitor"). A job's
@@ -1107,6 +1128,7 @@ function drawUnitSheet(){
     </div>
     <label>Serial number <span class="opt">— optional</span><input data-ued="serial" maxlength="60" value="${esc(u.serial || '')}" autocomplete="off"></label>
     <label>Additionals <span class="opt">— optional</span><textarea data-ued="extra" maxlength="200" rows="2" placeholder="Indoor or outdoor, which room…">${esc(u.extra || '')}</textarea></label>
+    ${specBoxes(fieldsFor(unitEd.cart, u.type), u.specs || {}, 'data-uspec')}
     <label>Problem or complaint <span class="opt">— optional</span>
       <textarea data-ued="problem" maxlength="300" rows="2" placeholder="What is wrong with this ${esc(name)}? Not cold, leaking…">${esc(u.problem || '')}</textarea></label>
     ${saved ? `<div class="card saved-card"><div class="sms-note">🗂️ Saved on ${esc(((custOfId(cid) || {}).full_name || 'their') + '’s')} file</div>${notesHtml(saved, 'ued:' + saved.id)}</div>` : ''}
@@ -2434,7 +2456,10 @@ function panelCustUnit(p){
   if (p.type == null){
     Object.assign(p, {uid: uid || uuid(), type: x ? x.type : '', brand: x && x.brand || '', model: x && x.model || '', serial: x && x.serial || '',
       extra: x && x.extra || '', problem: x && x.problem || '', notes: x && x.notes || '', removed: !!(x && x.removed)});
+    Object.entries(x && x.specs || {}).forEach(([k, v]) => { p['spec_' + k] = v; });   // 44
   }
+  const boxes = (db.unitFields || []).filter(f => !f.removed && (f.types || []).includes(p.type));
+  const vals = {}; boxes.forEach(f => { vals[f.key] = p['spec_' + f.key] || ''; });
   const lines = Math.min(30, Math.max(6, String(p.notes || '').split('\n').length + 1));
   return {title: x ? typeLabel(x.type) : 'New appliance', sub: c.full_name, body: `
     ${x ? '' : `<div class="fieldlabel">What is it?</div>
@@ -2445,6 +2470,7 @@ function panelCustUnit(p){
     </div>
     <label>Serial number <input data-pf="serial" maxlength="60" value="${esc(p.serial)}" autocomplete="off"></label>
     <label>Additionals <textarea data-pf="extra" maxlength="200" rows="2" placeholder="Indoor or outdoor, which room…">${esc(p.extra)}</textarea></label>
+    ${specBoxes(boxes, vals, 'data-pfspec')}
     <label>Problem or complaint <textarea data-pf="problem" maxlength="300" rows="2">${esc(p.problem)}</textarea></label>
     <label>📝 Notes <span class="opt">— the shop's only: what was done, parts changed. The customer never sees them.</span>
       <textarea data-pf="notes" maxlength="4000" rows="${p.big ? lines : 6}" class="notes-box" placeholder="Oct 10 — changed the capacitor. Cleaned the drain…">${esc(p.notes)}</textarea></label>
@@ -2697,11 +2723,11 @@ function panelMember(p){
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
   const secs = [['services', 'Services & prices'], ['types', 'Appliances'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['texts', 'Texts'], ['job', 'Job'], ['numbers', 'Numbers']];   // job: 41
+    ['photos', 'Page photos'], ['receipt', 'Receipt'], ['quote', 'Quotation'], ['texts', 'Texts'], ['job', 'Job'], ['specs', 'Specs'], ['numbers', 'Numbers']];   // job: 41, specs: 44
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
     ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, receipt: drawReceiptSample, quote: drawQuoteAdmin,
-      texts: drawTexts, job: drawJobMover, numbers: drawNumbers})[v]();
+      texts: drawTexts, job: drawJobMover, specs: drawSpecs, numbers: drawNumbers})[v]();
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
    it"): the weekdays the shop never works, and a month calendar to close particular dates —
@@ -4417,6 +4443,33 @@ function moverMeans(at){
   return 'At ' + clock12(at) + (at === '12:00' ? ' (noon)' : '') + ' each day, every job of that day — and any older one — that is not Done or Cancelled moves to the next day, same time. A job whose own time is later than ' + clock12(at) + ' stays.'
     + (at < '17:00' ? ' This is during the working day: a job still being worked on at ' + clock12(at) + ' moves too.' : '');
 }
+/* Admin → Specs (44): his own boxes on an aircon, below Additionals. */
+function drawSpecs(){
+  const list = [...(db.unitFields || [])].sort((a, b) => !!a.removed - !!b.removed);
+  return `<div class="card"><p class="hint">Your own boxes on an aircon — Horsepower, Refrigerant, anything — under Brand, Model, Serial number and Additionals. Each one on the appliances you tick; shown on the booking page only if you say so.</p></div>
+    ${list.length ? `<div class="list">${list.map(f => `<div class="lrow${f.removed ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="unitfield" data-id="${esc(f.key)}">
+        <div class="lrow-main"><div class="lrow-title">${esc(f.label)}</div>
+          <div class="lrow-sub">${esc([(f.types || []).map(typeLabel).join(', ') || 'No appliance', f.long ? 'bigger box' : 'one line',
+            f.public ? 'on the booking page' : 'shop only', f.removed ? 'removed' : ''].filter(Boolean).join(' · '))}</div></div>
+        <span class="menu-chev">›</span></div>`).join('')}</div>` : ''}
+    <div class="stack"><button type="button" class="b primary wide" data-act="open" data-kind="unitfield" data-id="">＋ Add a box</button></div>`;
+}
+function panelUnitField(p){
+  const f = p.id ? (db.unitFields || []).find(x => x.key === p.id) : null;
+  if (p.label == null) Object.assign(p, {label: f ? f.label : '', types: f ? [...(f.types || [])] : [], long: f ? (f.long ? '1' : '') : '',
+    pub: f ? (f.public ? '1' : '') : '', key: f ? f.key : 'f_' + Math.random().toString(36).slice(2, 10).replace(/[^a-z0-9]/g, 'x')});
+  const seg = (k, opts) => `<div class="segment">${opts.map(([v, t]) => `<button type="button" class="${(p[k] || '') === v ? 'active' : ''}" data-act="pset" data-f="${k}" data-v="${v}">${t}</button>`).join('')}</div>`;
+  return {title: f ? f.label : 'New box', sub: 'Specs', body: `
+    <label>Name of the box <input data-pf="label" maxlength="40" value="${esc(p.label)}" placeholder="Horsepower, Refrigerant…" autocomplete="off"></label>
+    <div class="fieldlabel">On these appliances</div>
+    <div class="tabbar tight">${activeTypes().map(t => `<button type="button" class="tab-btn${p.types.includes(t.key) ? ' active' : ''}" data-act="ufieldtype" data-v="${esc(t.key)}">${p.types.includes(t.key) ? '✓ ' : ''}${esc(t.label)}</button>`).join('')}</div>
+    <div class="fieldlabel">Size</div>${seg('long', [['', 'One line'], ['1', 'Bigger box']])}
+    <div class="fieldlabel">On the booking page</div>${seg('pub', [['', 'Shop only'], ['1', 'Customers fill it too']])}
+    <p class="hint">${p.pub ? 'Customers see it and can fill it in when they book. The office and technicians always can.' : 'Only the office and technicians see and fill it. Customers never see it.'}</p>
+    <div class="stack"><button type="button" class="b primary wide" data-act="saveufield">Save</button>
+      ${f ? `<button type="button" class="b wide${f.removed ? '' : ' danger'}" data-act="saveufield" data-v="${f.removed ? 'back' : 'remove'}">${f.removed ? 'Bring it back' : 'Remove the box'}</button>` : ''}</div>
+    ${f && !f.removed ? '<p class="hint">Removing hides it from every form. Aircons filled in before keep what they say.</p>' : ''}`};
+}
 function drawJobMover(){
   const m = moverSet(), s = textSet();
   const seg = (act, on) => `<div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
@@ -4505,7 +4558,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
   deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
-  assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit};   // 39, 43
+  assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField};   // 39, 43, 44
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
@@ -4997,7 +5050,8 @@ const ACTIONS = {
   unitpick: (id, el) => {   // 43
     if (!unitEd) return;
     const x = el.dataset.v && savedOf(cartCustomer(unitEd.cart), el.dataset.v);
-    if (x) Object.assign(unitEd.unit, {brand: x.brand || '', model: x.model || '', serial: x.serial || '', extra: x.extra || '', problem: x.problem || '', cu: x.id});
+    if (x) Object.assign(unitEd.unit, {brand: x.brand || '', model: x.model || '', serial: x.serial || '', extra: x.extra || '', problem: x.problem || '', cu: x.id,
+                                       specs: {...(x.specs || {})}});   // 44
     unitEd.pick = false; drawUnitSheet();
   },
   notesmore: (id, el) => { const k = el.dataset.v; if (openNotes.has(k)) openNotes.delete(k); else openNotes.add(k); if (unitEd) drawUnitSheet(); render(); },
@@ -5018,6 +5072,10 @@ const ACTIONS = {
     if (!u.services.length){ $('#unitMsg').textContent = 'Choose at least one service for this aircon.'; return; }
     const tr = x => (x || '').trim() || null;
     const clean = {...unitCopy(u), brand: tr(u.brand), model: tr(u.model), serial: tr(u.serial), extra: tr(u.extra), problem: tr(u.problem)};
+    // 44: his boxes, trimmed; empty ones and ones not on this type go
+    const ok = new Set(fieldsFor(unitEd.cart, u.type).map(f => f.key)), sp = {};
+    Object.entries(u.specs || {}).forEach(([k, v]) => { if (ok.has(k) && String(v || '').trim()) sp[k] = String(v).trim(); });
+    if (Object.keys(sp).length) clean.specs = sp; else delete clean.specs;
     const units = cartUnits(unitEd.cart), cart = unitEd.cart;
     if (unitEd.index >= 0) units[unitEd.index] = clean; else units.push(clean);
     unitEd = null; drawUnitSheet(); afterCart(cart);
@@ -5330,6 +5388,23 @@ const ACTIONS = {
     toast(what + '.');
   },
   workview: (id, el) => openViewer(id, el.dataset.v),
+  ufieldtype: (id, el) => {   // 44
+    const p = topPanel(); if (!p || p.kind !== 'unitfield') return;
+    const k = el.dataset.v; p.types = p.types.includes(k) ? p.types.filter(x => x !== k) : [...p.types, k]; render();
+  },
+  saveufield: (id, el) => {   // 44
+    const p = topPanel(); if (!p || p.kind !== 'unitfield') return;
+    const label = String(p.label || '').trim();
+    if (!label){ notice('Give the box a name. Nothing was saved.', true); return; }
+    if (!p.types.length){ notice('Tick at least one appliance it is on. Nothing was saved.', true); return; }
+    const old = (db.unitFields || []).find(x => x.key === p.key);
+    const removed = el.dataset.v === 'remove' ? true : el.dataset.v === 'back' ? false : !!(old && old.removed);
+    const f = {key: p.key, label, types: [...p.types], long: !!p.long, public: !!p.pub, removed};
+    const list = [...(db.unitFields || []).filter(x => x.key !== f.key), f];
+    write('set_unit_fields', {p_fields: list}, 'Specs — ' + label, ['unitfields'], db => { db.unitFields = list; });
+    closePanel();
+    toast(removed ? 'Removed. Bring it back any time.' : 'Saved. It shows on the aircons you ticked.');
+  },
   savecustunit: (id, el) => {   // 43
     const p = topPanel(); if (!p || p.kind !== 'custunit') return;
     const [cid] = String(p.id).split('|'), c = custOfId(cid);
@@ -5337,12 +5412,14 @@ const ACTIONS = {
     const removed = el.dataset.v === 'remove' ? true : el.dataset.v === 'back' ? false : !!p.removed;
     const tr = v => String(v || '').trim();
     const unit = {id: p.uid, type: p.type, brand: tr(p.brand), model: tr(p.model), serial: tr(p.serial), extra: tr(p.extra),
-                  problem: tr(p.problem), notes: tr(p.notes), removed};
+                  problem: tr(p.problem), notes: tr(p.notes), removed,
+                  specs: Object.fromEntries(Object.keys(p).filter(k => k.startsWith('spec_') && tr(p[k])).map(k => [k.slice(5), tr(p[k])]))};   // 44
     write('save_customer_unit', {p_customer: cid, p_unit: unit}, (removed ? 'Appliance removed — ' : 'Appliance — ') + ((c || {}).full_name || ''), [cid], db => {
       const row = db.customers[cid]; if (!row) return;
       const list = (row.units || []).filter(y => y.id !== unit.id);
       const clean = {...unit, updated_at: new Date().toISOString()};
       Object.keys(clean).forEach(k => { if (clean[k] === '') delete clean[k]; });
+      if (!Object.keys(clean.specs || {}).length) delete clean.specs;
       row.units = [...list, clean];
     });
     closePanel();
@@ -5438,6 +5515,8 @@ document.addEventListener('keydown', e => {
 document.addEventListener('input', e => {
   const t = e.target, f = t.dataset && t.dataset.pf;
   if (t.dataset && t.dataset.ued && unitEd){ unitEd.unit[t.dataset.ued] = t.value; return; }
+  if (t.dataset && t.dataset.pfspec){ const p = topPanel(); if (p) p['spec_' + t.dataset.pfspec] = t.value; return; }   // 44
+  if (t.dataset && t.dataset.uspec && unitEd){ unitEd.unit.specs = {...(unitEd.unit.specs || {}), [t.dataset.uspec]: t.value}; return; }   // 44
   if (t.dataset && t.dataset.ckdate){   // 📅 the check date (24)
     const v = t.value, id = t.dataset.ckdate; if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v < manilaDate(0)) return;
     if (id === 'new'){ const p = topPanel(); if (p){ p.ck_next = v; p.ck_day = Number(v.slice(8, 10)); t.blur(); render(); } return; }
