@@ -724,9 +724,36 @@
     #printArea{display:block}
     #printArea .quote{width:auto;min-height:0;padding:0}
   }
-  .lrow-when{flex:none;width:50px;text-align:center;border-right:1px solid var(--border);padding-right:10px;line-height:1.2}
-  .lrow-when b{display:block;font-size:14px}
+  /* the time on ONE line, "12:59PM" the widest: 63 px at 13 px bold, + 10 padding + 1 border */
+  .lrow-when{flex:none;width:74px;text-align:center;border-right:1px solid var(--border);padding-right:10px;line-height:1.2}
+  .lrow-when b{display:block;font-size:13px;white-space:nowrap}
   .lrow-when span{font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
+  /* A job row is a grid (Guile's drawing, 2026-10-11): the time down the left, from the card's
+     top corner to the thin bars; the name, the pills, then the pictures and the badge beside it.
+     Spanning two rows adds no height — its 35 px is less than the rows it sits beside. */
+  .lrow.job-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:8px;
+    grid-template-areas:"when main side" "steps steps steps"}
+  .lrow.job-row.has-assign{grid-template-areas:"when main side" "when assign assign" "steps steps steps"}
+  .job-row > .lrow-when{grid-area:when;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
+  .job-row > .lrow-main{grid-area:main}
+  .job-row > .lrow-side{grid-area:side}
+  .job-row > .lrow-assign{grid-area:assign}
+  .job-row > .mini-steps{grid-area:steps}
+  @media (min-width:600px){
+    .lrow.job-row.has-assign{grid-template-columns:auto minmax(0,1fr) auto auto;
+      grid-template-areas:"when main assign side" "steps steps steps steps"}
+    .job-row > .lrow-assign{max-width:none}
+  }
+  /* the time as the Reschedule button: a tile in the card's corner — 4 px in from its edge, so
+     its 8 px corner follows the card's 12 px one — tinted, pressed in when tapped */
+  button.lrow-when.resched{font:inherit;line-height:1.2;color:inherit;cursor:pointer;-webkit-appearance:none;appearance:none;
+    width:78px;margin:-6px 0 0 -8px;padding:6px 4px;border:1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    border-radius:8px;background:linear-gradient(160deg, var(--primary-soft), color-mix(in srgb, var(--primary-soft) 55%, var(--surface)));
+    transition:transform .08s ease, filter .08s ease}
+  button.lrow-when.resched b{color:var(--ink)}
+  button.lrow-when.resched:hover{filter:brightness(1.08)}
+  button.lrow-when.resched:active{transform:scale(.96);filter:brightness(.95)}
+  button.lrow-when.resched:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
   .lrow .actions{margin-top:0}
   .avatar{flex:none;width:36px;height:36px;border-radius:50%;background:var(--primary-soft);color:var(--primary);
     display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
@@ -840,6 +867,9 @@
     padding-bottom:calc(20px + env(safe-area-inset-bottom));margin:0}
   .sheet.small .sheet-top{position:static;border-radius:18px 18px 0 0}
   @media (min-width:700px){ .sheet.small{align-items:center} .sheet.small .sheet-inner{border-radius:18px;max-width:480px} }
+  .sheet.small.mid{align-items:center;padding:0 12px}
+  .sheet.small.mid .sheet-inner{border-radius:18px;max-width:480px;padding-bottom:16px;border:1px solid var(--border);
+    box-shadow:0 12px 40px rgba(0,0,0,.45)}
 
   /* ---------- bottom navigation: an Android app's, six places ---------- */
   .bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:center;gap:2px;

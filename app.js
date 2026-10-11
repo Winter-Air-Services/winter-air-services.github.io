@@ -1868,11 +1868,10 @@ const newDot = on => on ? '<span class="new-dot" title="New — not opened yet">
 
 /* SukiRun's stat strip: four numbers, each one a way in. One row, even on a phone. */
 function drawStats(){
-  const jobs = Object.values(db.jobs), today = manilaDate(0);
   const stats = [
     [newBookings().length, 'New', 'inbox', 'new'],
-    [jobs.filter(j => j.scheduled_on === today && j.status !== 'cancelled').length, 'Today', 'jobs', 'today'],
-    [jobs.filter(j => !j.scheduled_on && !['done', 'cancelled'].includes(j.status)).length, 'No date', 'jobs', 'unplanned'],
+    [jobList('today').length, 'Today', 'jobs', 'today'],   // the tab's own count (ui.md, Reuse)
+    [jobList('unplanned').length, 'No date', 'jobs', 'unplanned'],
     [checkups().length + followups().length, 'Check-ups', 'checkups', ''],
   ];
   return `<div class="stat-strip">${stats.map(([n, label, tab, v]) =>
@@ -2028,33 +2027,37 @@ function panelReject(p){
 }
 
 /* ---------------------------------------------------------------- jobs */
+/* A done job leaves Today (Guile, 2026-10-11): done and not paid goes to Unpaid, done and
+   paid to Done. Tomorrow and Upcoming leave them out too — "Tomorrow (4)" beside
+   "Upcoming (3)" read as a job gone missing (R3, 2026-09-27), so the open tabs agree. */
 function jobDayFilter(j, day){
-  const today = manilaDate(0);
-  if (day === 'today') return j.scheduled_on === today && j.status !== 'cancelled';
-  if (day === 'tomorrow') return j.scheduled_on === manilaDate(1) && j.status !== 'cancelled';
-  if (day === 'unplanned') return !j.scheduled_on && !['done', 'cancelled'].includes(j.status);
-  if (day === 'done') return j.status === 'done';
+  const today = manilaDate(0), open = isOpenJob(j);
+  if (day === 'today') return j.scheduled_on === today && open;
+  if (day === 'tomorrow') return j.scheduled_on === manilaDate(1) && open;
+  if (day === 'unplanned') return !j.scheduled_on && open;
+  if (day === 'unpaid') return j.status === 'done' && !j.paid_method;
+  if (day === 'done') return j.status === 'done' && !!j.paid_method;
   if (day === 'cancelled') return j.status === 'cancelled';
-  // upcoming: every job from today on, done ones too — Today and Tomorrow show those, and
-  // "Tomorrow (4)" beside "Upcoming (3)" read as a job gone missing (R3, 2026-09-27)
-  return j.scheduled_on >= today && j.status !== 'cancelled';
+  return j.scheduled_on >= today && open;   // upcoming
 }
 function jobList(day){
   const rows = Object.values(db.jobs).filter(j => jobDayFilter(j, day));
-  return ['done', 'cancelled'].includes(day) ? rows.sort(byDoneDesc).slice(0, 60) : rows.sort(byTime);
+  // Unpaid is money owed: all of it, never cut at 60
+  return day === 'unpaid' ? rows.sort(byDoneDesc)
+    : ['done', 'cancelled'].includes(day) ? rows.sort(byDoneDesc).slice(0, 60) : rows.sort(byTime);
 }
 /* L4 (Guile, 2026-09-27, ui.md Reuse): the office's Jobs and the technician's Jobs were two
    copies of one tab strip — the technician's had no Cancelled. One function draws both. Since
    38 (Guile, 2026-10-03) technicians and helpers get the jobs with no day too, so every tab
    is everyone's. */
 const JOB_TABS = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
-                  ['done', 'Done'], ['cancelled', 'Cancelled']];
+                  ['unpaid', 'Unpaid'], ['done', 'Done'], ['cancelled', 'Cancelled']];
 function jobTabsHtml(){
   // the admin's View as (37) draws the field's tabs on the admin's own day
   const tech = inField(viewRole()), key = db.role === 'admin' ? 'day' : 'techDay';
   const days = JOB_TABS;
   if (!days.some(d => d[0] === ui[key])) ui[key] = 'today';
-  const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;
+  const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;   // Unpaid counted: money owed
   const rows = jobList(ui[key]);
   // a helper has no map (37)
   return chips(key === 'day' ? 'day' : 'techday', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + (viewRole() === 'helper' ? '' : routeBar(ui[key])) + (tech ? '' : textAllBar(ui[key])) +
@@ -2171,10 +2174,13 @@ function unitIcons(units){
 }
 function jobRow(j){
   const c = jobCust(j), ab = assignBadge(j), icons = unitIcons(unitsOf(j));
-  return `<div class="lrow has-steps${ab || icons ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
-    <div class="lrow-when">${j.scheduled_on
-      ? `<b>${esc(slotShort(j.slot))}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
-      : '<b>—</b><span>no date</span>'}</div>
+  // "5:00PM" on one line, the date under it (Guile, 2026-10-11)
+  const when = j.scheduled_on ? `<b>${esc(slotShort(j.slot).replace(/\s/g, ''))}</b><span>${esc(shortDate(j.scheduled_on))}</span>` : '<b>—</b><span>no date</span>';
+  // the time IS the Reschedule button, for the office, on an open job (Guile, 2026-10-11)
+  const resched = db.role === 'admin' && viewRole() === 'admin' && isOpenJob(j);
+  return `<div class="lrow job-row has-steps${ab || icons ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+    ${resched ? `<button type="button" class="lrow-when resched" data-act="resched" data-id="${esc(j.id)}" aria-label="${esc(j.scheduled_on ? 'Reschedule' : 'Schedule it')}">${when}</button>`
+      : `<div class="lrow-when">${when}</div>`}
     <div class="lrow-main">
       <div class="lrow-title">${assignUnseen(j) ? '<span class="warn-mark" title="Assigned to you">⚠️</span>' : newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
       <div class="lrow-sub">${esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — '))}</div>
@@ -2346,14 +2352,28 @@ function wantNote(j){
 }
 /* No "the price list says …" note under the aircons (Guile, 2026-10-11): the price comes from
    the quotation or the billing statement now, so the list's sum beside it was only a warning. */
+/* Reschedule (Guile, 2026-10-11): tap the time on a job row. The booking form's own day and
+   time, and one tick for the customer's text. Ticked: the "booked / moved" text goes as it
+   always does (automatic texts on), or the Text screen opens with it written (off, and this
+   person sends texts). Not ticked: the move is written down as not texted, so the sending
+   phone leaves it alone. */
+function schedText(j){
+  if (!['booked', 'scheduled'].includes(j.status) || digits(jobCust(j).contact).length < 10) return null;
+  const set = textSet();
+  if (set.auto && set.booked && textSender()) return 'auto';
+  return canTextHere() ? 'hand' : null;
+}
 function panelSchedule(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Schedule', body: empty('This job is no longer on this phone.')};
   if (p.date == null){ p.date = j.scheduled_on || ''; p.slot = j.slot || 'am'; }
-  const word = j.scheduled_on ? 'Change the time' : 'Schedule it';
+  const word = j.scheduled_on ? 'Reschedule' : 'Schedule it', how = schedText(j);
+  if (p.texton == null) p.texton = how === 'auto';
   // the booking form's own day-and-time piece (ui.md, Reuse)
   return {title: word, sub: jobCust(j).full_name, body: `
     ${bkWhenHtml('panel', p, {notYet: false})}
+    ${how ? `<label class="tick"><input type="checkbox" data-pf="texton" ${p.texton ? 'checked' : ''}> Send the customer a text about the ${j.scheduled_on ? 'new ' : ''}schedule</label>
+      <p class="hint">${how === 'auto' ? 'From the sending phone, the next time its app is open.' : 'Automatic texts are off: the Text screen opens with the message written.'}</p>` : ''}
     <div class="stack"><button type="button" class="b primary wide" data-act="schedule" data-id="${esc(j.id)}">${word}</button></div>`, info: 'schedule'};
 }
 function panelPrice(p){
@@ -5137,6 +5157,8 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
+// in the middle of the screen, like a message, at every width (Reschedule, Guile 2026-10-11)
+const MID = new Set(['schedule']);
 const topPanel = () => stack[stack.length - 1];
 function openPanel(p){
   stack.push(p);
@@ -5187,7 +5209,7 @@ function drawPanels(){
       el = fresh;
       el.dataset.key = key;
     }
-    el.className = 'sheet' + (SMALL.has(p.kind) ? ' small' : '') + (WIDE.has(p.kind) ? ' wide' : '');
+    el.className = 'sheet' + (SMALL.has(p.kind) ? ' small' : '') + (MID.has(p.kind) ? ' mid' : '') + (WIDE.has(p.kind) ? ' wide' : '');
     el.style.zIndex = String(40 + i * 2);   // on top of the one below it, by depth (ui.md)
     let out = null;
     keepTyping($('.sheet-body', el), () => {
@@ -5285,6 +5307,7 @@ const ACTIONS = {
     render();
   },
   textjob: id => openPanel({kind: 'text', id}),
+  resched: id => openPanel({kind: 'schedule', id}),
   textsend: async id => {
     const j = db.jobs[id], p = topPanel(); if (!j || !p || p.kind !== 'text' || p.busy) return;
     const text = smsPlain(($('#txt_body') || {}).value || '').trim();
@@ -5839,12 +5862,19 @@ const ACTIONS = {
     const d = p.date != null ? p.date : j.scheduled_on, s = p.slot || j.slot || 'am';
     if (!d){ notice('Choose a day first. Nothing was changed.', true); return; }
     if (!isClock(s) && s !== j.slot){ bkShow('panel', p, [['slot', 'Choose the hour.']]); return; }
+    if (d === j.scheduled_on && s === j.slot){ closePanel(); toast('Same day and time — nothing was changed.'); return; }
+    const how = schedText(j), key = 'booked:' + d + ' ' + s, moved = !!j.scheduled_on;
+    // before the move, so the sending phone never sees the move without the "no"
+    if (how === 'auto' && !p.texton) textKept(id, key, false, 'Not texted — the office chose no text');
     write('schedule_job', {p_job: id, p_date: d, p_slot: s, p_decided_at: null},
       'Schedule ' + (jobCust(j).full_name || 'job'), [id], () => {
-        j.scheduled_on = d; j.slot = s;
+        j.scheduled_on = d; j.slot = s; j.promised_on = null;   // a day changed by hand (41)
         if (j.status === 'booked') j.status = 'scheduled';
       });
+    if (how === 'hand' && p.texton){ replacePanel({kind: 'text', id, text: textCompose(j, 'booked', manilaDate(0))}); return; }
     closePanel();
+    toast((moved ? 'Moved to ' : 'Scheduled for ') + niceDate(d) + ', ' + slotWord(s)
+      + (how === 'auto' && p.texton ? ' — the customer gets a text.' : '.'));
   },
   // ---- the customer's signature (47)
   sigpen: (id, el) => { penSet.pen = el.dataset.v === 'ballpoint' ? 'ballpoint' : 'fountain'; lsSet('ws_pen', penSet); render(); },
