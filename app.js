@@ -767,6 +767,10 @@ function newsHtml(){
     </div>` : ''}
   </div>`;
 }
+/* The APK of THIS version, on the release (tools/release.py names it WinterAir-<version>.apk
+   beside update.json). An older link still installs: the app then offers the newest itself. */
+const apkLink = () => BUILD.versionName === 'dev' || !/\/releases\/latest\/download\/update\.json$/.test(BUILD.updateUrl || '') ? ''
+  : BUILD.updateUrl.replace(/latest\/download\/update\.json$/, 'download/v' + BUILD.versionName + '/WinterAir-' + BUILD.versionName + '.apk');
 function aboutHtml(){
   return `<div class="sec" id="aboutSec">About</div>
     <div class="card">
@@ -1660,12 +1664,17 @@ function editChanges(ch){
   if ('notes' in a) out.push(['Notes', b.notes || '', a.notes || '(none)']);
   return out;
 }
+/* A name INSIDE a history line ("Crew: Ana (head) — by Guile") is a token here, so the line can
+   still be escaped whole; timelineHtml puts each name back wearing its effect, and "you" as the
+   person's own name (Guile, 2026-10-12: no "You" anywhere — the name, with its effect). */
+let evNames = [];
+const N = (name, uid) => { evNames.push([name, uid || null]); return '\u0001' + (evNames.length - 1) + '\u0002'; };
 function eventRow(e){
   const by = e.by || '', ch = e.changes || {}, before = ch.before || {}, after = ch.after || {};
   const lab = s => STATUS_LABEL[s] || s || '—';
   switch (e.kind){
     case 'booked':    return ['📝', by ? 'Booked' : 'Booked on the page', null, by];
-    case 'seen':      return ['👀', 'Seen by the office', null, by !== 'the office' ? by : ''];
+    case 'seen':      return ['👀', 'Seen', null, by];   // one per person who opened it in the Inbox (52)
     case 'accepted':  return ['✅', 'Accepted', null, by];
     case 'rejected':  return ['⛔', 'Rejected', null, by];
     case 'cancelled': return ['🚫', 'Cancelled', null, by];
@@ -1698,24 +1707,24 @@ function eventRow(e){
     }
     case 'job_assign': {   // 39: the names as they were at the time
       if (Array.isArray(after.crew)){   // 46: the crew, head first
-        const nm = x => x.name || 'someone', c = after.crew, who = (c.find(x => x.uid === after.who) || {}).name
-          || ((before.crew || []).find(x => x.uid === after.who) || {}).name || 'someone';
+        const nm = x => x.name ? N(x.name, x.uid) : 'someone', c = after.crew, whoName = (c.find(x => x.uid === after.who) || {}).name
+          || ((before.crew || []).find(x => x.uid === after.who) || {}).name, who = whoName ? N(whoName, after.who) : 'someone';
         if (after.do === 'join') return ['🙋', who + ' joined as a helper', null, ''];
         if (after.do === 'leave') return ['🚪', who + ' left the crew', null, ''];
-        if (after.do === 'head') return ['👑', who + ' is the head' + (by && !after.self ? ' — by ' + by : ''), null, ''];
-        if (after.do === 'request') return ['🙋', who + ' asked and was assigned' + (c[0] && c[0].uid === after.who ? ' as the head' : ' as a helper') + (by ? ' — by ' + by : ''), null, ''];   // 49
-        if (!c.length) return ['👤', 'No assign' + (by ? ' — by ' + by : ''), null, ''];
-        return ['👤', 'Crew: ' + nm(c[0]) + ' (head)' + (c.length > 1 ? ', ' + c.slice(1).map(nm).join(', ') : '') + (by ? ' — by ' + by : ''), null, ''];
+        if (after.do === 'head') return ['👑', who + ' is the head' + (by && !after.self ? ' — by ' + N(by) : ''), null, ''];
+        if (after.do === 'request') return ['🙋', who + ' asked and was assigned' + (c[0] && c[0].uid === after.who ? ' as the head' : ' as a helper') + (by ? ' — by ' + N(by) : ''), null, ''];   // 49
+        if (!c.length) return ['👤', 'No assign' + (by ? ' — by ' + N(by) : ''), null, ''];
+        return ['👤', 'Crew: ' + nm(c[0]) + ' (head)' + (c.length > 1 ? ', ' + c.slice(1).map(nm).join(', ') : '') + (by ? ' — by ' + N(by) : ''), null, ''];
       }
-      const to = after.name || ROLE_NAME[after.role] || 'someone';
-      if (!after.uid) return ['👤', 'No assign — taken off ' + (before.name || 'everyone') + (by ? ' by ' + by : ''), null, ''];
+      const to = after.name ? N(after.name, after.uid) : ROLE_NAME[after.role] || 'someone';
+      if (!after.uid) return ['👤', 'No assign — taken off ' + (before.name ? N(before.name, before.uid) : 'everyone') + (by ? ' by ' + N(by) : ''), null, ''];
       if (after.self) return ['🙋', 'Assigned to ' + to + ' (self assigned)', null, ''];
-      return ['👤', (before.uid ? 'Transferred to ' : 'Assigned to ') + to + (by ? ' by ' + by : ''), null, ''];
+      return ['👤', (before.uid ? 'Transferred to ' : 'Assigned to ') + to + (by ? ' by ' + N(by) : ''), null, ''];
     }
     case 'job_request': {   // 49: a technician asked for the job, took it back, or the office said no
-      const who = staffName(after.who);
+      const who = N(staffName(after.who), after.who);
       if (after.do === 'withdraw') return ['🙋', who + ' took back the request', null, ''];
-      if (after.do === 'no') return ['✕', 'Said no to ' + who + (by ? ' — by ' + by : ''), null, ''];
+      if (after.do === 'no') return ['✕', 'Said no to ' + who + (by ? ' — by ' + N(by) : ''), null, ''];
       return ['🙋', who + ' asked for this job', null, ''];
     }
     case 'job_price': return ['₱', 'Price', [['Price', before.price != null ? peso(before.price) : 'not set', after.price != null ? peso(after.price) : 'not set']], by];
@@ -1725,14 +1734,15 @@ function eventRow(e){
 /* Who did it, on a history line. The server says "you" for your own steps; on a shop phone
    it is your name instead, wearing its effect (Guile, 2026-10-12: "Seen by Guile, not You").
    A customer's own history keeps "you". */
-const whoHtml = who => who === 'you' && db && (db.role === 'admin' || inField(db.role)) && session
-  ? nameFx((db.profile && db.profile.display_name) || 'you', session.uid, 'history') : nameFx(who, null, 'history');
+const whoHtml = (who, uid) => who === 'you' && db && (db.role === 'admin' || inField(db.role)) && session
+  ? nameFx((db.profile && db.profile.display_name) || 'you', session.uid, 'history') : nameFx(who, uid || null, 'history');
 function timelineHtml(events){
   if (!events.length) return '<div class="cart-empty">Nothing has happened to it yet.</div>';
   const stamp = iso => new Date(iso).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
-  return `<div class="tl">${events.map(e => { const [icon, what, changes, who] = eventRow(e);
+  return `<div class="tl">${events.map(e => { evNames = []; const [icon, w, changes, who] = eventRow(e);
+    const what = esc(w).replace(/\u0001(\d+)\u0002/g, (_, i) => whoHtml(...evNames[i]));
     return `<div class="tl-row"><span class="tl-icon">${icon}</span><span class="tl-body">
-      <span class="tl-what">${esc(what)}${who ? ` · <b>${whoHtml(who)}</b>` : ''}</span><span class="tl-when">${esc(stamp(e.at))}</span>
+      <span class="tl-what">${what}${who ? ` · <b>${whoHtml(who)}</b>` : ''}</span><span class="tl-when">${esc(stamp(e.at))}</span>
       ${e.kind === 'job_photo' && e.changes && e.changes.after && typeof e.changes.after.photo === 'string'
         ? housePhoto(e.changes.after.photo, 'tl-photo') : ''}
       ${(changes || []).length ? `<span class="tl-changes">${changes.map(([w, from, to]) =>
@@ -2355,7 +2365,7 @@ function panelJob(p){
     ${techPrice && !helper ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo && !tech ? housePhoto(photo) : ''}
-      ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${by === 'you' ? 'you' : nameFx(by, j.status_by, 'history')}</span>` : ''))}
+      ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${whoHtml(by, j.status_by)}</span>` : ''))}
       ${assignBadge(j, true) ? kv('Assigned', assignBadge(j, true) + (crewOf(j).length > 1
         ? `<div class="crew-line">👑 ${nameFx(staffName(crewOf(j)[0]), crewOf(j)[0], 'jobs')} · Helpers: ${crewOf(j).slice(1).map(u => nameFx(staffName(u), u, 'jobs')).join(', ')}</div>` : '')) : ''}
       ${j.on_way_at && ['booked', 'scheduled'].includes(j.status) ? kv('On the way', esc('since ' + new Date(j.on_way_at).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit'}))) : ''}
@@ -4937,11 +4947,12 @@ function panelSettings(){
       <button type="button" class="b danger" data-act="reset">Take the office's copy</button>
     </div>` : ''}
 
-    ${staff && inApk && window.AndroidBridge.shareApk ? `<div class="sec">Send the app</div>
-    <div class="card row-between">
-      <div class="lrow-main"><div class="menu-title">📤 Send Winter Air to another phone</div>
-        <div class="sms-note">Bluetooth, Messenger, Gmail, Drive, Quick Share — any of them. The other phone taps the file to install it.</div></div>
-      <button type="button" class="b primary" data-act="shareapk">Send</button>
+    ${staff && apkLink() ? `<div class="sec">Send the app</div>
+    <div class="card">
+      <div class="menu-title">📤 Send Winter Air to another phone</div>
+      <div class="sms-note">${inApk && window.AndroidBridge.shareApk ? '<b>Send APK</b>: the app itself, by Bluetooth, Messenger, Gmail, Drive, Quick Share. ' : ''}<b>Send as link</b>: a download link, by Messenger, Discord, email, any chat. Android phones only — the other phone taps it to install.</div>
+      <div class="actions">${inApk && window.AndroidBridge.shareApk ? '<button type="button" class="b primary" data-act="shareapk">Send APK</button>' : ''}
+        <button type="button" class="b" data-act="sharelink">🔗 Send as link</button></div>
     </div>` : ''}
 
     ${aboutHtml()}
@@ -5638,6 +5649,13 @@ const ACTIONS = {
   moverap: (id, el) => moverAt('ap', el.dataset.v),   // 42
   staffphotooff: (id, el) => { if (confirmTwice(el, 'Tap again to take it off')) setStaffPhoto(id, null); },   // 51
   shareapk: () => { if (inApk && window.AndroidBridge.shareApk) window.AndroidBridge.shareApk(); },   // 49
+  sharelink: async (id, el) => {   // 0.4.1: the release's own download link, as text into any chat
+    const url = apkLink(); if (!url) return;
+    const text = 'Winter Air — the shop’s app for Android. Tap to download, then open the file to install:\n' + url;
+    if (inApk && window.AndroidBridge.shareText) return window.AndroidBridge.shareText('Winter Air — download link', text);
+    if (navigator.share){ try { await navigator.share({title: 'Winter Air', text}); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+    copyText(url, el);
+  },
   techrule: (id, el) => {   // 49
     const k = el.dataset.f, on = el.dataset.v === 'true', now = jobRules();
     if ({tech_edit_others: now.others, tech_request: now.ask, tech_reward: now.reward}[k] === on) return;
@@ -5906,8 +5924,13 @@ const ACTIONS = {
   open: (id, el) => {
     // The first time the office opens a new booking, Full status says who saw it (15).
     const b = el.dataset.kind === 'booking' && db && db.role === 'admin' && db.bookings[id];
-    if (b && b.status === 'new' && !b.seen_at){
-      b.seen_at = new Date().toISOString();
+    // 52: each person of the office who opens a new booking — not only the first (Guile,
+    // 2026-10-12: "who seen the inbox?"). Once per person, remembered on this phone; the
+    // server keeps it to one line each anyway.
+    const mine = lsGet('ws_bseen', []);
+    if (b && b.status === 'new' && !mine.includes(id)){
+      if (!b.seen_at) b.seen_at = new Date().toISOString();
+      lsSet('ws_bseen', mine.concat([id]).slice(-300));
       write('mark_seen', {p_booking: id}, 'Seen ' + b.ref, [id]);
     }
     // this account has now seen it: its red number goes down, on this phone only
