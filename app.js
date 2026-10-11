@@ -1244,8 +1244,9 @@ function bkAirconsHtml(ctx, s, label){
 function bkWhenHtml(ctx, s, opts){
   const pub = ctx === 'pub', today = manilaDate(0), d = s.date || '';
   opts = {notYet: !pub, ...(opts || {})};
+  // opts.waiting: Reschedule's last chip, "Waiting" — back to No date (48, Guile 2026-10-11)
   const chips = [...(opts.notYet ? [['', 'Not yet']] : []), [today, 'Today'], [addDays(today, 1), 'Tomorrow'],
-    [addDays(today, 2), niceDate(addDays(today, 2))]];
+    [addDays(today, 2), niceDate(addDays(today, 2))], ...(opts.waiting ? [['', 'Waiting']] : [])];   // no ⏳: with it the chip wrapped at 375 (82 px, 80 left)
   const chip = (f, v, t, on) => {
     // idea 4: a closed day stays in the row, greyed and marked; the page cannot choose it
     const c = f === 'date' && v ? closedOn(v) : null;
@@ -1648,7 +1649,7 @@ function eventRow(e){
     case 'edited':    return ['✏️', 'Edited', editChanges(ch), by];
     case 'job_edit':  return ['✏️', 'Edited', editChanges(ch), by];
     case 'job_created': return ['🛠️', 'Job made', null, by];
-    case 'job_schedule': return ['📅', 'Scheduled', [['Day',
+    case 'job_schedule': return [after.scheduled_on ? '📅' : '⏳', after.scheduled_on ? 'Scheduled' : 'Waiting — no day yet', [['Day',
       before.scheduled_on ? niceDate(before.scheduled_on) + ' ' + slotShort(before.slot) : '',
       after.scheduled_on ? niceDate(after.scheduled_on) + ' ' + slotShort(after.slot) : '']], by];
     case 'job_status': {
@@ -2028,8 +2029,9 @@ function panelReject(p){
 
 /* ---------------------------------------------------------------- jobs */
 /* A done job leaves Today (Guile, 2026-10-11): done and not paid goes to Unpaid, done and
-   paid to Done. Tomorrow and Upcoming leave them out too — "Tomorrow (4)" beside
-   "Upcoming (3)" read as a job gone missing (R3, 2026-09-27), so the open tabs agree. */
+   paid to Done — paid or not, an open job stays on its day. Upcoming is only the days after
+   tomorrow (Guile, 2026-10-11, replacing R3's "every job from today on"): each open job is in
+   ONE tab — Today, Tomorrow, No date or Upcoming. */
 function jobDayFilter(j, day){
   const today = manilaDate(0), open = isOpenJob(j);
   if (day === 'today') return j.scheduled_on === today && open;
@@ -2038,7 +2040,7 @@ function jobDayFilter(j, day){
   if (day === 'unpaid') return j.status === 'done' && !j.paid_method;
   if (day === 'done') return j.status === 'done' && !!j.paid_method;
   if (day === 'cancelled') return j.status === 'cancelled';
-  return j.scheduled_on >= today && open;   // upcoming
+  return j.scheduled_on > manilaDate(1) && open;   // upcoming
 }
 function jobList(day){
   const rows = Object.values(db.jobs).filter(j => jobDayFilter(j, day));
@@ -2367,11 +2369,15 @@ function panelSchedule(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Schedule', body: empty('This job is no longer on this phone.')};
   if (p.date == null){ p.date = j.scheduled_on || ''; p.slot = j.slot || 'am'; }
-  const word = j.scheduled_on ? 'Reschedule' : 'Schedule it', how = schedText(j);
-  if (p.texton == null) p.texton = how === 'auto';
-  // the booking form's own day-and-time piece (ui.md, Reuse)
-  return {title: word, sub: jobCust(j).full_name, body: `
-    ${bkWhenHtml('panel', p, {notYet: false})}
+  const waiting = p.date === '', how = waiting ? null : schedText(j);
+  const title = j.scheduled_on ? 'Reschedule' : 'Schedule it';
+  // the button says what the tap will do (ui.md): Waiting on a dated job takes its day away
+  const word = waiting && j.scheduled_on ? 'Move to Waiting' : title;
+  if (p.texton == null) p.texton = schedText(j) === 'auto';
+  // the booking form's own day-and-time piece (ui.md, Reuse); a started job keeps its day
+  return {title, sub: jobCust(j).full_name, body: `
+    ${bkWhenHtml('panel', p, {notYet: false, waiting: j.status !== 'in_progress'})}
+    ${waiting ? '<p class="hint">⏳ Waiting: the job goes back to <b>No date</b> until a day is chosen. No text is sent.</p>' : ''}
     ${how ? `<label class="tick"><input type="checkbox" data-pf="texton" ${p.texton ? 'checked' : ''}> Send the customer a text about the ${j.scheduled_on ? 'new ' : ''}schedule</label>
       <p class="hint">${how === 'auto' ? 'From the sending phone, the next time its app is open.' : 'Automatic texts are off: the Text screen opens with the message written.'}</p>` : ''}
     <div class="stack"><button type="button" class="b primary wide" data-act="schedule" data-id="${esc(j.id)}">${word}</button></div>`, info: 'schedule'};
@@ -5860,7 +5866,17 @@ const ACTIONS = {
   schedule: id => {
     const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
     const d = p.date != null ? p.date : j.scheduled_on, s = p.slot || j.slot || 'am';
-    if (!d){ notice('Choose a day first. Nothing was changed.', true); return; }
+    if (!d && !j.scheduled_on){ notice('Choose a day first. Nothing was changed.', true); return; }
+    if (!d){   // ⏳ Waiting (48): the day goes, the time stays, back to No date — no text
+      if (j.status === 'in_progress'){ notice('This job has started — it keeps its day.', true); return; }
+      write('schedule_job', {p_job: id, p_date: null, p_slot: j.slot, p_decided_at: null},
+        'Waiting — ' + (jobCust(j).full_name || 'job'), [id], () => {
+          j.scheduled_on = null; j.promised_on = null; j.status = 'booked';
+        });
+      closePanel();
+      toast('Waiting — back in No date until a day is chosen.');
+      return;
+    }
     if (!isClock(s) && s !== j.slot){ bkShow('panel', p, [['slot', 'Choose the hour.']]); return; }
     if (d === j.scheduled_on && s === j.slot){ closePanel(); toast('Same day and time — nothing was changed.'); return; }
     const how = schedText(j), key = 'booked:' + d + ' ' + s, moved = !!j.scheduled_on;
