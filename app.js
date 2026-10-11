@@ -254,6 +254,8 @@ async function flush(){
         // a page photo taken off the list: its file goes too (30)
         if (op.fn === 'set_page_photos' && res && Array.isArray(res.gone))
           res.gone.forEach(p => storage('DELETE', p, null, false, 'page-photos').catch(() => {}));
+        // a person's old picture, replaced or taken off: its file goes too (51)
+        if (op.fn === 'set_staff_photo' && res && res.old){ storage('DELETE', res.old, null, false, 'staff-photos').catch(() => {}); dropKept(res.old); }
       } catch (e) {
         if (e instanceof Unreachable){ online = false; break; }
         op.state = 'failed';
@@ -308,11 +310,19 @@ async function pull(){
     forgetStatus(); saveLocal();
     return pull();
   }
+  // 49: the reward switch and this technician's share change every job's reward the same way
+  const priceKey = s => [!!s.show_prices_tech, s.tech_reward, s.my_pct].join('|');
   if (inField(db.role) && res.settings && 'show_prices_tech' in res.settings && db.cursor !== null
-      && !!(db.settings || {}).show_prices_tech !== !!res.settings.show_prices_tech){
+      && priceKey(db.settings || {}) !== priceKey(res.settings)){
     // L5: the office switched prices on or off — the jobs themselves did not change, so an
     // ordinary pull would keep them with (or without) their price
     db.settings = res.settings; db.cursor = null; saveLocal();
+    return pull();
+  }
+  if (db.role === 'admin' && db.cursor !== null && res.settings && 'tech_edit_others' in res.settings
+      && Object.values(db.team).some(t => !('share_pct' in t))){
+    // 49: the people were copied before they had a share — once, a full copy brings it
+    db.cursor = null; saveLocal();
     return pull();
   }
   const busy = new Set(queue.flatMap(o => o.touches));
@@ -405,7 +415,7 @@ function render(){
   const off = role === 'disabled';
 
   $('#who').hidden = !session;
-  $('#who').textContent = session ? (profile.display_name || session.email || '') : '';
+  $('#who').innerHTML = session ? nameFx(profile.display_name || session.email || '', session.uid, 'mine') : '';   // 50
   // Signed in, the top-right button is Settings (SukiRun's ⚙); Log out lives in there.
   const acct = $('#accountBtn');
   acct.textContent = session ? '⚙️' : 'Log in';
@@ -451,6 +461,8 @@ function render(){
   $('#fab').hidden = !nav || !['inbox', 'jobs', 'people', 'checkups'].includes(ui.tab)
     || (ui.tab === 'jobs' && (ui.viewMenu || inField(viewRole())));
   $('#fab2').hidden = $('#fab').hidden;
+  // the last row scrolls clear of the two buttons: they hid its badge (measured 2026-10-12)
+  document.body.classList.toggle('has-fab', !$('#fab').hidden);
 
   drawNotices();
   if (session && db && !blocked){
@@ -720,7 +732,7 @@ function updateCardHtml(inSettings){
       <div class="update-note">${s.pct}% — bookings and jobs on this phone are not touched.</div>`;
   } else if (f){
     const label = s.phase === 'downloaded' ? 'Install now' : s.error ? 'Try again' : '⬇️ Download & install';
-    h = `<div class="update-title">✨ Winter Air ${esc(f.versionName)} is available</div>
+    h = `<div class="update-title">✨ ${fxHeading('Winter Air ' + f.versionName + ' is available')}</div>
       ${f.notes.length ? `<ul class="notes-list">${f.notes.map(n => `<li>${mdLite(n)}</li>`).join('')}</ul>` : ''}
       <div class="actions"><button type="button" class="b primary" data-act="updget">${label}</button>
         ${inSettings ? '' : '<button type="button" class="b" data-act="updlater">Later</button>'}</div>
@@ -745,7 +757,7 @@ function newsHtml(){
   return `<div class="card news${newsOpen ? ' open' : ''}">
     <div class="news-head">
       <button type="button" class="news-open" data-act="news" aria-expanded="${newsOpen}">
-        <span class="news-chev" aria-hidden="true">▶</span> ✨ What’s new in Winter Air ${esc(BUILD.versionName)}</button>
+        <span class="news-chev" aria-hidden="true">▶</span> ✨ ${fxHeading('What’s new in Winter Air ' + BUILD.versionName)}</button>
       <button type="button" class="news-x" data-act="newsseen" aria-label="Close">×</button>
     </div>
     ${newsOpen ? `<div class="news-body">
@@ -760,7 +772,7 @@ function aboutHtml(){
     <div class="card">
       <div class="st-loc"><b>Winter Air Services</b> · version ${esc(BUILD.versionName)}${BUILD.releasedAt ? ' · ' + esc(BUILD.releasedAt) : ''}</div>
       <p class="hint">Works with no signal. Bookings and jobs are saved on this phone first and go to the office by themselves as soon as there is signal.</p>
-      ${BUILD.notes.length ? `<div class="st-label">What’s new in ${esc(BUILD.versionName)}</div>
+      ${BUILD.notes.length ? `<div class="st-label">${fxHeading('What’s new in ' + BUILD.versionName)}</div>
         <ul class="notes-list">${BUILD.notes.map(n => `<li>${mdLite(n)}</li>`).join('')}</ul>` : ''}
       ${updateCapable ? `<div class="st-label">Updates</div>${updateCardHtml(true)}`
         : inApk ? '' : '<p class="hint">In a browser the page is always the newest — no update needed.</p>'}
@@ -936,6 +948,12 @@ const INFO = {
   texter: ['Sends texts to customers', 'On: this person sees Texts to customers in Settings, 💬 Text on a job and Text all of Tomorrow, and their phone may be the sending phone. Off: none of it — and if their phone was the sending phone, it stops at its next refresh. Any admin can change it, for themselves too.'],
   textauto: ['Send texts by themselves', 'The phone with "This phone sends the texts" on sends them, at your times, even with the app closed — never the same text twice. A job is texted from the time this is turned on; jobs scheduled before then are not.\n\nThe reminders are written each time the app is open on that phone: a job cancelled on another phone after that can still get one. Open the app once in the evening and it is up to date.\n\nOff: nothing is sent unless you press 💬 Text on a job.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
+  namefx: ['Name effect', 'A decoration on this person’s name — colours, a glow, an outline, an emoji and the way it moves. The shop sees it on every phone, on the screens ticked in “Where it shows”. Customers never do.\n\nIt is only a colour: it changes nothing about what this person can do.\n\nAnyone who finds it busy: Settings → This phone → Name effects → Plain names. That is for their own phone only.'],
+  fxshow: ['Name effects', 'Show: names the office gave an effect move and shine on this phone.\n\nPlain names: none at all — the quickest the app can be on an old phone. Only this phone; nobody else’s name changes.'],
+  techothers: ['Other jobs', 'No: a technician (or helper) opens and works only the jobs they are assigned to — the head or a helper on the crew. Every other job still shows in their list, to see: tapping it only asks the office for it. A job with nobody on it is locked too, until you assign it.\n\nYes: every technician works every job, as before.'],
+  techask: ['Asking for a job', 'Yes: a technician taps a job that is not theirs and asks for it. On your Jobs, that job’s badge turns yellow — “🙋 Assign to Ana” — until you answer: Assign puts Ana on it (the head if nobody is on it, else a helper); Say no takes it away.\n\nNo: only the office assigns.'],
+  techreward: ['What they receive', 'Yes: each technician sees, under the job’s status, what they get from it — the job’s price × their own share (Users → the technician, 10% to start). No price yet says so.\n\nThe price itself still shows only with “Show prices to technicians & helpers” on. Helpers never see a share.'],
+  share: ['Share of each job', 'What this technician receives from a job: the job’s price × this percent. They see the amount on every job while Admin → Job → “Can technicians see what they receive?” is Yes.\n\nThe job’s price is the quotation’s or the billing statement’s total.'],
   showpricestech: ['Show prices to technicians & helpers', 'On: a technician sees each job’s price, big, so they know what to collect — and can print or send the billing statement. A helper sees the price on the job, nothing more.\n\nOff: technicians and helpers never see a price; the server does not even send it.'],
   closedwd: ['Closed every week', 'Tap the weekdays the shop never works. The booking page greys them out and will not take a booking for one. Book a job (a call you take) only warns you.'],
   closeddates: ['Days off', 'A holiday, a fiesta, a day off: tap the day in the calendar. Type a reason first if you want the customer to see it ("Christmas"). Past days drop off by themselves.'],
@@ -1364,8 +1382,13 @@ function heroTextHtml(ctx, s){
    is public and read-only to strangers, supabase/30). Only the photo on show and the next one
    are fetched — six at once would be ~2 MB on mobile data. The office sees the same (ui.md). */
 const PAGE_PHOTO_BASE = SUPABASE_URL + '/storage/v1/object/public/page-photos/';
+// (2026-10-12) the photos as they were at the release, inside the website and the APK
+// (tools/page_photos.py): drawn from the first paint, before list_services answers
+const LOCAL_PHOTOS = new Set(Array.isArray(window.PAGE_PHOTOS_LOCAL) ? window.PAGE_PHOTOS_LOCAL : []);
+const pagePhotoUrl = p => LOCAL_PHOTOS.has(p) ? 'img/page-photos/' + p.slice(5) : PAGE_PHOTO_BASE + p;
 function pagePhotos(){
-  const l = db && db.role === 'admin' && db.settings && Array.isArray(db.settings.page_photos) ? db.settings.page_photos : pubShop.page_photos;
+  const l = db && db.role === 'admin' && db.settings && Array.isArray(db.settings.page_photos) ? db.settings.page_photos
+    : Array.isArray(pubShop.page_photos) ? pubShop.page_photos : [...LOCAL_PHOTOS];
   return Array.isArray(l) ? l.filter(p => /^page\/[0-9a-f]{16,64}\.jpg$/.test(p)) : [];
 }
 let heroIdx = 0;
@@ -1374,13 +1397,14 @@ function heroPhotosHtml(){
   if (!l.length) return '';
   const on = heroIdx % l.length, next = (on + 1) % l.length;
   return `<div class="hero-photos" aria-hidden="true" data-photos="${esc(l.join(','))}">${l.map((p, i) =>
-    `<i data-src="${esc(PAGE_PHOTO_BASE + p)}"${i === on ? ' class="on"' : ''}${i === on || i === next ? ` style="background-image:url('${esc(PAGE_PHOTO_BASE + p)}')"` : ''}></i>`).join('')}</div>`;
+    `<i data-src="${esc(pagePhotoUrl(p))}"${i === on ? ' class="on"' : ''}${i === on || i === next ? ` style="background-image:url('${esc(pagePhotoUrl(p))}')"` : ''}></i>`).join('')}</div>`;
 }
 // the customer's page: its photo top is in the HTML, so the photos go in (or change) here
 function drawHeroPhotos(){
   const sec = $('#publicView > .hero');
   if (!sec) return;
   const old = sec.querySelector(':scope > .hero-photos'), l = pagePhotos();
+  document.documentElement.classList.toggle('pp', l.length > 0);   // none left: the built-in photo again
   if ((old ? old.dataset.photos : '') === l.join(',')) return;
   if (old) old.remove();
   sec.classList.toggle('has-photos', l.length > 0);
@@ -1679,6 +1703,7 @@ function eventRow(e){
         if (after.do === 'join') return ['🙋', who + ' joined as a helper', null, ''];
         if (after.do === 'leave') return ['🚪', who + ' left the crew', null, ''];
         if (after.do === 'head') return ['👑', who + ' is the head' + (by && !after.self ? ' — by ' + by : ''), null, ''];
+        if (after.do === 'request') return ['🙋', who + ' asked and was assigned' + (c[0] && c[0].uid === after.who ? ' as the head' : ' as a helper') + (by ? ' — by ' + by : ''), null, ''];   // 49
         if (!c.length) return ['👤', 'No assign' + (by ? ' — by ' + by : ''), null, ''];
         return ['👤', 'Crew: ' + nm(c[0]) + ' (head)' + (c.length > 1 ? ', ' + c.slice(1).map(nm).join(', ') : '') + (by ? ' — by ' + by : ''), null, ''];
       }
@@ -1687,16 +1712,27 @@ function eventRow(e){
       if (after.self) return ['🙋', 'Assigned to ' + to + ' (self assigned)', null, ''];
       return ['👤', (before.uid ? 'Transferred to ' : 'Assigned to ') + to + (by ? ' by ' + by : ''), null, ''];
     }
+    case 'job_request': {   // 49: a technician asked for the job, took it back, or the office said no
+      const who = staffName(after.who);
+      if (after.do === 'withdraw') return ['🙋', who + ' took back the request', null, ''];
+      if (after.do === 'no') return ['✕', 'Said no to ' + who + (by ? ' — by ' + by : ''), null, ''];
+      return ['🙋', who + ' asked for this job', null, ''];
+    }
     case 'job_price': return ['₱', 'Price', [['Price', before.price != null ? peso(before.price) : 'not set', after.price != null ? peso(after.price) : 'not set']], by];
   }
   return ['•', e.kind, null, by];
 }
+/* Who did it, on a history line. The server says "you" for your own steps; on a shop phone
+   it is your name instead, wearing its effect (Guile, 2026-10-12: "Seen by Guile, not You").
+   A customer's own history keeps "you". */
+const whoHtml = who => who === 'you' && db && (db.role === 'admin' || inField(db.role)) && session
+  ? nameFx((db.profile && db.profile.display_name) || 'you', session.uid, 'history') : nameFx(who, null, 'history');
 function timelineHtml(events){
   if (!events.length) return '<div class="cart-empty">Nothing has happened to it yet.</div>';
   const stamp = iso => new Date(iso).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
   return `<div class="tl">${events.map(e => { const [icon, what, changes, who] = eventRow(e);
     return `<div class="tl-row"><span class="tl-icon">${icon}</span><span class="tl-body">
-      <span class="tl-what">${esc(what)}${who ? ` · <b>${esc(who)}</b>` : ''}</span><span class="tl-when">${esc(stamp(e.at))}</span>
+      <span class="tl-what">${esc(what)}${who ? ` · <b>${whoHtml(who)}</b>` : ''}</span><span class="tl-when">${esc(stamp(e.at))}</span>
       ${e.kind === 'job_photo' && e.changes && e.changes.after && typeof e.changes.after.photo === 'string'
         ? housePhoto(e.changes.after.photo, 'tl-photo') : ''}
       ${(changes || []).length ? `<span class="tl-changes">${changes.map(([w, from, to]) =>
@@ -2111,18 +2147,47 @@ function staffName(uid){
 }
 // on the field's screen and the office's; a helper's (or the admin's View as Helper) only reads
 // a done job too (Guile, 2026-10-11, 47): who really worked on it can be seen and put right
-const canAssign = j => !!j && j.status !== 'cancelled' && ['admin', 'technician'].includes(viewRole());
+const canAssign = j => !!j && j.status !== 'cancelled' && ['admin', 'technician'].includes(viewRole()) && mayWork(j);
+/* Only your own jobs (Guile, 2026-10-12, 49). Admin → Job's three switches; none saved = the
+   value here. The server holds the lock (two triggers); this only draws it. */
+const jobRules = () => { const s = (db && db.settings) || {};
+  return {others: s.tech_edit_others === true, ask: s.tech_request !== false, reward: s.tech_reward !== false}; };
+// on the crew (head or helper), or the switch lets every technician work every job
+const mayWork = j => !inField(viewRole()) || jobRules().others || crewOf(j).includes(session && session.uid);
+const askedBy = j => Array.isArray(j && j.requests) ? j.requests.map(r => r.uid).filter(u => staffOf(u)) : [];
+const iAsked = j => askedBy(j).includes(session && session.uid);
+/* What a technician receives: the server works it out (price × their share) and never sends
+   the price itself unless prices are shown. The admin's View as uses his own share. */
+function rewardPill(j){
+  if (viewRole() !== 'technician' || !jobRules().reward || j.status === 'cancelled') return '';
+  let v;
+  if (db.role === 'admin'){
+    const pct = Number(((db.team || {})[session.uid] || {}).share_pct ?? 10);
+    v = j.price == null ? null : Math.round(j.price * pct) / 100;
+  } else if ('reward' in j) v = j.reward;
+  else return '';
+  return v == null ? '<span class="reward none">No price yet</span>'
+    : `<span class="reward" title="What you receive">You get ${esc(Number(v) % 1 ? peso(v) : peso0(v))}</span>`;
+}
 function assignBadge(j, big){
   if (!db || !j || !(db.role === 'admin' || inField(db.role)) || !db.staff) return '';   // a server from before 39
+  // (49) a technician asked for it: the office's badge turns yellow and breathes until answered
+  const asked = viewRole() === 'admin' && isOpenJob(j) ? askedBy(j) : [];
+  if (asked.length){
+    const more = asked.length > 1 ? ' +' + (asked.length - 1) : '', t = '🙋 Assign to ' + staffName(asked[0]) + more;
+    // 50: moving on the rows too (Guile, 2026-10-12) — only the rows on screen move (namefx.js)
+    return `<button type="button" class="pill assign asked${big ? ' big' : ''}" data-act="askopen" data-id="${esc(j.id)}" aria-label="${esc(t + ' — asked for this job')}">🙋 Assign to ${nameFx(staffName(asked[0]), asked[0], 'jobs')}${more}</button>`;
+  }
   const who = j.assigned_uid, can = canAssign(j);
   if (!who && !can) return '';
   if (!who && !big && !isOpenJob(j)) return '';   // a done row with nobody: no "＋ Assign" on every old job — it is on the job
   const warn = assignUnseen(j), n = crewOf(j).length;
   // the head by name, the helpers counted: "Assigned to Ana +2" (Guile, 2026-10-11)
   const text = who ? (warn ? '⚠️ ' : '') + 'Assigned to ' + staffName(who) + (n > 1 ? ' +' + (n - 1) : '') : '＋ Assign';
+  const html = who ? (warn ? '⚠️ ' : '') + 'Assigned to ' + nameFx(staffName(who), who, 'jobs') + (n > 1 ? ' +' + (n - 1) : '') : '＋ Assign';   // 50
   const cls = 'pill assign' + (who ? '' : ' none') + (warn ? ' warn' : '') + (big ? ' big' : '');
-  return can ? `<button type="button" class="${cls}" data-act="assignopen" data-id="${esc(j.id)}" aria-label="${esc(text + (who ? ' — tap to change the crew' : ''))}">${esc(text)}</button>`
-             : `<span class="${cls}">${esc(text)}</span>`;
+  return can ? `<button type="button" class="${cls}" data-act="assignopen" data-id="${esc(j.id)}" aria-label="${esc(text + (who ? ' — tap to change the crew' : ''))}">${html}</button>`
+             : `<span class="${cls}">${html}</span>`;
 }
 /* The crew (Guile, 2026-10-11, 46): the first picked is the HEAD — the name on the badge — the
    rest are helpers, as many as wanted. The office picks in order and saves; a technician joins
@@ -2146,7 +2211,7 @@ function panelAssign(p){
   const people = (db.staff || []).slice().sort((a, b) => (order[a.role] - order[b.role]) || String(a.name || '').localeCompare(String(b.name || '')));
   const tag = i => i === 0 ? '<span class="crew-no head">👑 Head</span>' : `<span class="crew-no">${i + 1} · Helper</span>`;
   const row = s => {
-    const i = sel.indexOf(s.id), on = i >= 0, name = esc(s.name || ROLE_NAME[s.role]) + (s.id === me ? ' (you)' : '');
+    const i = sel.indexOf(s.id), on = i >= 0, name = nameFx(s.name || ROLE_NAME[s.role], s.id, 'jobs') + (s.id === me ? ' (you)' : '');
     const head = on && i > 0 || (!office && !on)
       ? `<button type="button" class="b crew-head" data-act="crewhead" data-id="${esc(j.id)}" data-v="${esc(s.id)}">👑 Make head</button>` : '';
     return office
@@ -2167,6 +2232,47 @@ function panelAssign(p){
       ${sel.length ? `<button type="button" class="b wide" data-act="crewclear" data-id="${esc(j.id)}">Clear — no assign</button>` : ''}</div>` : ''}
     <p class="hint">Everyone still sees every job. Its history says who was put on it, and by whom.</p>`};
 }
+/* (49) A job that is not theirs: what it is, who is on it, and the one thing they can do —
+   ask the office for it. A helper only reads; asking is a technician's. */
+function panelAskJob(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Job', body: empty('This job is no longer on this phone.')};
+  const c = jobCust(j), r = jobRules(), crew = crewOf(j), asked = iAsked(j), tech = viewRole() === 'technician';
+  const ask = !tech || !isOpenJob(j) ? '' : !r.ask
+    ? '<p class="hint">Ring the office if you want this job — they assign it.</p>'
+    : asked ? `<div class="ask-wait">🙋 You asked the office for this job.<br>Waiting for their answer.</div>
+        <button type="button" class="b wide" data-act="jobunask" data-id="${esc(j.id)}">Take back my request</button>`
+    : `<button type="button" class="b primary wide" data-act="jobask" data-id="${esc(j.id)}">🙋 Ask the office for this job</button>
+       <p class="hint">The office sees “Assign to ${esc(staffName(session.uid))}” on the job and answers.</p>`;
+  return {title: c.full_name || 'Job', sub: 'Not your job', body: `
+    <div class="lock-card">🔒 <b>View only.</b> Only the people assigned to this job can open it and work on it.</div>
+    <div class="card">
+      ${kv('Status', statusPill(j.status))}
+      ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
+      ${kv('Work', esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — ')))}
+      ${kv('Area', esc(place(c)))}
+      ${kv('Assigned', crew.length ? nameFx(staffName(crew[0]), crew[0], 'jobs') + (crew.length > 1 ? ' +' + (crew.length - 1) : '') : 'Nobody yet')}
+      ${rewardPill(j) ? kv('You would receive', rewardPill(j)) : ''}
+    </div>
+    <div class="stack">${ask}</div>`};
+}
+/* (49) The office's answer: each person who asked, Assign or Say no. Yes puts them on the
+   crew — the head when nobody is on it, else a helper (Guile, 2026-10-12). */
+function panelAskAnswer(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Asked', body: empty('This job is no longer on this phone.')};
+  const asked = (j.requests || []).filter(r => staffOf(r.uid)), crew = crewOf(j);
+  const rows = asked.map(r => `<div class="card ask-row">
+      <div class="menu-title">🙋 ${nameFx(staffName(r.uid), r.uid, 'jobs')}</div>
+      <div class="sms-note">${esc(ROLE_NAME[(staffOf(r.uid) || {}).role] || '')} · asked ${esc(timeAgo(r.at))} · would go on as ${crew.length ? 'a helper' : 'the head'}</div>
+      <div class="row-gap"><button type="button" class="b primary" data-act="askyes" data-id="${esc(j.id)}" data-v="${esc(r.uid)}">✓ Assign ${esc(staffName(r.uid))}</button>
+        <button type="button" class="b" data-act="askno" data-id="${esc(j.id)}" data-v="${esc(r.uid)}">✕ Say no</button></div>
+    </div>`).join('');
+  return {title: 'Asked for this job', sub: jobCust(j).full_name || '', body: `
+    ${rows || empty('Nobody is asking any more.')}
+    <p class="hint">${crew.length ? 'On it now: ' + esc(crew.map(staffName).join(', ')) + '.' : 'Nobody is on it yet.'} The crew screen still changes anything.</p>
+    <div class="stack"><button type="button" class="b wide" data-act="assignopen" data-id="${esc(j.id)}">👤 The crew…</button></div>`};
+}
 /* The job's appliances as small pictures, each type once with its count; four at most. */
 function unitIcons(units){
   const n = {}, order = [];
@@ -2180,22 +2286,27 @@ function jobRow(j){
   const when = j.scheduled_on ? `<b>${esc(slotShort(j.slot).replace(/\s/g, ''))}</b><span>${esc(shortDate(j.scheduled_on))}</span>` : '<b>—</b><span>no date</span>';
   // the time IS the Reschedule button, for the office, on an open job (Guile, 2026-10-11)
   const resched = db.role === 'admin' && viewRole() === 'admin' && isOpenJob(j);
-  return `<div class="lrow job-row has-steps${ab || icons ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+  // (49) not theirs: the box to see, its tap asks for it
+  // under the time: beside the badge it cut "Assigned to Gringo" to "Assigne…" at 375 px
+  const mine = mayWork(j), lock = mine ? '' : `<span class="lock-tag">${iAsked(j) ? '🙋 Asked' : '🔒 View only'}</span>`;
+  const reward = rewardPill(j);
+  return `<div class="lrow job-row has-steps${ab || icons ? ' has-assign' : ''}${mine ? '' : ' locked'}" role="button" tabindex="0" data-act="${mine ? 'open' : 'askjob'}" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
     ${resched ? `<button type="button" class="lrow-when resched" data-act="resched" data-id="${esc(j.id)}" aria-label="${esc(j.scheduled_on ? 'Reschedule' : 'Schedule it')}">${when}</button>`
-      : `<div class="lrow-when">${when}</div>`}
+      : `<div class="lrow-when">${when}${lock}</div>`}
     <div class="lrow-main">
       <div class="lrow-title">${assignUnseen(j) ? '<span class="warn-mark" title="Assigned to you">⚠️</span>' : newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
       <div class="lrow-sub">${esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — '))}</div>
       <div class="lrow-sub">${esc(place(c))}</div>
     </div>
     ${ab || icons ? `<div class="lrow-assign">${icons ? `<span class="lrow-icons">${icons}</span>` : ''}${ab}</div>` : ''}
-    <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null && seesPrice() ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
+    <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null && seesPrice() ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}${reward}</div>
     ${miniSteps({booking: bookingOfJob(j), job: j})}
   </div>`;
 }
 function panelJob(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Job', body: empty('This job is no longer on this phone.')};
+  if (!mayWork(j)) return panelAskJob(p);   // (49) not theirs: only the asking screen
   // the field's screen, for them and for the admin's View as (37); a helper's is less again:
   // no buttons that act, nothing that rings, maps or edits, no history (Guile, 2026-10-03)
   const v = viewRole(), tech = inField(v), helper = v === 'helper';
@@ -2244,9 +2355,9 @@ function panelJob(p){
     ${techPrice && !helper ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
       ${photo && !tech ? housePhoto(photo) : ''}
-      ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${esc(by)}</span>` : ''))}
+      ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${by === 'you' ? 'you' : nameFx(by, j.status_by, 'history')}</span>` : ''))}
       ${assignBadge(j, true) ? kv('Assigned', assignBadge(j, true) + (crewOf(j).length > 1
-        ? `<div class="crew-line">👑 ${esc(staffName(crewOf(j)[0]))} · Helpers: ${esc(crewOf(j).slice(1).map(staffName).join(', '))}</div>` : '')) : ''}
+        ? `<div class="crew-line">👑 ${nameFx(staffName(crewOf(j)[0]), crewOf(j)[0], 'jobs')} · Helpers: ${crewOf(j).slice(1).map(u => nameFx(staffName(u), u, 'jobs')).join(', ')}</div>` : '')) : ''}
       ${j.on_way_at && ['booked', 'scheduled'].includes(j.status) ? kv('On the way', esc('since ' + new Date(j.on_way_at).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit'}))) : ''}
       ${kv('When', esc(j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : 'No date yet'))}
       ${kv('Number', esc(c.contact || ''))}
@@ -2254,6 +2365,7 @@ function panelJob(p){
       ${kv('Landmark', esc(c.landmark || ''))}
       ${kv('Notes', j.notes ? esc(j.notes) : '')}
       ${tech ? (helper && techPrice ? kv('Price', esc(peso(j.price))) : '') : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
+      ${rewardPill(j) ? kv('You receive', rewardPill(j)) : ''}
       ${tech || j.status === 'cancelled' ? '' : `<div class="paid-row">${j.paid_method
         ? `<span class="pill done">Paid · ${esc(PAY[j.paid_method])}${j.paid_at ? ' · ' + esc(shortDate(manilaDay(j.paid_at))) : ''}</span>
            <button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="">Not paid</button>`
@@ -2299,7 +2411,7 @@ function againTyping(pf, draw){
   draw();
   if (was){ const i = $$(`[data-pf="${pf}"]`, $('#panels')).pop(); if (i){ i.value = ''; i.focus(); } }   // the top panel's
 }
-const prepWho = x =>esc(x.name || 'Someone') + ' (' + esc(ROLE_NAME[x.role] || x.role || '') + ')';
+const prepWho = x => nameFx(x.name || 'Someone', x.by, 'history') + ' (' + esc(ROLE_NAME[x.role] || x.role || '') + ')';
 function prepHtml(j){
   if (!db.checklists) return '';   // a server from before 37
   const items = prepItems(j), ticks = (j.prep || {}).ticks || {};
@@ -2927,8 +3039,8 @@ function drawTeam(){
 function teamRow(t){
   const off = t.active === false, waits = t.signup_kind === 'employee' && t.role === 'customer';
   return `<div class="lrow${off ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="member" data-id="${esc(t.id)}" data-stamp="${esc(t.updated_at || '')}">
-    <div class="avatar">${esc(initials(t.display_name || t.email))}</div>
-    <div class="lrow-main"><div class="lrow-title">${newDot(userUnseen(t))}${esc(t.display_name || (t.email || '').split('@')[0])}${unsentPill(t.id)}</div>
+    ${avatarHtml(t.id, t.display_name || t.email)}
+    <div class="lrow-main"><div class="lrow-title">${newDot(userUnseen(t))}${nameFx(t.display_name || (t.email || '').split('@')[0], t.id, 'users')}${unsentPill(t.id)}</div>
       <div class="lrow-sub">${esc(t.email || '')}</div></div>
     <div class="lrow-side">${rolePill(t.role)}
       ${t.id === session.uid ? '<span class="lrow-time">you</span>' : ''}
@@ -2947,7 +3059,9 @@ function panelMember(p){
   if (!t) return {title: 'Person', body: empty('This person is no longer on this phone.')};
   const me = t.id === session.uid, off = t.active === false;
   const role = p.role || t.role, name = p.name != null ? p.name : (t.display_name || '');
-  return {title: t.display_name || (t.email || '').split('@')[0], sub: t.email, body: `
+  return {title: t.display_name || (t.email || '').split('@')[0], sub: t.email,
+    titleHtml: nameFx(t.display_name || (t.email || '').split('@')[0], t.id, 'users'), body: `
+    ${['admin', 'technician', 'helper'].includes(t.role) && db.staff ? `<div class="face-head">${avatarHtml(t.id, t.display_name || t.email, 'huge')}${staffPhotoBtns(t.id)}</div>` : ''}
     <div class="card" data-row="${esc(t.id)}" data-stamp="${esc(t.updated_at || '')}">
       ${kv('Role', rolePill(t.role) + unsentPill(t.id) + (off ? ' <span class="tag bad">switched off</span>' : ''))}
       ${kv('Signed up as', t.signup_kind === 'employee' ? 'Says they work here' : 'Customer')}
@@ -2959,6 +3073,14 @@ function panelMember(p){
         <div class="sms-note">${textTexters().includes(t.id) ? 'Sees Texts to customers in Settings, 💬 Text on jobs and Text all.' : 'Sees none of the texting.'}</div></div>
       <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
         `<button type="button" class="${textTexters().includes(t.id) === v ? 'active' : ''}" data-act="texter" data-id="${esc(t.id)}" data-v="${v}">${l}</button>`).join('')}</div>
+    </div>` : ''}
+    ${t.role !== 'customer' && db.staff ? fxMemberHtml(t) : ''}
+    ${t.role === 'technician' ? `<div class="card">
+      <div class="menu-title">Share of each job ${infoBtn('share')}</div>
+      <div class="share-row"><input data-pf="pct" inputmode="decimal" maxlength="6" value="${esc(p.pct != null ? p.pct : String(Number(t.share_pct ?? 10)))}" aria-label="Percent">
+        <span class="share-pct">%</span>
+        <button type="button" class="b primary" data-act="setshare" data-id="${esc(t.id)}">Save</button></div>
+      <div class="sms-note">${esc('A ₱2,000 job gives ' + (t.display_name || 'them') + ' ' + peso0(2000 * Number(t.share_pct ?? 10) / 100) + '.')}</div>
     </div>` : ''}
     ${me ? `<p class="hint">This is you. Another admin changes your role; nobody can switch themselves off.
       Your name is what technicians and customers see on the steps you take.</p>
@@ -3027,7 +3149,7 @@ function drawPagePhotos(){
   return `<div class="card">
     <div class="menu-title">The photos at the top of the booking page ${infoBtn('pagephotos')}</div>
     ${l.length ? `<div class="pp-grid">${l.map((p, i) => `<div class="pp-item">
-        <img src="${esc(PAGE_PHOTO_BASE + p)}" alt="Page photo ${i + 1}" loading="lazy">
+        <img src="${esc(pagePhotoUrl(p))}" alt="Page photo ${i + 1}" loading="lazy">
         <button type="button" class="b danger" data-act="ppremove" data-id="${esc(p)}">Remove</button></div>`).join('')}</div>`
       : '<p class="hint">None yet — the page shows its own photo.</p>'}
     <div class="actions">${l.length >= 6 ? '<span class="hint">Six is the most — remove one to add another.</span>'
@@ -3054,6 +3176,39 @@ document.addEventListener('change', async e => {
     openPanel({kind: 'ppcrop', url, w: img.naturalWidth, h: img.naturalHeight, zoom: 1, cx: .5, cy: .5});
   } catch (err) { URL.revokeObjectURL(url); notice('That file is not a picture.', true); }
 });
+/* A picture in a person's circle (Guile, 2026-10-12, supabase/51): picked, fitted into the
+   circle on the crop screen, 256 × 256, then only its path goes on the person. The office sets
+   anyone's of the shop; each of the shop sets their own in Settings. */
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-staff-photo]')) return;
+  const uid = inp.dataset.staffPhoto, file = inp.files && inp.files[0];
+  inp.value = '';
+  if (!file || !session) return;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImg(url);
+    openPanel({kind: 'ppcrop', for: 'face', uid, ratio: 1, url, w: img.naturalWidth, h: img.naturalHeight, zoom: 1, cx: .5, cy: .5});
+  } catch (err) { URL.revokeObjectURL(url); notice('That file is not a picture.', true); }
+});
+const staffPhotoOf = uid => { const s = staffOf(uid), t = db && db.team && db.team[uid];
+  return (s && s.photo) || (t && t.photo_path) || null; };
+function setStaffPhoto(uid, path){
+  write('set_staff_photo', {p_user: uid, p_path: path}, (path ? 'Picture — ' : 'Picture off — ') + (personName(uid) || staffName(uid)), [uid], db => {
+    const s = (db.staff || []).find(x => x.id === uid); if (s) s.photo = path;
+    if (db.team[uid]) db.team[uid].photo_path = path;
+  });
+  toast(path ? 'Picture saved — the shop sees it.' : 'Picture taken off.');
+}
+// the circle: their picture when they have one, else their initials, as before
+function avatarHtml(uid, name, cls){
+  const path = uid ? staffPhotoOf(uid) : null;
+  return path ? `<div class="avatar face${cls ? ' ' + cls : ''}"><img data-house="${esc(path)}" data-bucket="staff-photos" alt="" draggable="false"></div>`
+    : `<div class="avatar${cls ? ' ' + cls : ''}">${esc(initials(name))}</div>`;
+}
+// the two buttons under a big circle: change it, take it off
+const staffPhotoBtns = uid => `<div class="row-gap face-btns"><label class="b">📷 ${staffPhotoOf(uid) ? 'Change the picture' : 'Add a picture'}<input type="file" accept="image/*" data-staff-photo="${esc(uid)}" hidden></label>
+  ${staffPhotoOf(uid) ? `<button type="button" class="b" data-act="staffphotooff" data-id="${esc(uid)}">Take it off</button>` : ''}</div>`;
 const loadImg = src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('not a picture')); i.src = src; });
 /* Crop a page photo before it goes (Guile, 2026-09-28). The frame is 2 : 1 — a computer shows
    the photo in a band of ~2.6 : 1 (1366 × 520) and a phone in ~1.25 : 1 (375 × 300), the middle
@@ -3061,7 +3216,8 @@ const loadImg = src => new Promise((res, rej) => { const i = new Image(); i.onlo
    the frame, 1600 × 800 at most (~200–300 KB). Sizes are fractions of the frame, so a redraw or
    a turned phone keeps the same crop. */
 function ppGeom(p){
-  const W = p.zoom * Math.max(1, (p.w / p.h) / 2), H = 2 * W / (p.w / p.h);   // image size, in frames
+  const k = p.ratio || 2;   // the frame's width : height — 2 : 1, or 1 : 1 for a person's circle (51)
+  const W = p.zoom * Math.max(1, (p.w / p.h) / k), H = k * W / (p.w / p.h);   // image size, in frames
   const at = v => Number.isFinite(v) ? v : .5;
   const cx = Math.min(1 - 1 / (2 * W), Math.max(1 / (2 * W), at(p.cx))), cy = Math.min(1 - 1 / (2 * H), Math.max(1 / (2 * H), at(p.cy)));
   return {W, H, cx, cy};
@@ -3073,6 +3229,12 @@ function ppStyle(p){
 }
 /* The same crop screen takes the customer's signature on paper (47): the frame, then the ink. */
 function panelPpcrop(p){
+  if (p.for === 'face') return {title: 'Fit the picture', sub: personName(p.uid) || '', body: `
+    <div class="pp-crop face" data-ppcrop><img src="${esc(p.url)}" alt="" draggable="false" style="${ppStyle(p)}"><div class="pp-circle"></div></div>
+    <label class="pp-zoom">Zoom <input type="range" min="1" max="4" step="0.01" value="${esc(p.zoom)}" data-ppzoom aria-label="Zoom"></label>
+    <p class="hint">Drag to move it, pinch or slide to zoom. What is inside the circle is the picture.</p>
+    <div class="stack">${pagePhotoBusy ? '<span class="b wide" aria-busy="true">Sending the picture…</span>'
+      : '<button type="button" class="b primary wide" data-act="ppuse">Use this picture</button>'}</div>`};
   const sig = p.for === 'sig', title = sig ? 'Crop the signature' : 'Crop the photo';
   if (!p.url) return {title, body: empty(sig ? 'Take the picture again.' : 'Pick the photo again — Admin → Page photos.')};
   return {title, sub: sig ? SIG_PAPERS[String(p.sig).split('|')[1]] || '' : 'Page photo', info: sig ? '' : 'pagephotos', body: `
@@ -3086,15 +3248,33 @@ function panelPpcrop(p){
       : `<button type="button" class="b primary wide" data-act="ppuse">${sig ? 'Use this signature' : 'Use this photo'}</button>`}</div>`};
 }
 let ppDrag = null;
+// two fingers on the frame: pinch to zoom (2026-10-12) — the slider still works
+const ppFingers = new Map();
+let ppPinch = null;
 document.addEventListener('pointerdown', e => {
   const box = e.target.closest && e.target.closest('[data-ppcrop]'), p = topPanel();
   if (!box || !p || p.kind !== 'ppcrop') return;
-  ppDrag = {id: e.pointerId, x: e.clientX, y: e.clientY};
+  ppFingers.set(e.pointerId, {x: e.clientX, y: e.clientY});
   try { box.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
+  if (ppFingers.size === 2){
+    const [a, b] = [...ppFingers.values()];
+    ppPinch = {d: Math.hypot(a.x - b.x, a.y - b.y) || 1, zoom: p.zoom}; ppDrag = null;
+    return;
+  }
+  ppDrag = {id: e.pointerId, x: e.clientX, y: e.clientY};
 });
 document.addEventListener('pointermove', e => {
   const p = topPanel();
+  if (ppPinch && ppFingers.has(e.pointerId) && p && p.kind === 'ppcrop'){
+    ppFingers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+    const [a, b] = [...ppFingers.values()];
+    p.zoom = Math.max(1, Math.min(4, ppPinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / ppPinch.d));
+    const img = $('[data-ppcrop] img'), slider = $('[data-ppzoom]');
+    if (img) img.setAttribute('style', ppStyle(p));
+    if (slider) slider.value = p.zoom;
+    return;
+  }
   if (!ppDrag || e.pointerId !== ppDrag.id || !p || p.kind !== 'ppcrop') return;
   // the frame on screen NOW: a sync redraw mid-drag replaces it (measured: the old one, gone,
   // measured 0 wide and the crop went NaN)
@@ -3105,7 +3285,11 @@ document.addEventListener('pointermove', e => {
   ppDrag.x = e.clientX; ppDrag.y = e.clientY;
   box.querySelector('img').setAttribute('style', ppStyle(p));
 });
-['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => { if (ppDrag && e.pointerId === ppDrag.id) ppDrag = null; }));
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => {
+  ppFingers.delete(e.pointerId);
+  if (ppFingers.size < 2) ppPinch = null;
+  if (ppDrag && e.pointerId === ppDrag.id) ppDrag = null;
+}));
 document.addEventListener('input', e => {
   const p = topPanel();
   if (!e.target.matches || !e.target.matches('[data-ppzoom]') || !p || p.kind !== 'ppcrop') return;
@@ -3121,8 +3305,23 @@ async function usePagePhoto(){
     const img = await loadImg(p.url), g = ppGeom(p);
     const sw = p.w / g.W, sh = p.h / g.H, sx = (g.cx - 1 / (2 * g.W)) * p.w, sy = (g.cy - 1 / (2 * g.H)) * p.h;
     const cv = document.createElement('canvas');
-    cv.width = Math.max(2, Math.min(1600, Math.round(sw))); cv.height = Math.round(cv.width / 2);
+    if (p.for === 'face'){ cv.width = cv.height = 256; }   // a person's circle (51): ~15 KB
+    else { cv.width = Math.max(2, Math.min(1600, Math.round(sw))); cv.height = Math.round(cv.width / 2); }
     cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    if (p.for === 'face'){
+      const blob = await new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('could not make the picture')), 'image/jpeg', .82));
+      const path = 'staff/' + p.uid + '/' + await hashOf(blob) + '.jpg';
+      const r = await storage('POST', path, blob, false, 'staff-photos');
+      if (!r.ok && r.status !== 409){
+        const b = await r.json().catch(() => ({}));
+        if (!(r.status === 400 && /exist/i.test(b.message || b.error || ''))) throw new Error(b.message || b.error || 'HTTP ' + r.status);
+      }
+      await keepPhoto(path, blob);   // it shows at once, no download
+      URL.revokeObjectURL(p.url); p.url = null;
+      setStaffPhoto(p.uid, path);
+      pagePhotoBusy = false; closePanel();
+      return;
+    }
     if (p.for === 'sig'){   // the customer's signature (47): the frame → the ink alone → the job
       const blob = await new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('could not make the picture')), 'image/png'));
       const png = await inkOnly(blob), [jid, paper] = String(p.sig).split('|');
@@ -4703,9 +4902,10 @@ function panelSettings(){
   const unsent = queue.filter(o => o.state === 'pending').length, failed = queue.filter(o => o.state === 'failed').length;
   const staff = role === 'admin' || inField(role);
   return {title: 'Settings', sub: name, body: `
-    <div class="card me-card"><div class="avatar big">${esc(initials(name))}</div>
-      <div class="lrow-main"><div class="lrow-title">${esc(name)}</div><div class="lrow-sub">${esc(session.email || '')}</div></div>
+    <div class="card me-card">${avatarHtml(staff ? session.uid : null, name, 'big')}
+      <div class="lrow-main"><div class="lrow-title">${staff ? nameFx(name, session.uid, 'mine') : esc(name)}</div><div class="lrow-sub">${esc(session.email || '')}</div></div>
       ${rolePill(role)}</div>
+    ${staff && db.staff ? staffPhotoBtns(session.uid) : ''}
 
     <div class="sec">Appearance</div>
     <div class="segment">${[['system', 'Like the phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, t]) =>
@@ -4728,8 +4928,20 @@ function panelSettings(){
       <div class="actions"><button type="button" class="b" data-act="refresh">↻ Refresh now</button></div>
     </div>
     ${staff ? `<div class="card row-between">
+      <div class="menu-title">Name effects ${infoBtn('fxshow')}</div>
+      <div class="segment mini">${[['on', 'Show'], ['off', 'Plain names']].map(([v, l]) =>
+        `<button type="button" class="${(fxShown() ? 'on' : 'off') === v ? 'active' : ''}" data-act="fxshow" data-v="${v}">${l}</button>`).join('')}</div>
+    </div>` : ''}
+    ${staff ? `<div class="card row-between">
       <div class="menu-title">Something looks wrong? ${infoBtn('reset')}</div>
       <button type="button" class="b danger" data-act="reset">Take the office's copy</button>
+    </div>` : ''}
+
+    ${staff && inApk && window.AndroidBridge.shareApk ? `<div class="sec">Send the app</div>
+    <div class="card row-between">
+      <div class="lrow-main"><div class="menu-title">📤 Send Winter Air to another phone</div>
+        <div class="sms-note">Bluetooth, Messenger, Gmail, Drive, Quick Share — any of them. The other phone taps the file to install it.</div></div>
+      <button type="button" class="b primary" data-act="shareapk">Send</button>
     </div>` : ''}
 
     ${aboutHtml()}
@@ -5114,9 +5326,23 @@ function drawJobMover(){
   const m = moverSet(), s = textSet();
   const seg = (act, on) => `<div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
     `<button type="button" class="${!!on === v ? 'active' : ''}" ${act} data-v="${v}">${l}</button>`).join('')}</div>`;
+  // (49) the technicians and the jobs not theirs
+  const r = jobRules();
+  const rule = (k, on, title, info, now) => `<div class="card row-between">
+      <div class="lrow-main"><div class="menu-title">${title} ${infoBtn(info)}</div><div class="sms-note">${now}</div></div>
+      <div class="segment mini">${[[false, 'No'], [true, 'Yes']].map(([v, l]) =>
+        `<button type="button" class="${!!on === v ? 'active' : ''}" data-act="techrule" data-f="${k}" data-v="${v}">${l}</button>`).join('')}</div></div>`;
+  const rules = `<div class="sec">Technicians</div>
+    ${rule('tech_edit_others', r.others, 'Can technicians open and edit the other jobs?', 'techothers',
+      r.others ? 'Every technician works every job.' : 'Only the jobs they are assigned to. The rest show, to see only.')}
+    ${rule('tech_request', r.ask, 'Can technicians ask to be assigned?', 'techask',
+      r.ask ? 'A technician taps a job that is not theirs → “Ask the office”.' : 'Only the office assigns.')}
+    ${rule('tech_reward', r.reward, 'Can technicians see what they receive?', 'techreward',
+      r.reward ? 'The job’s price × their share, set in Users.' : 'They never see an amount for themselves.')}
+    <div class="sec">Unfinished jobs</div>`;
   const last = m.last_at ? 'Last moved ' + new Date(m.last_at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'})
     + ' — ' + (m.last_n || 0) + ((m.last_n || 0) === 1 ? ' job' : ' jobs') : 'Has not moved any job yet.';
-  return `<div class="card row-between">
+  return `${rules}<div class="card row-between">
       <div class="menu-title">Move unfinished jobs to the next day</div>${seg('data-act="moverset" data-f="on"', m.on)}</div>
     <div class="card"><div class="menu-title">At</div>${moverTimeHtml(m.at)}
       <p class="hint">${esc(moverMeans(m.at))}</p>
@@ -5199,7 +5425,9 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
   deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
   assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField,   // 39, 43, 44
-  jobsign: panelJobSign, sigdraw: panelSigDraw};   // 47
+  jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
+  askjob: panelAskJob, askanswer: panelAskAnswer,   // 49
+  ...(window.FX_PANELS || {})};   // 50: name effects, web/namefx.js
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
@@ -5236,6 +5464,7 @@ window.addEventListener('popstate', () => {
   if (viewer){ closeViewer(true); return; }   // the work photo viewer (39)
   if (stack.length){ stack.pop(); render(); }
 });
+const FX_KEEP = new Set(['namefx', 'fxwheel']);
 function drawPanels(){
   const host = $('#panels');
   if (!session || !db) stack = [];
@@ -5258,17 +5487,25 @@ function drawPanels(){
     el.className = 'sheet' + (SMALL.has(p.kind) ? ' small' : '') + (MID.has(p.kind) ? ' mid' : '') + (WIDE.has(p.kind) ? ' wide' : '');
     el.style.zIndex = String(40 + i * 2);   // on top of the one below it, by depth (ui.md)
     let out = null;
-    keepTyping($('.sheet-body', el), () => {
+    const body = $('.sheet-body', el);
+    if (FX_KEEP.has(p.kind)){
+      // 50: the effect screens are redrawn by their own taps; a redraw from here (a pull every
+      // 30 s) rebuilds fifty animated looks only when something on them really changed
+      out = PANELS[p.kind](p);
+      if (body._fxBody !== out.body){ body._fxBody = out.body; keepTyping(body, () => out.body); }
+    } else keepTyping(body, () => {
       out = (PANELS[p.kind] || (() => ({title: '', body: ''})))(p);
       return out.body;
     });
     if (out){
-      $('.sheet-title', el).textContent = out.title || '';
+      if (out.titleHtml) $('.sheet-title', el).innerHTML = out.titleHtml;   // a name wearing its effect (50)
+      else $('.sheet-title', el).textContent = out.title || '';
       $('.sheet-sub', el).textContent = out.sub || '';
       $('.sheet-info', el).innerHTML = out.info ? infoBtn(out.info) : '';
     }
   });
   lockBody();
+  if (typeof fxIdleUnder === 'function') fxIdleUnder();   // names under the top screen stop (50)
 }
 
 /* ================================================================ what the taps do */
@@ -5399,6 +5636,16 @@ const ACTIONS = {
     if (f === 'auto' && on && !smsSender()) toast('Turned on. Now, on the owner\'s phone: Settings → This phone sends the texts.');
   },
   moverap: (id, el) => moverAt('ap', el.dataset.v),   // 42
+  staffphotooff: (id, el) => { if (confirmTwice(el, 'Tap again to take it off')) setStaffPhoto(id, null); },   // 51
+  shareapk: () => { if (inApk && window.AndroidBridge.shareApk) window.AndroidBridge.shareApk(); },   // 49
+  techrule: (id, el) => {   // 49
+    const k = el.dataset.f, on = el.dataset.v === 'true', now = jobRules();
+    if ({tech_edit_others: now.others, tech_request: now.ask, tech_reward: now.reward}[k] === on) return;
+    const what = {tech_edit_others: 'Technicians edit other jobs', tech_request: 'Technicians ask for jobs', tech_reward: 'Technicians see what they receive'}[k];
+    write('set_tech_rule', {p_key: k, p_on: on}, what + ' — ' + (on ? 'yes' : 'no'), ['techrule:' + k], db => {
+      db.settings = {...(db.settings || {}), [k]: on};
+    });
+  },
   moverset: (id, el) => {   // 41
     const on = el.dataset.v === 'true', m = moverSet();
     if (!!m.on === on) return;
@@ -5820,6 +6067,17 @@ const ACTIONS = {
     write('set_active', {p_user: id, p_active: on}, (on ? 'Switch on ' : 'Switch off ') + (t.display_name || t.email || ''), [id],
       () => { t.active = on; });
   },
+  setshare: id => {   // 49
+    const t = db.team[id], p = topPanel(); if (!t || !p) return;
+    const raw = String(p.pct != null ? p.pct : '').trim().replace(/%$/, '');
+    if (!raw) return toast('Type the percent first.', true);
+    // refuse what cannot be read — never strip it into a number (docs/rules/schema.md)
+    if (!/^\d{1,3}(\.\d{1,2})?$/.test(raw) || Number(raw) > 100) return toast('A share is a number from 0 to 100, like 10 or 12.5.', true);
+    const pct = Number(raw);
+    write('set_share_pct', {p_user: id, p_pct: pct}, 'Share ' + pct + '% — ' + (t.display_name || t.email || ''), [id], () => { t.share_pct = pct; });
+    p.pct = null;
+    toast((t.display_name || 'Their') + ' share: ' + pct + '%.');
+  },
   setrole: id => {
     const t = db.team[id], p = topPanel(); if (!t || !p) return;
     const role = p.role || t.role, name = (p.name != null ? p.name : (t.display_name || '')).trim();
@@ -6065,6 +6323,39 @@ const ACTIONS = {
     if (db.role === 'admin' && p && p.sel){ p.sel = [v, ...p.sel.filter(x => x !== v)]; render(); return; }
     crewWrite(j, 'head', v, null, staffName(v) + ' is the head');
   },
+  // (49) asking for a job, and the office's answer
+  askjob: id => { if (db.jobs[id]) openPanel({kind: 'askjob', id}); },
+  askopen: id => { if (db.jobs[id]) openPanel({kind: 'askanswer', id}); },
+  jobask: id => {
+    const j = db.jobs[id]; if (!j || iAsked(j)) return;
+    write('request_job', {p_job: id, p_ask: true}, 'Asked for — ' + (jobCust(j).full_name || 'job'), [id], () => {
+      j.requests = (j.requests || []).concat([{uid: session.uid, at: new Date().toISOString()}]);
+    });
+    toast('Asked. The office sees it on the job.');
+  },
+  jobunask: id => {
+    const j = db.jobs[id]; if (!j) return;
+    write('request_job', {p_job: id, p_ask: false}, 'Request taken back — ' + (jobCust(j).full_name || 'job'), [id], () => {
+      j.requests = (j.requests || []).filter(r => r.uid !== session.uid);
+    });
+  },
+  askyes: (id, el) => {
+    const j = db.jobs[id], who = el.dataset.v; if (!j || !who) return;
+    write('answer_request', {p_job: id, p_who: who, p_yes: true}, 'Assigned ' + staffName(who) + ' — ' + (jobCust(j).full_name || 'job'), [id], () => {
+      const next = crewOf(j).filter(x => x !== who).concat([who]);
+      j.crew = next; j.assigned_uid = next[0]; j.assigned_by = session.uid; j.assigned_at = new Date().toISOString();
+      j.requests = (j.requests || []).filter(r => r.uid !== who);
+    });
+    toast(staffName(who) + ' is on the job.');
+    if (!askedBy(j).length) closePanel();
+  },
+  askno: (id, el) => {
+    const j = db.jobs[id], who = el.dataset.v; if (!j || !who) return;
+    write('answer_request', {p_job: id, p_who: who, p_yes: false}, 'Said no to ' + staffName(who) + ' — ' + (jobCust(j).full_name || 'job'), [id], () => {
+      j.requests = (j.requests || []).filter(r => r.uid !== who);
+    });
+    if (!askedBy(j).length) closePanel();
+  },
   crewjoin: id => { const j = db.jobs[id]; if (j && canAssign(j)) crewWrite(j, 'join', session.uid, null, 'You joined as a helper'); },
   crewleave: id => { const j = db.jobs[id]; if (j && canAssign(j)) crewWrite(j, 'leave', session.uid, null, 'You left the crew'); },
   crewsave: id => {
@@ -6178,6 +6469,7 @@ const ACTIONS = {
     write('cancel_my_booking', {p_ref: b.ref}, 'Cancel ' + b.ref, [id], () => { b.status = 'cancelled'; });
   },
 };
+Object.assign(ACTIONS, window.FX_ACTIONS || {});   // name effects (web/namefx.js, 50)
 
 document.addEventListener('click', e => {
   if (e.target.id === 'infoBox'){ hideInfo(); return; }
@@ -6676,7 +6968,7 @@ updateOnLaunch();
 /* Android's Back, inside the APK: close what is on top, then the login door. False means
    there is nowhere left to go, and the app may close. */
 // the APK could not make or send the quotation PDF (MainActivity.sharePdf)
-window.wsShareFailed = why => toast('It did not go: ' + why + '. Print or save as PDF still works.', true);
+window.wsShareFailed = why => toast('It did not go: ' + why + (/app|send a file/.test(why) ? '.' : '. Print or save as PDF still works.'), true);
 window.wsBack = () => {
   if (!$('#unitSheet').hidden){ unitEd = null; drawUnitSheet(); return true; }
   if (!$('#cartSheet').hidden){ $('#cartSheet').hidden = true; lockBody(); return true; }

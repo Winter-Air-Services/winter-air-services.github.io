@@ -10,6 +10,9 @@
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="data:,">
 <title>Winter Services — book an aircon job</title>
+<!-- the owner's photos inside the site, in the head: its class lands before the CSS fetches
+     the built-in photo (at the end of the body, hero-1600.jpg was already on its way) -->
+<script src="page-photos.js"></script>
 <!--
   One app, three kinds of people; the role on the account decides what each sees
   (docs/scope.md). Signed out, it is the public booking page.
@@ -79,6 +82,10 @@
   .hero-photos::after{content:"";position:absolute;inset:0;
     background:linear-gradient(180deg,rgba(6,18,34,.62),rgba(6,18,34,.40) 55%,rgba(6,18,34,.70))}
   .hero.has-photos::before{display:none}
+  /* the owner's photos are inside the site (tools/page_photos.py): the built-in one is never
+     fetched, so it never shows first (Guile, 2026-10-12) */
+  html.pp .hero::before{display:none}
+  html.pp .hero{background:linear-gradient(#0b1a2c,#0b1a2c) top/100% 300px no-repeat}
   @media (prefers-reduced-motion:reduce){ .hero-photos > i{transition:none} }
   .pp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:6px 0 10px}
   .pp-item img{display:block;width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:var(--radius-sm);background:var(--surface-alt)}
@@ -101,6 +108,15 @@
   .sig-slider input{grid-column:1 / -1;width:100%}
   .sig-show{background:#fff;border-radius:var(--radius-sm);padding:8px;min-height:60px;display:flex;align-items:center;justify-content:center}
   .sig-show img{max-width:100%;max-height:120px}
+  /* a person's circle (51): a square frame, the circle drawn over it, the corners dimmed */
+  .pp-crop.face{aspect-ratio:1/1;max-width:340px;margin:0 auto}
+  .pp-circle{position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 999px rgba(0,0,0,.55);border:2px solid rgba(255,255,255,.95);pointer-events:none}
+  .pp-crop{touch-action:none}
+  .avatar.face{padding:0;overflow:hidden;background:var(--surface-alt)}
+  .avatar.face img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+  .avatar.huge{width:96px;height:96px;font-size:30px}
+  .face-head{display:flex;flex-direction:column;align-items:center;gap:10px;margin:4px 0 14px}
+  .face-btns{justify-content:center;flex-wrap:wrap}
   .pp-zoom{margin-top:12px}
   .pp-zoom input{width:100%}
   .hero-text{color:#fff;margin-bottom:18px}
@@ -121,6 +137,7 @@
     .hero::before{height:520px;
       background:linear-gradient(90deg,rgba(6,18,34,.72),rgba(6,18,34,.35) 70%),url(img/hero-1600.jpg) center/cover}
     .hero-photos{height:520px}
+    html.pp .hero{background-size:100% 520px}
     .hero-photos::after{background:linear-gradient(90deg,rgba(6,18,34,.72),rgba(6,18,34,.35) 70%)}
     /* row 1 ends where the photo ends (520 - 64 padding), so the left column's cards start below it */
     .hero-text{padding-top:84px;margin:0;min-height:456px;grid-column:1;grid-row:1}
@@ -429,6 +446,20 @@
   .lrow-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
   .lrow-time{font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
   .lrow-price{font-size:12.5px;font-weight:700;white-space:nowrap}
+  /* 49: what a technician receives, under the status; a job not theirs; asked for */
+  .reward{font-size:12.5px;font-weight:800;white-space:nowrap;color:var(--good);background:var(--good-bg);border-radius:999px;padding:2px 9px}
+  .reward.none{color:var(--ink-soft);background:transparent;border:1.5px dashed var(--border);font-weight:600}
+  .job-row.locked .lrow-title,.job-row.locked .lrow-sub{opacity:.72}
+  .lrow-when .lock-tag{display:block;margin-top:6px;font-size:11px;font-weight:700;color:var(--warn);white-space:nowrap}
+  .pill.assign.asked{background:#FFD84D;color:#4A3500;border-color:#E0B000;animation:ask-ghost 1.6s ease-in-out infinite}
+  @keyframes ask-ghost{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion: reduce){ .pill.assign.asked{animation:none} }
+  .lock-card{background:var(--warn-bg);color:var(--warn);border-radius:var(--radius-sm);padding:10px 12px;margin:0 0 10px;font-size:14px}
+  .ask-wait{background:var(--good-bg);color:var(--good);border-radius:var(--radius-sm);padding:10px 12px;font-weight:700;text-align:center}
+  .ask-row .row-gap{margin-top:8px;flex-wrap:wrap}
+  .share-row{display:flex;gap:8px;align-items:center;margin:8px 0 4px}
+  .share-row input{width:90px;text-align:right;font-size:18px;font-weight:700}
+  .share-pct{font-size:18px;font-weight:700}
   .card.est{padding:6px 14px;margin:8px 0 0}
   .loc-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
   .bk-row{display:flex;gap:8px;align-items:stretch}
@@ -882,6 +913,7 @@
   .nav-badge{position:absolute;top:-6px;left:14px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;
     background:var(--bad);color:#fff;font-size:10.5px;line-height:17px;font-weight:700;font-style:normal}
   body.has-nav .wrap{padding-bottom:110px}
+  body.has-nav.has-fab .wrap{padding-bottom:190px}
   /* View as (37): a pill above Jobs, its menu opening upward */
   .nav-slot{position:relative;flex:1 1 0;max-width:108px;min-width:0;display:flex}
   .nav-slot > button[data-act=tab]{max-width:none}
@@ -966,6 +998,400 @@
     text-align:left;font-size:14px;font-weight:600}
   .news-x{flex:none;width:36px;height:36px;min-height:0;margin:0;padding:0;border-radius:50%;background:transparent;
     border:0;color:var(--ink-soft);font-size:20px}
+  /* ================================================================ name effects
+     Order Run's (D:\Order Run\app_template.html, 0.22-0.24.3), as it is. web/namefx.js. */
+  /* Two elements on purpose: a filter and -webkit-background-clip:text on the SAME element
+     is unreliable in an Android WebView -- the glow eats the gradient. Outer glows, inner
+     is the gradient, emoji sits outside both so it keeps its own colours. */
+  .fx-wrap{display:inline-block;}
+  .fx-ink{background-image:linear-gradient(var(--fx-ang,90deg),
+      var(--fx-a) 0%, var(--fx-b) var(--fx-bpos,33.33%), var(--fx-c) 66.66%, var(--fx-a) 100%);
+    -webkit-background-clip:text;background-clip:text;
+    color:transparent;-webkit-text-fill-color:transparent;font-weight:700;
+    -webkit-text-stroke:var(--fx-ow,0) var(--fx-oc,transparent);}
+  .fx-emoji{margin-left:.22em;-webkit-text-fill-color:initial;color:initial;}
+  /* A long list's name: the colours across the word, and nothing else. No letter spans,
+     no motion, no render surface. See the note on fxMarkup's `quiet`. */
+  .fx-still{background-size:100% 100% !important;background-position:0 0 !important;
+    animation:none !important;}
+  /* NOTHING MOVES WHILE A FINGER IS MOVING. A sliding gradient behind clipped text is a
+     repaint, not compositor work, and a repaint competing with a scroll is the stutter you
+     feel rather than the one a frame counter catches standing still. Everything stops for
+     the length of the drag and picks up a fifth of a second after it ends. */
+  html.fx-scrolling .fx-wrap,html.fx-scrolling .fx-ink,html.fx-scrolling .fx-l{
+    animation-play-state:paused !important;}
+  /* A name nobody can see does not move. See fxWatchMotion(). */
+  .fx-idle,.fx-idle .fx-ink,.fx-idle .fx-l{animation-play-state:paused !important;}
+  /* The emoji as the last letter: it takes the movement and the delay, but NOT the paint --
+     a gradient clipped to a colour emoji turns it into a coloured blob. Specificity has to
+     beat .fx-cut .fx-l, which is why it is spelled out this long. */
+  .fx-cut .fx-l.fx-emoji{background-image:none;-webkit-background-clip:border-box;
+    background-clip:border-box;-webkit-text-fill-color:initial;color:initial;
+    -webkit-text-stroke:0;}
+
+  /* which way the colours travel */
+  .fx-slide-lr{background-size:300% 100%;animation:fx-lr var(--fx-secs,5s) linear infinite;}
+  .fx-slide-rl{background-size:300% 100%;animation:fx-rl var(--fx-secs,5s) linear infinite;}
+  .fx-slide-tb{background-size:100% 300%;animation:fx-tb var(--fx-secs,5s) linear infinite;}
+  .fx-slide-bt{background-size:100% 300%;animation:fx-bt var(--fx-secs,5s) linear infinite;}
+  @keyframes fx-lr{from{background-position:0 0;}to{background-position:-300% 0;}}
+  @keyframes fx-rl{from{background-position:-300% 0;}to{background-position:0 0;}}
+  @keyframes fx-tb{from{background-position:0 0;}to{background-position:0 -300%;}}
+  @keyframes fx-bt{from{background-position:0 -300%;}to{background-position:0 0;}}
+
+  /* ---- letter by letter ----
+     EACH LETTER CARRIES THE GRADIENT, and the word gives its own up. An animated opacity,
+     transform or filter puts a letter on its own compositing layer, and a layer cannot be
+     clipped by its parent's background-clip:text -- which is exactly how 0.23 shipped
+     Twinkle, VIP, Diamond and Thunder with the name painted invisible. A letter that paints
+     itself cannot be clipped out of anything. The delay per letter is written in by
+     fxMarkup(): calc() dividing by a variable is not safe on every Android WebView here,
+     and a name is short. */
+  .fx-ink.fx-cut{background-image:none;animation:none;-webkit-text-stroke:0;}
+  /* The gradient here does NOT move, and that is the whole performance story. Animating
+     background-position on a background-clip:text element re-rasterises its text mask every
+     frame -- it is not compositor work. One name is free; 252 letters is tens of thousands
+     of mask paints a second and a tablet dies. fxMarkup() hands each letter a FIXED slice of
+     the strip instead, so the word still reads as one gradient across itself. The letter
+     still moves: transform and opacity are what a compositor is for. */
+  .fx-cut .fx-l{
+    display:inline-block;white-space:pre;
+    background-image:linear-gradient(var(--fx-ang,90deg),
+      var(--fx-a) 0%, var(--fx-b) var(--fx-bpos,33.33%), var(--fx-c) 66.66%, var(--fx-a) 100%);
+    background-size:300% 100%;background-repeat:no-repeat;
+    -webkit-background-clip:text;background-clip:text;
+    color:transparent;-webkit-text-fill-color:transparent;
+    -webkit-text-stroke:var(--fx-ow,0) var(--fx-oc,transparent);}
+  /* one line per effect, because the animation shorthand replaces rather than adds and the
+     colour slide has to be restated alongside it */
+  .fx-e-wave    .fx-l{animation:fx-wave var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-bounce  .fx-l{animation:fx-bnc var(--fx-e,2.6s) cubic-bezier(.3,.7,.4,1) infinite;}
+  .fx-e-twinkle .fx-l{animation:fx-twk var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-type    .fx-l{animation:fx-typ var(--fx-e,2.6s) steps(1,end) infinite;}
+  .fx-e-spell   .fx-l{animation:fx-spl var(--fx-e,2.6s) steps(1,end) infinite;}
+  .fx-e-pop     .fx-l{animation:fx-pop var(--fx-e,2.6s) cubic-bezier(.34,1.56,.64,1) infinite;}
+  .fx-e-glitch  .fx-l{animation:fx-gli var(--fx-e,2.6s) steps(1,end) infinite;}
+  .fx-e-shake   .fx-l{animation:fx-shk var(--fx-e,2.6s) linear infinite;}
+  .fx-e-quake   .fx-l{animation:fx-qk  var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-sway    .fx-l{animation:fx-swy var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-jump    .fx-l{animation:fx-jmp var(--fx-e,2.6s) cubic-bezier(.3,.7,.4,1) infinite;}
+  .fx-e-neon    .fx-l{animation:fx-neo var(--fx-e,2.6s) steps(1,end) infinite;}
+  .fx-e-gather  .fx-l{animation:fx-gth var(--fx-e,2.6s) cubic-bezier(.22,1,.36,1) infinite;}
+  .fx-e-shine   .fx-l{animation:fx-shn var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-stomp   .fx-l{animation:fx-stp var(--fx-e,2.6s) cubic-bezier(.3,1.4,.5,1) infinite;}
+  .fx-e-drift   .fx-l{animation:fx-drf var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-fall    .fx-l{animation:fx-fal var(--fx-e,2.6s) cubic-bezier(.3,.8,.4,1) infinite;}
+  .fx-e-flame   .fx-l{animation:fx-flm var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-drip    .fx-l{animation:fx-drp var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-heartbeat .fx-l{animation:fx-hbt var(--fx-e,2.6s) ease-out infinite;}
+  .fx-e-swirl   .fx-l{animation:fx-swl var(--fx-e,2.6s) linear infinite;}
+  .fx-e-elastic .fx-l{animation:fx-ela var(--fx-e,2.6s) cubic-bezier(.34,1.56,.64,1) infinite;}
+  .fx-e-rise    .fx-l{animation:fx-ris var(--fx-e,2.6s) cubic-bezier(.22,1,.36,1) infinite;}
+  .fx-e-blink   .fx-l{animation:fx-blk var(--fx-e,2.6s) steps(1,end) infinite;}
+  .fx-e-wobble  .fx-l{animation:fx-wob var(--fx-e,2.6s) ease-in-out infinite;}
+  /* neighbours lean opposite ways: the second animation in the list runs backwards */
+  .fx-e-wobble  .fx-l:nth-child(even){animation-direction:normal,reverse;}
+  .fx-e-float   .fx-l{animation:fx-flt var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-bulge   .fx-l{animation:fx-blg var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-flip    .fx-l{animation:fx-flp var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-twirl   .fx-l{animation:fx-twl var(--fx-e,2.6s) cubic-bezier(.22,1,.36,1) infinite;}
+  .fx-e-erase   .fx-l{animation:fx-ers var(--fx-e,2.6s) steps(1,end) infinite;}
+  .fx-e-blur    .fx-l{animation:fx-blr var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-e-chroma  .fx-l{animation:fx-chr var(--fx-e,2.6s) steps(1,end) infinite;}
+
+  @keyframes fx-wave{0%,100%{transform:translateY(0);}50%{transform:translateY(-0.18em);}}
+  @keyframes fx-bnc{0%,55%,100%{transform:translateY(0);}20%{transform:translateY(-0.34em);}
+    36%{transform:translateY(0);}45%{transform:translateY(-0.12em);}}
+  @keyframes fx-twk{0%,100%{opacity:1;}45%{opacity:.12;}}
+  @keyframes fx-typ{0%,4%{opacity:0;}8%,92%{opacity:1;}100%{opacity:0;}}
+  /* one letter alone, then it hides and waits, then the whole word forms and holds. The
+     per-letter delay skews the "forms" moment by a few hundredths, which reads as the word
+     snapping together left to right -- which is what was asked for. */
+  @keyframes fx-spl{0%{opacity:0;}3%{opacity:1;}11%{opacity:1;}13%{opacity:0;}
+    40%{opacity:0;}43%{opacity:1;}90%{opacity:1;}100%{opacity:0;}}
+  @keyframes fx-pop{0%{transform:scale(0);opacity:0;}10%{transform:scale(1.3);opacity:1;}
+    18%{transform:scale(1);}88%{transform:scale(1);opacity:1;}100%{transform:scale(1);opacity:0;}}
+  @keyframes fx-gli{0%,40%{transform:translate(0,0);}
+    42%{transform:translate(-0.09em,0.03em);}44%{transform:translate(0.08em,-0.04em);}
+    46%{transform:translate(-0.06em,-0.02em);}48%{transform:translate(0.05em,0.03em);}
+    50%,100%{transform:translate(0,0);}}
+  @keyframes fx-shk{0%,100%{transform:translate(0,0);}20%{transform:translate(-0.05em,0.03em);}
+    40%{transform:translate(0.05em,-0.03em);}60%{transform:translate(-0.04em,-0.02em);}
+    80%{transform:translate(0.04em,0.02em);}}
+  @keyframes fx-qk{0%,100%{transform:translateY(0);}25%{transform:translateY(-0.08em);}
+    75%{transform:translateY(0.08em);}}
+  @keyframes fx-swy{0%,100%{transform:translateX(0);}25%{transform:translateX(-0.11em);}
+    75%{transform:translateX(0.11em);}}
+  @keyframes fx-jmp{0%,72%,100%{transform:translateY(0);}82%{transform:translateY(-0.5em);}
+    92%{transform:translateY(0);}}
+  @keyframes fx-neo{0%,100%{opacity:1;}6%{opacity:.15;}9%{opacity:1;}
+    52%{opacity:1;}55%{opacity:.1;}57%{opacity:1;}60%{opacity:.4;}62%{opacity:1;}}
+  /* a gloss travelling along the word, one letter behind the last. A filter on a letter is
+     safe now that the letter paints itself -- it was not, before 0.23.2. */
+  @keyframes fx-shn{0%,100%{filter:brightness(1);}6%{filter:brightness(2.6);}
+    18%{filter:brightness(1);}}
+  @keyframes fx-stp{0%{transform:translateY(-0.75em) scale(1.45);opacity:0;}
+    7%{opacity:1;}13%{transform:translateY(0) scale(1);}
+    17%{transform:translateY(0) scale(1.1,0.9);}22%{transform:translateY(0) scale(1);}
+    92%{transform:translateY(0) scale(1);opacity:1;}100%{opacity:0;}}
+  @keyframes fx-drf{0%,100%{transform:translate(0,0);}25%{transform:translate(0.07em,-0.1em);}
+    50%{transform:translate(0.13em,0);}75%{transform:translate(0.07em,0.1em);}}
+  @keyframes fx-fal{0%{transform:translateY(-0.85em) rotate(-14deg);opacity:0;}
+    11%{opacity:1;}38%{transform:translateY(0) rotate(0);}
+    46%{transform:translateY(-0.13em);}55%{transform:translateY(0);}
+    92%{transform:translateY(0);opacity:1;}100%{opacity:0;}}
+  @keyframes fx-flm{0%,100%{transform:translateY(0) scaleY(1);}
+    28%{transform:translateY(-0.07em) scaleY(1.16);}
+    54%{transform:translateY(0.02em) scaleY(0.93);}
+    78%{transform:translateY(-0.04em) scaleY(1.07);}}
+  @keyframes fx-drp{0%,100%{transform:translateY(0) scaleY(1);}
+    44%{transform:translateY(0.15em) scaleY(1.24);}70%{transform:translateY(0.04em) scaleY(0.95);}}
+  @keyframes fx-hbt{0%,100%{transform:scale(1);}11%{transform:scale(1.24);}
+    21%{transform:scale(1);}31%{transform:scale(1.17);}43%{transform:scale(1);}}
+  @keyframes fx-swl{from{transform:rotate(0);}to{transform:rotate(360deg);}}
+  @keyframes fx-ela{0%,100%{transform:scale(1,1);}18%{transform:scale(1.32,0.7);}
+    38%{transform:scale(0.8,1.26);}58%{transform:scale(1.1,0.92);}78%{transform:scale(0.96,1.04);}}
+  @keyframes fx-ris{0%{transform:translateY(0.85em);opacity:0;}13%{opacity:1;}
+    36%{transform:translateY(0);}92%{transform:translateY(0);opacity:1;}100%{opacity:0;}}
+  @keyframes fx-blk{0%,44%{opacity:1;}50%,60%{opacity:0;}66%,100%{opacity:1;}}
+  @keyframes fx-wob{0%,100%{transform:rotate(-10deg);}50%{transform:rotate(10deg);}}
+  @keyframes fx-flt{0%{transform:translateY(0);opacity:1;}
+    52%{transform:translateY(-0.6em);opacity:0;}53%{transform:translateY(0.45em);opacity:0;}
+    100%{transform:translateY(0);opacity:1;}}
+  @keyframes fx-blg{0%,100%{transform:scale(1);}9%{transform:scale(1.5);}24%{transform:scale(1);}}
+  @keyframes fx-flp{0%,100%{transform:rotateY(0);}30%{transform:rotateY(180deg);}
+    60%{transform:rotateY(360deg);}}
+  @keyframes fx-twl{0%{transform:rotate(-200deg) scale(0.15);opacity:0;}15%{opacity:1;}
+    36%{transform:rotate(0) scale(1);}92%{transform:rotate(0) scale(1);opacity:1;}100%{opacity:0;}}
+  /* rubbed out from the END: fxLetters reverses the delay for this one */
+  @keyframes fx-ers{0%,40%{opacity:1;}46%,84%{opacity:0;}90%,100%{opacity:1;}}
+  @keyframes fx-blr{0%{filter:blur(0.15em);opacity:0;}18%{opacity:1;}
+    40%,88%{filter:blur(0);opacity:1;}100%{filter:blur(0.15em);opacity:0;}}
+  /* the red/cyan split. text-shadow still draws from the glyph even though the fill is
+     transparent, so the gradient survives underneath it. */
+  @keyframes fx-chr{0%,38%,58%,100%{text-shadow:none;transform:translate(0,0);}
+    40%{text-shadow:-0.045em 0 #ff0040,0.045em 0 #00e5ff;transform:translate(0.02em,0);}
+    46%{text-shadow:0.05em 0 #ff0040,-0.05em 0 #00e5ff;transform:translate(-0.025em,0);}
+    52%{text-shadow:-0.03em 0 #ff0040,0.03em 0 #00e5ff;transform:translate(0.015em,0);}}
+  /* --dx is written in per letter: how far it starts from the middle of the word */
+  @keyframes fx-gth{0%{transform:translateX(var(--dx,0));opacity:0;}
+    26%{opacity:1;}44%,88%{transform:translateX(0);opacity:1;}
+    100%{transform:translateX(0);opacity:0;}}
+
+  /* ---- the whole name moves. Safe on .fx-wrap, which clips nothing. ---- */
+  .fx-move-pulse{animation:fx-pls var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-move-zoom{animation:fx-zm var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-move-rotate{animation:fx-rot var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-move-tornado{animation:fx-trn var(--fx-e,2.6s) linear infinite;}
+  .fx-move-spin{animation:fx-spn var(--fx-e,2.6s) cubic-bezier(.6,0,.4,1) infinite;}
+  .fx-move-fade{animation:fx-fde var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-move-wheel{animation:fx-whl var(--fx-e,2.6s) cubic-bezier(.3,.9,.4,1) infinite;}
+  .fx-move-sheep{animation:fx-shp var(--fx-e,2.6s) ease-in-out infinite;}
+  .fx-move-breathe{animation:fx-brt var(--fx-e,2.6s) ease-in-out infinite;}
+  /* letter-spacing is inherited, so animating it here moves the letters inside apart */
+  .fx-move-expand{animation:fx-exp var(--fx-e,2.6s) cubic-bezier(.22,1,.36,1) infinite;}
+  .fx-move-converge{animation:fx-cnv var(--fx-e,2.6s) cubic-bezier(.22,1,.36,1) infinite;}
+  @keyframes fx-pls{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.55;transform:scale(1.05);}}
+  @keyframes fx-zm{0%,100%{transform:scale(.92);}50%{transform:scale(1.1);}}
+  @keyframes fx-rot{0%,100%{transform:rotate(-5deg);}50%{transform:rotate(5deg);}}
+  @keyframes fx-trn{from{transform:rotate(0);}to{transform:rotate(360deg);}}
+  @keyframes fx-spn{0%,28%{transform:rotate(0);}58%,100%{transform:rotate(360deg);}}
+  @keyframes fx-fde{0%{opacity:0;}16%,78%{opacity:1;}100%{opacity:0;}}
+  @keyframes fx-brt{0%,100%{transform:scale(0.975);opacity:.5;}50%{transform:scale(1.035);opacity:1;}}
+  @keyframes fx-exp{0%{letter-spacing:-0.07em;opacity:0;}18%{opacity:1;}
+    44%,84%{letter-spacing:0.15em;opacity:1;}100%{letter-spacing:0.34em;opacity:0;}}
+  @keyframes fx-cnv{0%{letter-spacing:0.55em;opacity:0;}20%{opacity:1;}
+    48%,88%{letter-spacing:0.01em;opacity:1;}100%{letter-spacing:0.01em;opacity:0;}}
+  @keyframes fx-whl{0%{transform:translateX(1.8em) rotate(200deg);opacity:0;}
+    24%{transform:translateX(0) rotate(0);opacity:1;}
+    70%{transform:translateX(0) rotate(0);opacity:1;}
+    100%{transform:translateX(-1.8em) rotate(-200deg);opacity:0;}}
+  /* the sheep: in from the right, two hops, out to the left. There is no fence -- a drawn
+     fence inside a name in a 13px list row is not a thing that can be seen. */
+  @keyframes fx-shp{0%{transform:translate(1.4em,0);opacity:0;}
+    12%{opacity:1;}28%{transform:translate(0.5em,-0.55em);}
+    44%{transform:translate(0,0);}60%{transform:translate(-0.5em,-0.55em);}
+    76%{transform:translate(-1em,0);opacity:1;}
+    100%{transform:translate(-1.6em,0);opacity:0;}}
+
+  @media (prefers-reduced-motion: reduce){ .fx-ink,.fx-l,.fx-wrap{animation:none !important;} }
+  /* ---------- the Name Effect screen ---------- */
+  .fx-card{background:var(--surface);border:1.5px solid var(--border);
+    border-radius:var(--radius-md);padding:12px 14px;margin-bottom:10px;}
+  .fx-card-head{display:flex;align-items:center;gap:8px;margin-bottom:2px;}
+  .fx-card-head b{font-size:14px;}
+  .fx-card-blurb{font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;line-height:1.35;}
+  /* Sticky: the card you are using is often 900px below it, and choosing a movement you
+     cannot watch is choosing blind. */
+  .fx-stage{position:sticky;top:var(--fx-top,70px);z-index:6;
+    background:var(--surface-alt);border:1.5px solid var(--border);
+    border-radius:var(--radius-md);padding:20px 14px;text-align:center;margin-bottom:10px;
+    font-size:26px;min-height:74px;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;
+    box-shadow:0 6px 16px -10px rgba(0,0,0,0.6);}
+  .fx-stage-note{font-size:11.5px;color:var(--ink-soft);text-align:center;margin:-4px 0 10px;}
+  /* Scrolled sideways, WITH A VISIBLE BAR. A phone swipes; a mouse cannot, and a hidden
+     scrollbar put three ready-made looks permanently out of reach on the owner's PC. */
+  .fx-strip{display:flex;gap:6px;overflow-x:auto;padding:2px 0 8px;
+    scrollbar-width:thin;scrollbar-color:var(--border) transparent;
+    -webkit-overflow-scrolling:touch;}
+  .fx-strip::-webkit-scrollbar{height:9px;}
+  .fx-strip::-webkit-scrollbar-track{background:transparent;}
+  .fx-strip::-webkit-scrollbar-thumb{background:var(--border);border-radius:99px;}
+  .fx-strip::-webkit-scrollbar-thumb:hover{background:var(--ink-soft);}
+  /* the ready-made looks: wrapped, not a sideways drag. See the note in the 0.23.2 patch. */
+  .fx-wrapstrip{display:flex;flex-wrap:wrap;gap:6px;max-height:230px;overflow-y:auto;
+    overscroll-behavior:contain;padding:2px 2px 4px 0;
+    scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+  .fx-wrapstrip::-webkit-scrollbar{width:10px;}
+  .fx-wrapstrip::-webkit-scrollbar-track{background:transparent;}
+  .fx-wrapstrip::-webkit-scrollbar-thumb{background:var(--border);border-radius:99px;}
+  .fx-wrapstrip::-webkit-scrollbar-thumb:hover{background:var(--ink-soft);}
+  /* overflow:hidden because the chip runs the look's REAL movement, and the entrance ones
+     -- Wheel entrance, Jumping sheep, Stomp, Falling, Gather -- travel more than an em. A
+     chip that let them out would shove its neighbours about. */
+  .fx-chip{flex:none;padding:8px 12px;border-radius:12px;background:var(--surface-alt);
+    border:1.5px solid var(--border);cursor:pointer;font-size:13px;font-weight:700;
+    font-family:inherit;white-space:nowrap;color:var(--ink);
+    overflow:hidden;min-height:37px;display:flex;align-items:center;justify-content:center;gap:2px;}
+  .fx-chip.is-on{border-color:var(--primary);background:var(--primary-soft);}
+  /* No glow on a chip. A filter over animated children re-filters the whole subtree every
+     frame, fifty chips over, for something barely visible at 13px. */
+  .fx-chip .fx-wrap{filter:none !important;}
+  .fx-cat{font-size:11px;color:var(--ink-soft);margin:8px 0 3px;text-transform:uppercase;letter-spacing:.04em;}
+
+  /* the five handles, as chips you tap to open the wheel */
+  /* Five across on the narrowest phone that matters. Measured at 375px: a 58px minimum
+     plus four 8px gaps came to 322 against 313 of container, so (T) wrapped onto a row of
+     its own and stretched full width. 360px Androids are common, so there is room now. */
+  .fx-slots{display:flex;gap:6px;flex-wrap:wrap;}
+  .fx-slot{flex:1;min-width:50px;border:1.5px solid var(--border);border-radius:12px;
+    background:var(--surface-alt);padding:7px 2px 6px;cursor:pointer;font-family:inherit;
+    display:flex;flex-direction:column;align-items:center;gap:5px;}
+  .fx-slot.is-on{border-color:var(--primary);}
+  .fx-slot .swatch{width:30px;height:30px;border-radius:50%;border:2px solid var(--border);
+    background:var(--sw,transparent);}
+  .fx-slot.is-off .swatch{background:
+    repeating-linear-gradient(45deg,var(--border) 0 4px,transparent 4px 8px);}
+  .fx-slot small{font-size:10.5px;color:var(--ink-soft);font-weight:700;}
+
+  /* the wheel screen -- sized so the wheel, the box, the hex and the six greys all fit
+     above the sticky footer on a 375px phone. Measured; they did not before. */
+  .fx-wheel-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:4px 0 6px;}
+  .fx-wheel{position:relative;width:min(66vw,272px);height:min(66vw,272px);border-radius:50%;
+    touch-action:none;cursor:crosshair;
+    background:radial-gradient(circle closest-side,#fff,rgba(255,255,255,0) 100%),
+      conic-gradient(from 0deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00);
+    box-shadow:0 0 0 1.5px var(--border);}
+  .fx-wheel-dim{position:absolute;inset:0;border-radius:50%;background:#000;
+    opacity:var(--dim,0);pointer-events:none;}
+  .fx-sb{position:relative;width:min(66vw,272px);height:94px;border-radius:12px;
+    touch-action:none;cursor:crosshair;box-shadow:0 0 0 1.5px var(--border);
+    background:linear-gradient(to top,#000,rgba(0,0,0,0)),
+      linear-gradient(to right,#fff,var(--hue,#f00));}
+  .fx-grip{position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;
+    border:2.5px solid #fff;box-shadow:0 0 0 1.5px rgba(0,0,0,0.55),0 2px 6px rgba(0,0,0,0.4);
+    background:var(--sw,#fff);pointer-events:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:9.5px;font-weight:800;color:#fff;text-shadow:0 0 3px rgba(0,0,0,0.9);}
+  .fx-grip.is-held{width:30px;height:30px;margin:-15px 0 0 -15px;border-width:3px;font-size:11px;z-index:2;}
+  .fx-neutral-row{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;}
+  .fx-neutral{width:30px;height:30px;border-radius:50%;border:1.5px solid var(--border);
+    background:var(--sw);cursor:pointer;padding:0;}
+  .fx-hex{font-family:var(--font-mono,monospace);font-size:12.5px;color:var(--ink-soft);text-align:center;}
+
+  /* sliders */
+  .fx-slider-row{display:flex;align-items:center;gap:10px;margin:6px 0 2px;}
+  .fx-slider-row label{font-size:12.5px;flex:none;width:76px;color:var(--ink-soft);}
+  .fx-slider-row input[type=range]{flex:1;min-width:0;accent-color:var(--primary);}
+  .fx-slider-row output{font-size:12px;flex:none;width:44px;text-align:right;color:var(--ink-soft);}
+
+  /* the twenty-six */
+  .fx-anim-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px;}
+  .fx-anim-btn{padding:9px 4px;border-radius:12px;background:var(--surface-alt);
+    border:1.5px solid var(--border);cursor:pointer;font-family:inherit;font-size:11.5px;
+    display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink);
+    text-align:center;line-height:1.2;}
+  .fx-anim-btn .glyph{font-size:16px;line-height:1;}
+  .fx-anim-btn.is-on{border-color:var(--primary);background:var(--primary-soft);}
+
+  /* emoji */
+  .fx-emoji-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(40px,1fr));gap:3px;}
+  .fx-emoji-grid .fx-emoji-btn{width:100%;}
+  .fx-emoji-scroll{max-height:250px;overflow-y:auto;overscroll-behavior:contain;
+    border:1px solid var(--border);border-radius:12px;padding:6px;margin-top:6px;
+    scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+  .fx-emoji-scroll::-webkit-scrollbar{width:10px;}
+  .fx-emoji-scroll::-webkit-scrollbar-track{background:transparent;}
+  .fx-emoji-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:99px;}
+  .fx-emoji-scroll::-webkit-scrollbar-thumb:hover{background:var(--ink-soft);}
+
+  /* the two decisions, always reachable without scrolling back */
+  .fx-foot{position:sticky;bottom:0;background:var(--bg);padding:10px 0 calc(8px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--border);margin-top:4px;display:flex;flex-direction:column;gap:6px;z-index:4;}
+  .fx-foot .btn-primary,.fx-foot .btn-secondary{margin:0;}
+  .fx-dot-row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px;}
+  .fx-emoji-row{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 2px;}
+  .fx-emoji-btn{font-size:20px;line-height:1;padding:5px 7px;border-radius:10px;
+    background:var(--surface-alt);border:1.5px solid transparent;cursor:pointer;}
+  .fx-emoji-btn.is-on{border-color:var(--primary);}
+  .fx-where{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+    padding:9px 11px;margin-bottom:6px;border-radius:12px;background:var(--surface-alt);
+    border:1.5px solid transparent;cursor:pointer;}
+  .fx-where.is-on{border-color:var(--primary);}
+  .fx-where .fx-tick{margin-left:auto;opacity:.35;}
+  .fx-where.is-on .fx-tick{opacity:1;}
+  .fx-preview{padding:14px;border-radius:14px;background:var(--surface-alt);
+    text-align:center;font-size:22px;margin-bottom:6px;}
+  .fx-sample-note{font-size:11.5px;color:var(--ink-soft);text-align:center;margin:0 0 8px;}
+  /* The button that turns it on wears the thing it turns on. Describing an animation in
+     words to somebody who has never seen one is how you get nobody switching it on. */
+  /* A paint job ON TOP of btn-secondary, never instead of it: replacing the class took the
+     padding, the height and the corners with it and left a flat strip across the screen. */
+  .fx-cta{background-image:linear-gradient(90deg,#f59e0b,#ec4899,#a855f7,#f59e0b);
+    background-size:300% 100%;animation:fx-cta-slide 5s linear infinite;
+    color:#fff;border-color:transparent;font-weight:700;
+    text-shadow:0 1px 3px rgba(0,0,0,0.45);}
+  /* The same paint whether it says "give this name an effect" or "change the effect". It
+     was only on the first: once an effect was on, the button that changes it went back to
+     looking like every other grey button on the panel, next to a preview that moves. */
+  /* White letters with a black edge drawn round them. The gradient slides underneath, so
+     a letter that reads well over the orange sits on the purple a second later -- the
+     outline is what keeps it readable over all of it. paint-order puts the stroke BEHIND
+     the fill; without it the stroke is drawn centred on the edge and eats the letter. */
+  .fx-cta{-webkit-text-stroke:1.1px #000;paint-order:stroke fill;}
+  /* One box, not four pieces with four margins. The label, the preview and the two
+     buttons are one decision, and now they are drawn as one. */
+  .fx-group{display:flex;flex-direction:column;gap:10px;
+    background:var(--surface);border:1.5px solid var(--border);
+    border-radius:var(--radius-md);padding:14px;margin-bottom:6px;}
+  .fx-group>.setting-label,.fx-group>.fx-preview,.fx-group>.fx-sample-note{margin:0;}
+  /* ---- Winter's own, on top of Order Run's (2026-10-12) ---- */
+  /* a whole screen under another one pauses too: .fx-wrap carries the whole-name moves */
+  .fx-idle .fx-wrap{animation-play-state:paused !important;}
+  @keyframes fx-cta-slide{from{background-position:0 0;}to{background-position:-300% 0;}}
+  /* the preview stays under the screen's own top bar while the cards scroll under it */
+  .fx-ed .fx-stage{top:var(--fx-top,64px);}
+  .fx-find{width:100%;margin-top:8px;}
+  /* this app's every <button> is a wide primary bar; the effect screens' small ones undo just
+     that, at the lowest weight, so their own class rules (Order Run's) still decide the rest */
+  :where(.fx-ed) button:where(:not(.b)){width:auto;margin:0;color:var(--ink);}
+  .fx-where{color:var(--ink);}
+  .fx-group .menu-title{display:flex;align-items:center;gap:6px;}
+  .fx-wheel .fx-grip,.fx-sb .fx-grip{position:absolute;}
+  .fx-ed .fx-foot .b{margin:0;}
+  /* A turning name (Entry rotate, Tornado, Wheel…) reaches half its own width above and below:
+     the boxes that cut what spills out cut it in half (Guile, 2026-10-12). Holding a name with an
+     effect, they let it show — a long one wraps instead of ending in "…" — and the name draws on
+     top of what is next to it. The editor's preview too; its chips stay clipped (Order Run's
+     reason: an entrance would shove the neighbours about). */
+  #who:has(.fx-wrap){overflow:visible;max-width:none}
+  .pill.assign:has(.fx-wrap),.lrow-title:has(.fx-wrap){overflow:visible;white-space:normal}
+  .fx-ed .fx-stage{overflow:visible}
+  .fx-wrap{position:relative;z-index:1}
+  /* a name in a pill or a list keeps the pill's line height */
+  .pill .fx-wrap,.lrow-title .fx-wrap,.tl-what .fx-wrap,.prep-by .fx-wrap{line-height:1;}
+
 </style>
 </head>
 <body>
@@ -1161,6 +1587,7 @@
 <!-- The version and this version's notes, written by tools/build_version.py from
      version.json + CHANGELOG.md. A missing file only means the page says "dev". -->
 <script src="version.js"></script>
+<script src="namefx.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
