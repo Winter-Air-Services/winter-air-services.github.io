@@ -462,6 +462,7 @@ function render(){
   showPubBar();
   if (session && db) hydratePhotos();
   fitQuotes();
+  drawSigPads();   // the signature pad is a fresh canvas after every redraw (47)
 }
 
 /* A redraw never touches a field somebody is typing into, and typed values survive
@@ -784,7 +785,12 @@ const BUILTIN_TYPES = [{key: 'Window', label: 'Window', icon: 'ac-window'}, {key
 // that was drawn first stays as industrial-chiller
 const TYPE_ICONS = ['ac-window', 'ac-split', 'ac-floor', 'ac-cassette', 'chiller', 'freezer', 'washing-machine', 'car-aircon',
   'industrial-chiller', 'fcu', 'solar', 'ducting', 'tire-inflator',   // the owner's 2026-09-30 additions
-  'exhaust-fan', 'water-dispenser', 'cold-room', 'ice-machine'];      // drawn ahead, before he adds them
+  'exhaust-fan', 'water-dispenser', 'cold-room', 'ice-machine',       // drawn ahead, before he adds them
+  // Guile's set, 2026-10-11 (his "HVAC and Safety Icon Grid", cut into 128 px): fire safety,
+  // refrigeration, airflow, water and power
+  'sprinkler', 'smoke-detector', 'fire-alarm-bell', 'fire-extinguisher', 'fire-alarm-panel', 'refrigerator',
+  'display-chiller', 'range-hood', 'air-curtain', 'ceiling-fan', 'stand-fan', 'water-heater', 'water-pump',
+  'generator', 'solar-inverter', 'electrical-panel'];
 let pubTypes = lsGet('ws_types', null);
 const typeRows = () => db && db.types && db.types.length ? db.types : pubTypes && pubTypes.length ? pubTypes : BUILTIN_TYPES;
 const activeTypes = () => typeRows().filter(t => t.active !== false);
@@ -1660,6 +1666,11 @@ function eventRow(e){
     case 'job_carry': return ['⏭️', 'Moved to the next day — not finished', [['Day',   // 41
       before.scheduled_on ? niceDate(before.scheduled_on) : '', after.scheduled_on ? niceDate(after.scheduled_on) : '']], ''];
     case 'job_workphoto': return after.photo ? ['📷', 'Work photo added', null, by] : ['🗑️', 'Work photo taken off', null, by];   // 39
+    case 'job_sign': {   // 47: the customer's signature — taken by whom
+      const paper = after.paper === 'quote' ? 'quotation' : 'billing statement';
+      return after.removed ? ['🗑️', 'Signature taken off the ' + paper, null, by]
+        : ['✍️', (before && before.at ? 'Signed the ' + paper + ' again' : 'Signed the ' + paper) + (after.name ? ' — ' + after.name : ''), null, by];
+    }
     case 'job_assign': {   // 39: the names as they were at the time
       if (Array.isArray(after.crew)){   // 46: the crew, head first
         const nm = x => x.name || 'someone', c = after.crew, who = (c.find(x => x.uid === after.who) || {}).name
@@ -1925,16 +1936,16 @@ function drawInbox(){
 /* A saved quotation is the price agreed; without one, the price list's (25). */
 const bookingPrice = b => b.quote && b.quote.total != null ? Number(b.quote.total) : unitsPrice(unitsOf(b), officePrice);
 function bookingRow(b){
-  return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="booking" data-id="${esc(b.id)}" data-stamp="${esc(b.updated_at || '')}">
-    <div class="avatar">${esc(initials(b.full_name))}</div>
+  return `<div class="lrow has-steps" role="button" tabindex="0" data-act="open" data-kind="booking" data-id="${esc(b.id)}" data-stamp="${esc(b.updated_at || '')}">
+    ${typeAvatar((unitsOf(b)[0] || {}).type, 0, b.full_name)}
     <div class="lrow-main">
       <div class="lrow-title">${newDot(b.status === 'new' && !b.seen_at)}${esc(b.full_name)}${b.source === 'office' ? ' ' + pill('kind', 'By phone') : ''}${unsentPill(b.id)}</div>
       <div class="lrow-sub">${esc(unitsLine(unitsOf(b)))} — ${esc(svcList(b.services))}</div>
       <div class="lrow-sub">${esc(b.preferred_on ? 'Wants ' + shortDate(b.preferred_on) + ' ' + slotShort(b.slot) : 'No day yet')} · ${esc(b.address)}</div>
-      ${miniSteps({booking: b, job: Object.values(db.jobs).find(j => j.booking_id === b.id) || null})}
     </div>
     <div class="lrow-side">${pill(b.status, b.ref)}<span class="lrow-price">${esc(bookingPrice(b) != null ? peso0(bookingPrice(b)) : '₱ ?')}</span>
       <span class="lrow-time">${esc(timeAgo(b.created_at))}</span></div>
+    ${miniSteps({booking: b, job: Object.values(db.jobs).find(j => j.booking_id === b.id) || null})}
   </div>`;
 }
 function panelBooking(p){
@@ -2094,11 +2105,13 @@ function staffName(uid){
   return uid === (session && session.uid) ? (db.profile && db.profile.display_name) || 'you' : 'someone no longer here';
 }
 // on the field's screen and the office's; a helper's (or the admin's View as Helper) only reads
-const canAssign = j => !!j && isOpenJob(j) && ['admin', 'technician'].includes(viewRole());
+// a done job too (Guile, 2026-10-11, 47): who really worked on it can be seen and put right
+const canAssign = j => !!j && j.status !== 'cancelled' && ['admin', 'technician'].includes(viewRole());
 function assignBadge(j, big){
   if (!db || !j || !(db.role === 'admin' || inField(db.role)) || !db.staff) return '';   // a server from before 39
   const who = j.assigned_uid, can = canAssign(j);
   if (!who && !can) return '';
+  if (!who && !big && !isOpenJob(j)) return '';   // a done row with nobody: no "＋ Assign" on every old job — it is on the job
   const warn = assignUnseen(j), n = crewOf(j).length;
   // the head by name, the helpers counted: "Assigned to Ana +2" (Guile, 2026-10-11)
   const text = who ? (warn ? '⚠️ ' : '') + 'Assigned to ' + staffName(who) + (n > 1 ? ' +' + (n - 1) : '') : '＋ Assign';
@@ -2151,7 +2164,7 @@ function panelAssign(p){
 }
 function jobRow(j){
   const c = jobCust(j), ab = assignBadge(j);
-  return `<div class="lrow${ab ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+  return `<div class="lrow has-steps${ab ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
     <div class="lrow-when">${j.scheduled_on
       ? `<b>${esc(slotShort(j.slot))}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
       : '<b>—</b><span>no date</span>'}</div>
@@ -2159,10 +2172,10 @@ function jobRow(j){
       <div class="lrow-title">${assignUnseen(j) ? '<span class="warn-mark" title="Assigned to you">⚠️</span>' : newDot(jobUnseen(j))}${esc(c.full_name || '…')}${unsentPill(j.id)}</div>
       <div class="lrow-sub">${esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — '))}</div>
       <div class="lrow-sub">${esc(place(c))}</div>
-      ${miniSteps({booking: bookingOfJob(j), job: j})}
     </div>
     ${ab ? `<div class="lrow-assign">${ab}</div>` : ''}
     <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null && seesPrice() ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
+    ${miniSteps({booking: bookingOfJob(j), job: j})}
   </div>`;
 }
 function panelJob(p){
@@ -2193,13 +2206,19 @@ function panelJob(p){
   const billRow = menuRow('jobbill', j.id, '🧾', 'Billing statement', j.billing
     ? 'Saved ' + niceDate(manilaDay(j.billing.saved_at)) + ' · ' + peso(j.billing.total)
     : tech ? 'Print or send it to the customer' : j.status === 'cancelled' ? 'Nothing to bill' : 'From the quotation — add extra work, print or send');
-  const menu = helper ? '' : tech ? (techPrice ?`<div class="menu">${billRow}</div>` : '') : `<div class="menu">
+  // the quotation and the billing statement side by side, the customer's signature under them
+  // (Guile, 2026-10-11); a technician reads both while prices are shown and takes the signature
+  const quoteRow = open || j.quote ? menuRow('jobquote', j.id, '📄', 'Quotation', j.quote
+    ? 'Saved ' + niceDate(manilaDay(j.quote.saved_at)) + ' · ' + peso(j.quote.total)
+    : 'Make one to send — its total becomes the price') : '';
+  const signRow = canSign(j) ? menuRow('jobsign', j.id, '✍️', 'Customer’s signature', signWords(j)) : '';
+  const techMenu = (techPrice && j.quote ? quoteRow : '') + (techPrice ? billRow : '') + signRow;
+  const menu = helper ? '' : tech ? (techMenu ? `<div class="menu">${techMenu}</div>` : '') : `<div class="menu">
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
-      ${open || j.quote ? menuRow('jobquote', j.id, '📄', 'Quotation', j.quote
-        ? 'Saved ' + niceDate(manilaDay(j.quote.saved_at)) + ' · ' + peso(j.quote.total)
-        : 'Make one to send — its total becomes the price') : ''}
-      ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'Customer’s history', c.full_name) : ''}
+      ${quoteRow}
       ${billRow}
+      ${signRow}
+      ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'History & Checkup', c.full_name) : ''}
       ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
       ${menuRow('deljob', j.id, '🗑️', 'Delete this job', (bookingOfJob(j) ? 'With its booking. ' : '') + 'You will be warned first.', 'is-danger')}
     </div>`;
@@ -2237,7 +2256,6 @@ function panelJob(p){
     <div class="sec">🛒 Aircons &amp; appliances</div>
     ${cartHtml('view', unitsOf(j), {pf: helper || (tech && !techPrice) ? null : officePrice, missing: 'Not every service has a price yet',
       saved: helper ? null : id => savedOf(j.customer_id, id)})}
-    ${tech ? '' : listPriceNote(j)}
     ${prepHtml(j)}
     ${helper ? '' : `<div class="menu">${menuRow('jobstatus', j.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}</div>`}
     ${menu}
@@ -2319,20 +2337,8 @@ function wantNote(j){
       : `No day yet. They asked for <b>${esc(day)}</b>.`}</span>${w.past ? ''
       : `<button type="button" class="b" data-act="usewant" data-id="${esc(j.id)}">Use their day</button>`}</div>`;
 }
-/* The job's price is frozen; the list above adds up today's aircons. When the two differ —
-   an aircon added to a running job, say — the screen showed ₱1,800 and ₱3,300 with nothing
-   between them (scenario test, 2026-09-27). Say so, and offer the list's in one tap. */
-const listNow = j => unitsPrice(unitsOf(j), officePrice);
-function listPriceNote(j){
-  const l = listNow(j);
-  if (l == null || !['booked', 'scheduled', 'in_progress', 'done'].includes(j.status)) return '';
-  if (j.price != null && Math.abs(Number(j.price) - l) < 0.01) return '';
-  // one span: .inline-note is a flex row, and each <b> on its own became a spaced-out piece
-  return `<div class="inline-note"><span>${j.price != null
-      ? `The price list says <b>${esc(peso(l))}</b> for these aircons; this job’s price is <b>${esc(peso(j.price))}</b>.`
-      : `This job has no price yet; the price list says <b>${esc(peso(l))}</b>.`}</span>
-    <button type="button" class="b" data-act="uselist" data-id="${esc(j.id)}">Use ${esc(peso(l))}</button></div>`;
-}
+/* No "the price list says …" note under the aircons (Guile, 2026-10-11): the price comes from
+   the quotation or the billing statement now, so the list's sum beside it was only a warning. */
 function panelSchedule(p){
   const j = db.jobs[p.id];
   if (!j) return {title: 'Schedule', body: empty('This job is no longer on this phone.')};
@@ -2475,10 +2481,14 @@ function markWords(text, marks){
    saved yet, their initials. The count when they have more than one. */
 function custAvatar(c){
   const us = liveUnits(c);
-  if (!us.length) return `<div class="avatar cu">${esc(initials(c.full_name))}</div>`;
   const n = {}; us.forEach(x => { n[x.type] = (n[x.type] || 0) + 1; });
-  const top = Object.keys(n).sort((a, b) => n[b] - n[a])[0];
-  return `<div class="avatar pic"><img src="${esc(typePic(top))}" alt="${esc(typeLabel(top))}">${us.length > 1 ? `<span class="avatar-n">${us.length}</span>` : ''}</div>`;
+  return typeAvatar(Object.keys(n).sort((a, b) => n[b] - n[a])[0], us.length, c.full_name);
+}
+/* An appliance's picture in the round avatar, the count when more than one; no appliance, the
+   initials. A customer's row and an Inbox row (its FIRST appliance — Guile, 2026-10-11). */
+function typeAvatar(type, count, name){
+  if (!type) return `<div class="avatar cu">${esc(initials(name))}</div>`;
+  return `<div class="avatar pic"><img src="${esc(typePic(type))}" alt="${esc(typeLabel(type))}">${count > 1 ? `<span class="avatar-n">${count}</span>` : ''}</div>`;
 }
 // 433-5680 · Victorias Public Market · Split ×2 · Window — one line; a long address gives way
 // first, so the appliances stay in sight (measured at 375 px: they were cut off)
@@ -2808,12 +2818,9 @@ function panelEditJob(p){
     // the price stay the office's (the server refuses them too)
     if (db.role === 'technician') Object.assign(p, {_lockWho: true, _noWhen: true, _want: null});
   }
-  // asked again on every draw: adding an aircon moves the list's total, never the job's price
-  const l = unitsPrice(p.units || [], officePrice);
+  // adding an aircon never moves the job's price (no price-list warning, 2026-10-11)
   p._priceNote = j.price == null || db.role === 'technician' ? ''
-    : l != null && Math.abs(l - Number(j.price)) >= 0.01
-      ? 'The job’s price stays ' + peso(j.price) + ' — the price list says ' + peso(l) + ' for these aircons. After saving, tap “Use ' + peso(l) + '” on the job, or Change the price.'
-      : 'The price stays ' + peso(j.price) + ' — change it with Change the price.';
+    : 'The price stays ' + peso(j.price) + ' — change it with Change the price.';
   return {title: 'Edit the job', sub: p.full_name || 'Job', body: heroFormHtml('edit', p, bookFormHtml('panel', p))};
 }
 
@@ -2991,15 +2998,19 @@ function ppStyle(p){
   p.cx = g.cx; p.cy = g.cy;
   return `width:${(g.W * 100).toFixed(3)}%;left:${((.5 - g.cx * g.W) * 100).toFixed(3)}%;top:${((.5 - g.cy * g.H) * 100).toFixed(3)}%`;
 }
+/* The same crop screen takes the customer's signature on paper (47): the frame, then the ink. */
 function panelPpcrop(p){
-  if (!p.url) return {title: 'Crop the photo', body: empty('Pick the photo again — Admin → Page photos.')};
-  return {title: 'Crop the photo', sub: 'Page photo', info: 'pagephotos', body: `
+  const sig = p.for === 'sig', title = sig ? 'Crop the signature' : 'Crop the photo';
+  if (!p.url) return {title, body: empty(sig ? 'Take the picture again.' : 'Pick the photo again — Admin → Page photos.')};
+  return {title, sub: sig ? SIG_PAPERS[String(p.sig).split('|')[1]] || '' : 'Page photo', info: sig ? '' : 'pagephotos', body: `
     <div class="pp-crop" data-ppcrop><img src="${esc(p.url)}" alt="" draggable="false" style="${ppStyle(p)}">
-      <div class="pp-phone"><span>Phones show this part</span></div></div>
+      ${sig ? '' : '<div class="pp-phone"><span>Phones show this part</span></div>'}</div>
     <label class="pp-zoom">Zoom <input type="range" min="1" max="4" step="0.01" value="${esc(p.zoom)}" data-ppzoom aria-label="Zoom"></label>
-    <p class="hint">Drag the photo to move it. Computers show the whole frame; phones show the dashed part — keep what matters inside it.</p>
-    <div class="stack">${pagePhotoBusy ? '<span class="b wide" aria-busy="true">Sending photo…</span>'
-      : '<button type="button" class="b primary wide" data-act="ppuse">Use this photo</button>'}</div>`};
+    <p class="hint">${sig ? 'Drag and zoom until the signature fills the frame. The white paper turns see-through; only the ink is kept.'
+      : 'Drag the photo to move it. Computers show the whole frame; phones show the dashed part — keep what matters inside it.'}</p>
+    ${sig ? `<label>Printed name <input data-pf="name" maxlength="80" value="${esc(p.name || '')}" autocomplete="off"></label>` : ''}
+    <div class="stack">${pagePhotoBusy ? `<span class="b wide" aria-busy="true">${sig ? 'Making the signature…' : 'Sending photo…'}</span>`
+      : `<button type="button" class="b primary wide" data-act="ppuse">${sig ? 'Use this signature' : 'Use this photo'}</button>`}</div>`};
 }
 let ppDrag = null;
 document.addEventListener('pointerdown', e => {
@@ -3039,6 +3050,14 @@ async function usePagePhoto(){
     const cv = document.createElement('canvas');
     cv.width = Math.max(2, Math.min(1600, Math.round(sw))); cv.height = Math.round(cv.width / 2);
     cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    if (p.for === 'sig'){   // the customer's signature (47): the frame → the ink alone → the job
+      const blob = await new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('could not make the picture')), 'image/png'));
+      const png = await inkOnly(blob), [jid, paper] = String(p.sig).split('|');
+      URL.revokeObjectURL(p.url); p.url = null;
+      closePanel();
+      saveCustSig(jid, paper, png, p.name);
+      return;
+    }
     const jpeg = q => new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('could not make the picture')), 'image/jpeg', q));
     // the bucket takes 600 KB at most; a busy photo goes out a little softer
     let blob = await jpeg(.72);
@@ -3307,8 +3326,9 @@ function quoteHtml(q){
     <p class="qt-p">Sincerely yours,</p>
     ${sig ? `<img class="qt-sig" src="${esc(sig)}" alt="">` : '<div class="qt-sigspace"></div>'}
     <div>${esc(s.signer || '')}</div>${s.title ? `<div>${esc(s.title)}</div>` : ''}<div>${esc(s.name)}</div>
-    <div class="qt-conf"><div>Conforme: <span class="ln" style="width:320px"></span><small>Signature over Printed Name &amp; Title</small></div>
-      <div>Date: <span class="ln" style="width:170px"></span></div></div>
+    <div class="qt-conf"><div>Conforme: <span class="ln${q.csig ? ' signed' : ''}" style="width:320px">${q.csig
+        ? `<img class="csig" src="${esc(q.csig.png)}" alt="">${esc(q.csig.name || '')}` : ''}</span><small>Signature over Printed Name &amp; Title</small></div>
+      <div>Date: ${q.csig ? `<span class="ln signed" style="width:170px">${esc(qtLongDate(manilaDay(q.csig.at)))}</span>` : '<span class="ln" style="width:170px"></span>'}</div></div>
   </div>`;
 }
 /* The Billing Statement (the owner via Guile, 2026-10-10, 45), replacing the receipt — a
@@ -3327,8 +3347,10 @@ function billHtml(q){
       <table class="bl-facts"><tr><td>Statement No.</td><td><b>${esc(m.no || '')}</b></td></tr>
         <tr><td>Date</td><td>${esc(qtLongDate(q.date))}</td></tr>
         ${m.service ? `<tr><td>Service date</td><td>${esc(m.service)}</td></tr>` : ''}
-        ${m.units ? `<tr><td>Units</td><td>${esc(m.units)}</td></tr>` : ''}</table>
+        ${m.units && !(m.aircons || []).length ? `<tr><td>Units</td><td>${esc(m.units)}</td></tr>` : ''}</table>
     </div>
+    ${(m.aircons || []).length ? `<div class="bl-units"><div class="bl-label">Appliances</div>${m.aircons.map(a =>
+      `<div>${esc(a.name)}${a.meta ? ' — ' + esc(a.meta) : ''}${a.serial ? `<small>S/N ${esc(a.serial)}</small>` : ''}</div>`).join('')}</div>` : ''}
     <div class="qt-subj">SUBJECT: ${esc(q.subject || '')}</div>
     ${q.salutation ? `<div class="qt-dear">${esc(q.salutation)}</div>` : ''}
     <p class="qt-p">Please find below the statement of charges for the labor, materials and services rendered by ${esc(SHOP_SHORT)}:</p>
@@ -3346,21 +3368,240 @@ function billHtml(q){
       <div><div>Prepared by:</div>
         ${sig ? `<img class="qt-sig" src="${esc(sig)}" alt="">` : '<div class="qt-sigspace"></div>'}
         <div class="bl-ln"><b>${esc(s.signer || '')}</b></div>${s.title ? `<div>${esc(s.title)}</div>` : ''}<div>${esc(s.name)}</div></div>
-      <div><div>Received by:</div><div class="qt-sigspace"></div>
-        <div class="bl-ln">Signature over Printed Name</div><div>Date: <span class="ln" style="width:150px"></span></div></div>
+      <div><div>Received by:</div>${q.csig ? `<img class="qt-sig" src="${esc(q.csig.png)}" alt="">` : '<div class="qt-sigspace"></div>'}
+        <div class="bl-ln">${q.csig && q.csig.name ? `<b>${esc(q.csig.name)}</b><br>` : ''}Signature over Printed Name</div>
+        <div>Date: ${q.csig ? esc(qtLongDate(manilaDay(q.csig.at))) : '<span class="ln" style="width:150px"></span>'}</div></div>
     </div>
     <div class="bl-foot">Thank you for choosing ${esc(SHOP_NAME)}. This is not an official receipt.</div>
   </div>`;
 }
 /* What the job says on its billing statement, at the moment it is drawn. */
 function billMeta(j){
-  const c = jobCust(j), b = bookingOfJob(j), set = (db && db.settings) || {};
+  const c = jobCust(j), b = bookingOfJob(j), set = (db && db.settings) || {}, us = unitsOf(j), names = unitNames(us);
   return {no: b ? b.ref : j.booking_ref || 'J-' + String(j.id).slice(0, 6).toUpperCase(),
-    name: c.full_name || '', contact: c.contact || '', units: unitsLine(unitsOf(j)) || '',
+    name: c.full_name || '', contact: c.contact || '', units: unitsLine(us) || '',
+    // each appliance: brand · model, the serial small (Guile, 2026-10-11)
+    aircons: us.map((u, i) => ({name: names[i], meta: [u.brand, u.model].map(x => String(x || '').trim()).filter(Boolean).join(' · '),
+      serial: String(u.serial || '').trim()})),
     service: j.scheduled_on ? niceDate(j.scheduled_on) + ', ' + slotWord(j.slot) : '',
     paid: j.paid_method ? PAY[j.paid_method] + (j.paid_at ? ', ' + qtLongDate(manilaDay(j.paid_at)) : '') : '',
     gcash: set.gcash_number ? {number: set.gcash_number, name: set.gcash_name || ''} : null};
 }
+
+/* ---------------------------------------------------------------- the customer's signature (47)
+   Guile, 2026-10-11: the customer signs the job's billing statement and its quotation — drawn
+   on the phone, or a picture of it on white paper, cropped. The office or a technician takes
+   it, a helper never. pull carries only the stamp (j.signed); the picture comes once from
+   job_signatures and is kept on this phone, the last 30 (~20 KB each). */
+const SIG_PAPERS = {quote: 'Quotation', bill: 'Billing statement'};
+let csigs = null;
+const csigAsking = {};
+const csigStore = () => csigs || (csigs = lsGet('ws_csig', {}));
+function csigKeep(key, v){
+  const s = csigStore();
+  s[key] = {...v, kept: Date.now()};
+  Object.keys(s).sort((a, b) => s[b].kept - s[a].kept).slice(30).forEach(k => { delete s[k]; });
+  lsSet('ws_csig', s);
+}
+const canSign = j => !!j && !!db && ['admin', 'technician'].includes(db.role) && viewRole() !== 'helper' && j.status !== 'cancelled';
+// the quotation only when the job has one; a technician is told so by has_quote (47)
+const signPapers = j => (j.quote || j.has_quote ? ['quote'] : []).concat(['bill']);
+const signWords = j => signPapers(j).map(k => SIG_PAPERS[k] + (j.signed && j.signed[k] ? ' ✓ signed' : ' — not signed')).join(' · ');
+function custSig(j, paper){
+  const st = j && j.signed && j.signed[paper];
+  if (!st || !db || !['admin', 'technician'].includes(db.role)) return null;
+  const have = csigStore()[j.id + '|' + paper];
+  if (have && have.at === st.at) return have;
+  if (online && session && !csigAsking[j.id]){
+    csigAsking[j.id] = true;
+    rpc('job_signatures', {p_job: j.id}).then(r => {
+      Object.keys(SIG_PAPERS).forEach(k => {
+        const now = j.signed && j.signed[k];
+        if (r && r[k] && now) csigKeep(j.id + '|' + k, {at: now.at, png: r[k].png, name: r[k].name || ''});
+      });
+      render();
+    }).catch(() => {}).finally(() => { setTimeout(() => { delete csigAsking[j.id]; }, 30000); });
+  }
+  return null;
+}
+function saveCustSig(jid, paper, png, name){
+  const j = db.jobs[jid]; if (!j) return;
+  const at = new Date().toISOString(), nm = String(name || '').trim().slice(0, 80);
+  csigKeep(jid + '|' + paper, {at, png, name: nm});
+  write('sign_job', {p_job: jid, p_paper: paper, p_png: png, p_name: nm || null},
+    'Signature on the ' + SIG_PAPERS[paper].toLowerCase() + ' — ' + (jobCust(j).full_name || 'job'), [jid],
+    () => { j.signed = {...(j.signed || {}), [paper]: {at, name: nm || null}}; });
+  toast('Signature saved on the ' + SIG_PAPERS[paper].toLowerCase() + '.');
+}
+function panelJobSign(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Customer’s signature', body: empty('This job is no longer on this phone.')};
+  if (!canSign(j)) return {title: 'Customer’s signature', body: empty('This job is cancelled: there is nothing to sign.')};
+  return {title: 'Customer’s signature', sub: jobCust(j).full_name || '', body: signPapers(j).map(k => {
+    const st = j.signed && j.signed[k], s = st ? custSig(j, k) : null, id = esc(j.id + '|' + k);
+    return `<div class="sec">${k === 'bill' ? '🧾' : '📄'} ${esc(SIG_PAPERS[k])}</div><div class="card">
+      ${st ? `<div class="sig-show">${s ? `<img src="${esc(s.png)}" alt="The customer’s signature">`
+          : `<span class="muted">${online ? 'Getting the signature…' : 'The signature shows when there is signal.'}</span>`}</div>
+        <p class="hint">Signed ${esc(niceDate(manilaDay(st.at)))}${st.name ? ' · ' + esc(st.name) : ''}${unsentPill(j.id)}</p>`
+        : '<p class="hint">Not signed yet.</p>'}
+      <div class="actions"><button type="button" class="b${st ? '' : ' primary'}" data-act="open" data-kind="sigdraw" data-id="${id}">✍️ ${st ? 'Sign again' : 'Draw signature'}</button>
+        <label class="b">📷 Picture on white paper<input type="file" accept="image/*" data-csig-photo="${id}" hidden></label>
+        ${st && p.ask !== k ? `<button type="button" class="b danger" data-act="sigoff" data-id="${id}">Take it off</button>` : ''}</div>
+      ${st && p.ask === k ? `<div class="inline-note"><span>Take the customer’s signature off the ${esc(SIG_PAPERS[k].toLowerCase())}?</span>
+        <button type="button" class="b danger" data-act="sigoffyes" data-id="${id}">Take it off</button>
+        <button type="button" class="b" data-act="sigoffno">Keep it</button></div>` : ''}</div>`;
+  }).join('') + '<p class="hint">It goes on the paper: Print, Send as PDF and Send as Word.</p>'};
+}
+
+/* The pen, as on Guile's Mi Canvas (measured on his Pad 6: the fountain pen at Stroke width 15,
+   Sensitivity 50%, Tip size 2, Opacity 100%): Fountain or Ballpoint, the four sliders, kept
+   on this phone. A stylus gives its real pressure; a finger has none, so Sensitivity reads the
+   speed instead — fast is thin, as ink runs. The fountain's nib is held at 45°: thin along it,
+   full across it; Tip size is how thin its edge is (5 = round). */
+const PEN0 = {pen: 'fountain', width: 6, sens: 50, tip: 2, opacity: 100};
+const penSet = {...PEN0, ...lsGet('ws_pen', {})};
+const PEN_RANGE = {width: [1, 30, 'Stroke width', v => v], sens: [0, 100, 'Sensitivity', v => v + '%'],
+  tip: [1, 5, 'Tip size', v => v], opacity: [10, 100, 'Opacity', v => v + '%']};
+const SIG_H = 0.4;   // the pad is 5 : 2; points are kept as fractions of its width
+function panelSigDraw(p){
+  const [jid, paper] = String(p.id || '').split('|'), j = db.jobs[jid];
+  if (!j || !SIG_PAPERS[paper]) return {title: 'Signature', body: empty('This job is no longer on this phone.')};
+  if (!p.strokes){ p.strokes = []; p.name = (j.signed && j.signed[paper] && j.signed[paper].name) || jobCust(j).full_name || ''; }
+  const none = p.strokes.length ? '' : ' disabled';
+  return {title: 'Draw the signature', sub: SIG_PAPERS[paper] + ' · ' + (jobCust(j).full_name || ''), body: `
+    <div class="sig-pad"><canvas data-sigpad aria-label="Sign here"></canvas><div class="sig-line"><span>✕</span></div></div>
+    <div class="actions sig-tools">
+      ${['fountain', 'ballpoint'].map(k => `<button type="button" class="b${penSet.pen === k ? ' primary' : ''}" data-act="sigpen" data-v="${k}">${k === 'fountain' ? '🖋️ Fountain pen' : '🖊️ Ballpoint'}</button>`).join('')}
+      <button type="button" class="b" data-act="sigundo"${none}>↶ Undo</button>
+      <button type="button" class="b" data-act="sigclear"${none}>Clear</button></div>
+    <div class="sig-sliders">${Object.entries(PEN_RANGE).filter(([k]) => k !== 'tip' || penSet.pen === 'fountain').map(([k, [lo, hi, label, show]]) => `<label class="sig-slider">
+      <span>${label}</span><b data-penshow="${k}">${esc(show(penSet[k]))}</b>
+      <input type="range" min="${lo}" max="${hi}" step="1" value="${penSet[k]}" data-pen="${k}" aria-label="${label}"></label>`).join('')}</div>
+    <label>Printed name <input data-pf="name" maxlength="80" value="${esc(p.name)}" autocomplete="off"></label>
+    <div class="stack"><button type="button" class="b primary wide" data-act="sigsave"${none}>Save the signature</button></div>`};
+}
+// one stroke at full ink on a layer of its own, then laid down at its opacity: the overlapping
+// dabs of a see-through pen would otherwise show as dark beads
+let sigLayer = null;
+function sigStroke(cx, s, W){
+  const H = cx.canvas.height;
+  if (!sigLayer) sigLayer = document.createElement('canvas');
+  if (sigLayer.width !== cx.canvas.width || sigLayer.height !== H){ sigLayer.width = cx.canvas.width; sigLayer.height = H; }
+  const L = sigLayer.getContext('2d');
+  L.clearRect(0, 0, sigLayer.width, H);
+  L.fillStyle = L.strokeStyle = '#111'; L.lineCap = L.lineJoin = 'round';
+  const pts = s.pts.map(q => ({x: q.x * W, y: q.y * W, w: Math.max(0.6, q.w * W)}));
+  const mid = (a, b) => ({x: (a.x + b.x) / 2, y: (a.y + b.y) / 2});
+  if (pts.length === 1){ L.beginPath(); L.arc(pts[0].x, pts[0].y, pts[0].w / 2, 0, Math.PI * 2); L.fill(); }
+  for (let i = 1; i < pts.length; i++){
+    const a = pts[i - 1], b = pts[i], m0 = i > 1 ? mid(pts[i - 2], a) : a, m1 = i === pts.length - 1 ? b : mid(a, b);
+    L.lineWidth = (a.w + b.w) / 2;
+    L.beginPath(); L.moveTo(m0.x, m0.y); L.quadraticCurveTo(a.x, a.y, m1.x, m1.y); L.stroke();
+  }
+  cx.globalAlpha = (s.opacity || 100) / 100; cx.drawImage(sigLayer, 0, 0); cx.globalAlpha = 1;
+}
+function sigPaint(cv, strokes){
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  if (!r.width) return;
+  const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
+  const cx = cv.getContext('2d');
+  cx.clearRect(0, 0, W, H);
+  strokes.forEach(s => sigStroke(cx, s, W));
+}
+function drawSigPads(){
+  const p = topPanel(), cv = p && p.kind === 'sigdraw' && $('[data-sigpad]');
+  if (cv) sigPaint(cv, p.strokes || []);
+}
+/* The strokes → a PNG of the ink alone, cropped to it: ~10–30 KB; the server takes 120 KB. */
+function sigPng(strokes){
+  for (const side of [900, 600, 420]){
+    const cv = document.createElement('canvas'); cv.width = side; cv.height = Math.round(side * SIG_H);
+    const cx = cv.getContext('2d');
+    strokes.forEach(s => sigStroke(cx, s, side));
+    const px = cx.getImageData(0, 0, cv.width, cv.height).data;
+    let x0 = cv.width, y0 = cv.height, x1 = -1, y1 = -1;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 8){ const k = (i - 3) / 4, x = k % cv.width, y = (k - x) / cv.width;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) return '';
+    const pad = 6, k = Math.min(1, 600 / (x1 - x0 + 1 + pad * 2)), out = document.createElement('canvas');
+    out.width = Math.round((x1 - x0 + 1 + pad * 2) * k); out.height = Math.round((y1 - y0 + 1 + pad * 2) * k);
+    out.getContext('2d').drawImage(cv, x0 - pad, y0 - pad, x1 - x0 + 1 + pad * 2, y1 - y0 + 1 + pad * 2, 0, 0, out.width, out.height);
+    const png = out.toDataURL('image/png');
+    if (png.length <= 110000) return png;
+  }
+  return '';
+}
+let sigDrag = null;
+function sigAdd(e, cv){
+  const r = cv.getBoundingClientRect(), d = sigDrag;
+  if (!r.width || !d) return;
+  const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.width, t = e.timeStamp, prev = d.last;
+  if (prev && Math.hypot(x - prev.x, y - prev.y) < 0.002) return;
+  let pr;   // 0 light … 1 hard
+  if (e.pointerType === 'pen' && e.pressure > 0) pr = e.pressure;
+  else if (!prev) pr = 0.5;
+  else pr = Math.max(0, Math.min(1, 1 - Math.hypot(x - prev.x, y - prev.y) / Math.max(1, t - prev.t) * 1000 / 3));   // 3 pad widths a second = lightest
+  const sens = penSet.sens / 100, fountain = d.s.pen === 'fountain';
+  let f = 1 + sens * (pr - 0.5) * (fountain ? 1.6 : 0.4);
+  if (fountain && prev){ const edge = penSet.tip / 5;
+    f *= edge + (1 - edge) * Math.abs(Math.sin(Math.atan2(y - prev.y, x - prev.x) - Math.PI / 4)); }
+  if (fountain && d.s.pts.length < 4) f *= 0.55 + d.s.pts.length * 0.15;   // the ink starts thin
+  let w = Math.max(0.0015, penSet.width / 400 * f);
+  if (d.w != null) w = d.w * 0.6 + w * 0.4;   // no sudden steps
+  d.w = w; d.last = {x, y, t};
+  d.s.pts.push({x: Math.round(x * 1e4) / 1e4, y: Math.round(y * 1e4) / 1e4, w: Math.round(w * 1e5) / 1e5});
+}
+document.addEventListener('pointerdown', e => {
+  const cv = e.target.closest && e.target.closest('[data-sigpad]'), p = topPanel();
+  if (!cv || !p || p.kind !== 'sigdraw') return;
+  e.preventDefault();
+  // a slider or the name box keeping the focus would hold every redraw back (keepTyping)
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  const s = {pen: penSet.pen, opacity: penSet.opacity, pts: []};
+  p.strokes.push(s);
+  sigDrag = {id: e.pointerId, s, last: null, w: null};
+  sigAdd(e, cv); sigPaint(cv, p.strokes);
+});
+let sigFrame = 0;
+document.addEventListener('pointermove', e => {
+  const p = topPanel();
+  if (!sigDrag || e.pointerId !== sigDrag.id || !p || p.kind !== 'sigdraw') return;
+  const cv = $('[data-sigpad]'); if (!cv) return;   // the pad on screen NOW: a sync redraw replaces it
+  const all = e.getCoalescedEvents ? e.getCoalescedEvents() : [];   // the in-between points, when the phone gives them
+  (all.length ? all : [e]).forEach(ev => sigAdd(ev, cv));
+  if (!sigFrame) sigFrame = requestAnimationFrame(() => { sigFrame = 0; const c = $('[data-sigpad]'); if (c) sigPaint(c, p.strokes); });
+});
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => {
+  if (!sigDrag || e.pointerId !== sigDrag.id) return;
+  const pts = sigDrag.s.pts;
+  if (sigDrag.s.pen === 'fountain') pts.slice(-3).forEach((q, i) => { q.w = Math.round(q.w * [0.85, 0.65, 0.45][i + 3 - Math.min(3, pts.length)] * 1e5) / 1e5; });   // and ends thin
+  sigDrag = null;
+  render();   // Undo, Clear and Save wake up
+}));
+document.addEventListener('input', e => {
+  const t = e.target, k = t.dataset && t.dataset.pen;
+  if (!k || !PEN_RANGE[k]) return;
+  penSet[k] = Number(t.value);
+  lsSet('ws_pen', penSet);
+  const b = $(`[data-penshow="${k}"]`); if (b) b.textContent = PEN_RANGE[k][3](penSet[k]);
+});
+// a picture of the signature on white paper: first the crop screen, then the ink alone (inkOnly)
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-csig-photo]')) return;
+  const file = inp.files && inp.files[0], id = inp.dataset.csigPhoto;
+  inp.value = '';
+  if (!file || !session) return;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImg(url), [jid, paper] = id.split('|'), j = db.jobs[jid];
+    openPanel({kind: 'ppcrop', for: 'sig', sig: id, url, w: img.naturalWidth, h: img.naturalHeight, zoom: 1, cx: .5, cy: .5,
+      name: (j && j.signed && j.signed[paper] && j.signed[paper].name) || (j ? jobCust(j).full_name : '') || ''});
+  } catch (err) { URL.revokeObjectURL(url); notice('That file is not a picture.', true); }
+});
+
 let qtFull = false;
 const quoteBox = (q, id) => `<div class="qt-wrap${qtFull ? ' full' : ''}"${id ? ` id="${id}"` : ''} data-act="qtzoom"
   title="${qtFull ? 'Tap to fit the screen' : 'Tap to see it full size'}"><div class="qt-scale">${quoteHtml(q)}</div></div>`;
@@ -3407,7 +3648,8 @@ function quoteSrc(p){
     const j = db.jobs[p.id]; if (!j) return null;
     const b = bookingOfJob(j), c = jobCust(j);
     return {row: j, job: true, name: c.full_name || '', ref: b ? b.ref : 'J-' + String(j.id).slice(0, 6).toUpperCase(),
-      open: ['booked', 'scheduled', 'in_progress'].includes(j.status), state: (STATUS_LABEL[j.status] || j.status).toLowerCase(),
+      // a technician reads it (47, with prices shown); only the office changes it
+      open: db.role === 'admin' && ['booked', 'scheduled', 'in_progress'].includes(j.status), state: (STATUS_LABEL[j.status] || j.status).toLowerCase(),
       saved: j.quote, start: j.quote || (b && b.quote) || null, address: c.address || '', units: unitsOf(j),
       fn: 'save_job_quote', arg: 'p_job', field: 'quote', word: 'quotation', title: 'Quotation'};
   }
@@ -3435,7 +3677,8 @@ function quoteStart(src){
     note: set.quote_note != null ? set.quote_note : QUOTE_NOTE, lines};
 }
 /* The page as drawn: the typed copy, and for a billing statement what the job says. */
-const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMeta(src.row) : null});
+const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMeta(src.row) : null,
+  csig: src && src.job ? custSig(src.row, src.bill ? 'bill' : 'quote') : null});   // the customer's signature (47)
 /* Typed → drawn: a price that cannot be read shows as — (and Save refuses it). */
 const quoteView = pq => ({...pq, lines: pq.lines.map(l => ({text: l.text,
   qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price)}))});
@@ -3470,7 +3713,7 @@ function panelQuote(p){
   if (!open) return {title: src.title, sub, info: bill ? 'bill' : 'quote', body: `
     ${quoteBox(docView(p, src), 'quotePreview')}
     <p class="hint">${said}. ${bill ? (db.role === 'admin' ? 'The job is cancelled: nothing to bill.' : 'Only the office changes it.')
-      : `The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.`}</p>
+      : db.role !== 'admin' ? 'Only the office changes it.' : `The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.`}</p>
     <div class="stack">${printBtn}</div>`};
   const tot = qtTotal(quoteView(p.q).lines);
   const priceHint = src.job ? `<p class="hint">Saving it makes the job’s price its TOTAL${src.row.price != null ? ' (now ' + esc(peso(src.row.price)) + ')' : ''}.</p>` : '';
@@ -3518,6 +3761,7 @@ function billSample(){
   const q = quoteSample();
   return {...q, subject: q.subject, lines: q.lines.concat([{text: 'ZZ Copper pipe, per foot (extra work)', qty: 10, price: 150}]),
     bill: {no: 'WA-0000', name: 'ZZ Sample Customer', contact: '0999 000 0000', units: '2 Split', service: niceDate(manilaDate(0)) + ', morning',
+           aircons: [{name: 'Split #1', meta: 'ZZ Brand · ZZ-25', serial: 'ZZ0000001'}, {name: 'Window #1', meta: 'ZZ Brand', serial: ''}],
            paid: '', gcash: (db.settings || {}).gcash_number ? {number: db.settings.gcash_number, name: db.settings.gcash_name || ''} : null}};
 }
 function drawBillSample(){
@@ -3691,7 +3935,9 @@ async function docxPic(src){   // {data, w, h} or null — a missing picture lea
 }
 async function quoteDocx(q){
   const s = quoteShop(), sigSrc = quoteSig(), total = qtTotal(q.lines);
-  const [logo, qr, sig] = await Promise.all([docxPic('img/winter-air-logo.png'), docxPic('img/quote-qr.png'), sigSrc ? docxPic(sigSrc) : null]);
+  const [logo, qr, sig, csig] = await Promise.all([docxPic('img/winter-air-logo.png'), docxPic('img/quote-qr.png'), sigSrc ? docxPic(sigSrc) : null,
+    q.csig ? docxPic(q.csig.png) : null]);   // the customer's (47)
+  const signedOn = q.csig ? qtLongDate(manilaDay(q.csig.at)) : '';
   const x = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const EMU = 914400, pics = [];
   const pic = (p, inchH, maxW) => {
@@ -3750,7 +3996,10 @@ async function quoteDocx(q){
     half([P('BILL TO', {b: true, sz: 18, after: 20}), P(m.name, {b: true, after: 0}),
           ...String(q.to_address || '').split('\n').filter(t => t.trim()).map(t => P(t, {after: 0})), m.contact ? P(m.contact, {after: 0}) : ''].join(''),
          [P('Statement No.: ' + m.no, {b: true, jc: 'right', after: 0}), P('Date: ' + longDate(q.date), {jc: 'right', after: 0}),
-          m.service ? P('Service date: ' + m.service, {jc: 'right', after: 0}) : '', m.units ? P('Units: ' + m.units, {jc: 'right', after: 0}) : ''].join('')),
+          m.service ? P('Service date: ' + m.service, {jc: 'right', after: 0}) : '',
+          m.units && !(m.aircons || []).length ? P('Units: ' + m.units, {jc: 'right', after: 0}) : ''].join('')),
+    ...((m.aircons || []).length ? [P('APPLIANCES', {b: true, sz: 18, after: 20})].concat(m.aircons.map(a =>
+      para(run(a.name + (a.meta ? ' — ' + a.meta : ''), {sz: 20}) + (a.serial ? run('    S/N ' + a.serial, {sz: 16}) : ''), {after: 0}))) : []),
     P(''), P('SUBJECT: ' + (q.subject || ''), {b: true}), q.salutation ? P(q.salutation) : '',
     P('Please find below the statement of charges for the labor, materials and services rendered by ' + SHOP_SHORT + ':', {jc: 'both'}),
     billItems, P(''),
@@ -3759,8 +4008,9 @@ async function quoteDocx(q){
     P(''),
     half([P('Prepared by:', {after: 0}), sig ? para(pic(sig, 0.6, 2.2), {after: 0}) : P('') + P(''),
           P(s.signer || '', {b: true, after: 0}), s.title ? P(s.title, {after: 0}) : '', P(s.name, {after: 0})].join(''),
-         [P('Received by:', {after: 0}), P('') + P(''), P('________________________________', {after: 0}),
-          P('Signature over Printed Name', {sz: 18, after: 120}), P('Date: ____________________', {after: 0})].join('')),
+         [P('Received by:', {after: 0}), csig ? para(pic(csig, 0.6, 2.2), {after: 0}) : P('') + P(''),
+          csig && q.csig.name ? P(q.csig.name, {b: true, after: 0}) : '', P('________________________________', {after: 0}),
+          P('Signature over Printed Name', {sz: 18, after: 120}), P('Date: ' + (csig ? signedOn : '____________________'), {after: 0})].join('')),
     P(''), P('Thank you for choosing ' + s.name + '. This is not an official receipt.', {sz: 18, jc: 'center'})].join('')
   : [head, P(''), P(longDate(q.date)),
     ...String(q.to_address || '').split('\n').filter(t => t.trim()).map((t, i, a) => P(t, {after: i === a.length - 1 ? 120 : 0})),
@@ -3772,8 +4022,9 @@ async function quoteDocx(q){
     P('Should you find the above agreement acceptable, we have provided a space below for your valued signature. This will then serve as our contract.', {jc: 'both'}),
     P('Sincerely yours,'), sig ? para(pic(sig, 0.6, 2.2), {after: 0}) : P('') + P(''),
     P(s.signer || '', {b: true, after: 0}), s.title ? P(s.title, {after: 0}) : '', P(s.name, {after: 360}),
+    ...(csig ? [para(pic(csig, 0.6, 2.4), {after: 0, ind: 1100}), q.csig.name ? P(q.csig.name, {b: true, ind: 1100, after: 0}) : ''] : []),
     P('Conforme: ________________________________________', {after: 0}), P('Signature over Printed Name & Title', {sz: 18, ind: 1100}),
-    P('Date: ________________________')].join('');
+    P('Date: ' + (csig ? signedOn : '________________________'))].join('');
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1000" w:bottom="1000" w:left="1000" w:header="500" w:footer="500" w:gutter="0"/></w:sectPr></w:body></w:document>`;
@@ -4874,7 +5125,8 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
   deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
-  assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField};   // 39, 43, 44
+  assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField,   // 39, 43, 44
+  jobsign: panelJobSign, sigdraw: panelSigDraw};   // 47
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
@@ -5587,11 +5839,27 @@ const ACTIONS = {
       });
     closePanel();
   },
-  uselist: id => {
-    const j = db.jobs[id]; if (!j) return;
-    const v = listNow(j); if (v == null) return;
-    write('set_job_price', {p_job: id, p_price: v, p_decided_at: null}, 'Price ' + peso(v), [id], () => { j.price = v; });
-    toast('Price set to ' + peso(v) + ', the price list’s.');
+  // ---- the customer's signature (47)
+  sigpen: (id, el) => { penSet.pen = el.dataset.v === 'ballpoint' ? 'ballpoint' : 'fountain'; lsSet('ws_pen', penSet); render(); },
+  sigundo: () => { const p = topPanel(); if (p && p.kind === 'sigdraw' && p.strokes){ p.strokes.pop(); render(); } },
+  sigclear: () => { const p = topPanel(); if (p && p.kind === 'sigdraw'){ p.strokes = []; render(); } },
+  sigsave: () => {
+    const p = topPanel(); if (!p || p.kind !== 'sigdraw' || !(p.strokes || []).length) return;
+    const png = sigPng(p.strokes);
+    if (!png){ toast('Nothing to save — sign in the white box first.', true); return; }
+    const [jid, paper] = String(p.id).split('|');
+    closePanel();
+    saveCustSig(jid, paper, png, p.name);
+  },
+  sigoff: id => { const p = topPanel(); if (p && p.kind === 'jobsign'){ p.ask = String(id).split('|')[1]; render(); } },   // asks first
+  sigoffno: () => { const p = topPanel(); if (p){ p.ask = null; render(); } },
+  sigoffyes: id => {
+    const [jid, paper] = String(id).split('|'), j = db.jobs[jid], p = topPanel();
+    if (p) p.ask = null;
+    if (!j || !SIG_PAPERS[paper]) return;
+    write('sign_job', {p_job: jid, p_paper: paper, p_png: null, p_name: null},
+      'Signature taken off the ' + SIG_PAPERS[paper].toLowerCase() + ' — ' + (jobCust(j).full_name || 'job'), [jid],
+      () => { const s = {...(j.signed || {})}; delete s[paper]; j.signed = s; });
   },
   mapopen: (id, el) => showMapChoice(el.dataset.href, el.dataset.waze, !!el.dataset.pinned, el.dataset.landmark),
   onway: id => {   // idea 1 (19)

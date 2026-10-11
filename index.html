@@ -89,6 +89,18 @@
   .pp-phone{position:absolute;top:0;bottom:0;left:18.75%;width:62.5%;border:2px dashed rgba(255,255,255,.95);
     outline:1px solid rgba(0,0,0,.35);pointer-events:none}
   .pp-phone span{position:absolute;left:6px;bottom:6px;font-size:11.5px;font-weight:600;color:#fff;background:rgba(0,0,0,.5);padding:2px 7px;border-radius:6px}
+  /* the customer's signature (47): a white pad like paper, in both themes, its line and ✕ */
+  .sig-pad{position:relative;aspect-ratio:5/2;max-width:640px;background:#fff;border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden}
+  .sig-pad canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair;z-index:1}
+  .sig-line{position:absolute;left:6%;right:6%;bottom:26%;border-bottom:1.5px solid #9aa4b2}
+  .sig-line span{position:absolute;left:0;bottom:2px;color:#9aa4b2;font-size:18px;line-height:1}
+  .sig-tools{margin-top:10px}
+  .sig-sliders{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 16px;margin:6px 0 10px}
+  .sig-slider{display:grid;grid-template-columns:1fr auto;align-items:center;gap:0 8px;margin:0;font-size:13px}
+  .sig-slider b{font-size:13px}
+  .sig-slider input{grid-column:1 / -1;width:100%}
+  .sig-show{background:#fff;border-radius:var(--radius-sm);padding:8px;min-height:60px;display:flex;align-items:center;justify-content:center}
+  .sig-show img{max-width:100%;max-height:120px}
   .pp-zoom{margin-top:12px}
   .pp-zoom input{width:100%}
   .hero-text{color:#fff;margin-bottom:18px}
@@ -281,6 +293,10 @@
     .lrow.has-assign{flex-wrap:nowrap}
     .lrow-assign{order:0;flex:0 1 auto;max-width:44%;align-self:flex-start}
   }
+  /* The thin bars: a line of their own, the row's whole width, last — beside the badge and the
+     pills they were 246–365 px on the same 628 px row (Guile, 2026-10-11) */
+  .lrow.has-steps, .lrow.has-steps.has-assign{flex-wrap:wrap;row-gap:8px}
+  .lrow > .mini-steps{order:9;flex:0 0 100%;margin-top:0}
   .warn-mark{margin-right:4px}
   .tech-new.warn{background:var(--warn-bg);color:var(--warn)}
   .menu-row.pick.on{background:var(--primary-soft)}
@@ -503,6 +519,12 @@
   .bl-facts{border-collapse:collapse;align-self:start}
   .bl-facts td{padding:0 0 2px 12px;vertical-align:top}
   .bl-facts td:first-child{padding-left:0;white-space:nowrap}
+  /* each appliance, one line; the serial small beside it (2026-10-11) */
+  .bl-units{margin-top:12px;font-size:13px;line-height:1.35}
+  .bl-units small{font-size:11px;color:#444;margin-left:8px}
+  /* the customer's signature (47) sits ON the Conforme line, the printed name under it */
+  .qt-conf .ln.signed{position:relative;text-align:center;font-size:13.5px}
+  .qt-conf .csig{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);height:62px;width:auto;max-width:300px;object-fit:contain}
   .bl-paid{margin-top:10px;font-weight:700;font-size:16px}
   .bl-gcash{font-size:13.5px}
   .bl-sign{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-top:34px}
