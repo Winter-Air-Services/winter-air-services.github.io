@@ -288,7 +288,16 @@
   /* a phone: its own line under the row, beneath Not paid / Scheduled — inline it left the name
      80 px at 375 (measured 2026-10-10); a wide screen: beside them, as Guile drew it */
   .lrow.has-assign{flex-wrap:wrap;row-gap:6px}
-  .lrow-assign{order:5;flex:0 0 100%;min-width:0;display:flex;justify-content:flex-end}
+  .lrow-assign{order:5;flex:0 0 100%;min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:6px}
+  /* the job's appliances, left of the badge (Guile, 2026-10-11): on a phone at the start of the
+     badge's own line, on a wide screen just before the badge */
+  .lrow-icons{display:flex;gap:4px;flex:none;margin-right:auto}
+  .unit-ico{position:relative;flex:none;width:28px;height:28px;border-radius:8px;background:var(--surface-alt);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center}
+  .unit-ico img{width:22px;height:22px;object-fit:contain}
+  .unit-ico i{position:absolute;right:-5px;bottom:-5px;min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:var(--primary);color:#fff;
+    font-style:normal;font-size:10px;font-weight:700;line-height:15px;text-align:center}
+  .unit-more{align-self:center;font-size:12px;font-weight:700;color:var(--ink-soft)}
   @media (min-width:600px){
     .lrow.has-assign{flex-wrap:nowrap}
     .lrow-assign{order:0;flex:0 1 auto;max-width:44%;align-self:flex-start}

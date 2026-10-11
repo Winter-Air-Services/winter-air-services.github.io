@@ -2162,9 +2162,16 @@ function panelAssign(p){
       ${sel.length ? `<button type="button" class="b wide" data-act="crewclear" data-id="${esc(j.id)}">Clear — no assign</button>` : ''}</div>` : ''}
     <p class="hint">Everyone still sees every job. Its history says who was put on it, and by whom.</p>`};
 }
+/* The job's appliances as small pictures, each type once with its count; four at most. */
+function unitIcons(units){
+  const n = {}, order = [];
+  units.forEach(u => { const t = u.type || ''; if (!(t in n)){ n[t] = 0; order.push(t); } n[t]++; });
+  return order.slice(0, 4).map(t => `<span class="unit-ico" title="${esc(typeLabel(t) + (n[t] > 1 ? ' ×' + n[t] : ''))}"><img src="${esc(typePic(t))}" alt="${esc(typeLabel(t))}">${n[t] > 1 ? `<i>${n[t]}</i>` : ''}</span>`).join('')
+    + (order.length > 4 ? `<span class="unit-more">+${order.length - 4}</span>` : '');
+}
 function jobRow(j){
-  const c = jobCust(j), ab = assignBadge(j);
-  return `<div class="lrow has-steps${ab ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
+  const c = jobCust(j), ab = assignBadge(j), icons = unitIcons(unitsOf(j));
+  return `<div class="lrow has-steps${ab || icons ? ' has-assign' : ''}" role="button" tabindex="0" data-act="open" data-kind="job" data-id="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
     <div class="lrow-when">${j.scheduled_on
       ? `<b>${esc(slotShort(j.slot))}</b><span>${esc(shortDate(j.scheduled_on))}</span>`
       : '<b>—</b><span>no date</span>'}</div>
@@ -2173,7 +2180,7 @@ function jobRow(j){
       <div class="lrow-sub">${esc([unitsLine(unitsOf(j)), svcList(j.services)].filter(Boolean).join(' — '))}</div>
       <div class="lrow-sub">${esc(place(c))}</div>
     </div>
-    ${ab ? `<div class="lrow-assign">${ab}</div>` : ''}
+    ${ab || icons ? `<div class="lrow-assign">${icons ? `<span class="lrow-icons">${icons}</span>` : ''}${ab}</div>` : ''}
     <div class="lrow-side">${paidPill(j)}${statusPill(j.status)}${j.price != null && seesPrice() ? `<span class="lrow-price">${esc(peso0(j.price))}</span>` : ''}</div>
     ${miniSteps({booking: bookingOfJob(j), job: j})}
   </div>`;

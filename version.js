@@ -8,7 +8,7 @@ window.WS_BUILD = {
   "**🧾 Appliances on the billing statement.** Each one with its brand and model, and the serial number in small letters.",
   "**👥 The crew of a finished job.** Open \"Assigned to\" on a done or paid job to see who worked on it, and change it — a technician who forgot his helper can add him after.",
   "**📊 The blue bars are the same length on every row**, assigned or not, in the Inbox and in Jobs.",
-  "**🖼️ Inbox rows show the picture of the first appliance booked** instead of initials.",
+  "**🖼️ Inbox rows show the picture of the first appliance booked** instead of initials, and every job row shows its appliances' pictures beside \"Assign\".",
   "**📄 Quotation and Billing statement sit together** on a job; \"Customer's history\" is now \"History & Checkup\". The yellow \"the price list says…\" note is gone.",
   "**🔥 16 new appliance pictures** to choose from: sprinkler, smoke detector, fire alarm, fire extinguisher, refrigerator, display chiller, range hood, fans, water heater, water pump, generator, solar inverter, electrical panel and more."
  ],
