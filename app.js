@@ -2733,13 +2733,53 @@ function followupHtml(){
         <button type="button" class="b" data-act="followup" data-id="${esc(j.id)}" data-v="A problem — a visit booked" data-book="1">A problem — book a visit</button></div>
     </div>`; }).join('')}</div>`;
 }
+/* Check-ups in three (Guile, 2026-10-11): Due — the calls to make now; Coming — every regular
+   check still ahead, by date, under its month; No regular check — the customers without one
+   (never set, or turned Off: both are saved as no plan), so the owner can give them one. */
+function checkupGroups(){
+  const today = manilaDate(0), coming = [], none = [];
+  for (const c of Object.values(db.customers)){
+    if (c.full_name === '(removed)') continue;
+    const k = checkupOf(c);
+    if (!k) none.push(c);
+    else if (k.due > today || k.busy) coming.push({c, ...k});
+  }
+  // the newest last job first — the likeliest to want a regular check; no job yet last
+  const last = new Map(none.map(c => { const j = jobsOf(c.id).filter(j => j.status === 'done' && j.done_at).sort(byDoneDesc)[0]; return [c.id, j ? j.done_at : '']; }));
+  none.sort((a, b) => last.get(b.id).localeCompare(last.get(a.id)) || String(a.full_name).localeCompare(String(b.full_name)));
+  return {due: checkups(), coming: coming.sort((a, b) => a.due.localeCompare(b.due)), none, last};
+}
 function drawCheckups(){
-  const list = checkups(), today = manilaDate(0);
-  const planned = Object.values(db.customers).filter(c => c.check_every && c.check_next).length;
-  return followupHtml() + (followups().length ? '<div class="sec">📅 Check-ups due</div>' : '') +
-    (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.')) +
-    `<p class="count" style="margin-top:10px">${planned ? planned + ' customer' + (planned === 1 ? ' has' : 's have') + ' a regular check.'
-      : 'Nobody has a regular check yet.'} Set one on the customer: Customers → tap them → 📅 Regular check.</p>`;
+  const g = checkupGroups(), view = ['due', 'coming', 'none'].includes(ui.ck) ? ui.ck : 'due';
+  const tabs = chips('ckview', [['due', 'Due', g.due.length + followups().length], ['coming', 'Coming', g.coming.length],
+    ['none', 'No regular check', g.none.length]], view);
+  if (view === 'coming'){
+    const months = [];   // [['2026-12', [k, …]], …], already in date order
+    g.coming.forEach(k => { const m = k.due.slice(0, 7); if (!months.length || months[months.length - 1][0] !== m) months.push([m, []]); months[months.length - 1][1].push(k); });
+    const word = m => new Date(m + '-01T00:00:00Z').toLocaleDateString('en-PH', {month: 'long', year: 'numeric', timeZone: 'UTC'});
+    return tabs + (months.length ? months.map(([m, ks]) => `<div class="sec">${esc(word(m))} · ${ks.length}</div><div class="list">${ks.map(k =>
+      ckRow(k.c, '📅 Check ' + everyWord(k.every) + (k.busy ? ' · job booked' : ''), shortDate(k.due))).join('')}</div>`).join('')
+      : empty('Nobody has a regular check yet.'));
+  }
+  if (view === 'none'){
+    const lastWord = c => { const d = g.last.get(c.id); return d ? 'Last job ' + shortDate(manilaDay(d)) + ' · ' + daysAgo(manilaDay(d)) : 'No job yet'; };
+    return tabs + '<p class="hint">Tap a customer, then 📅 Regular check, to start one.</p>' +
+      (g.none.length ? `<div class="list">${g.none.map(c => ckRow(c, lastWord(c))).join('')}</div>` : empty('Every customer has a regular check.'));
+  }
+  const list = g.due;
+  return tabs + followupHtml() + (followups().length ? '<div class="sec">📅 Check-ups due</div>' : '') +
+    (list.length ? `<div class="list">${list.map(checkupRow).join('')}</div>` : empty('Nobody is due for a check-up call.'));
+}
+/* A customer on a Check-ups list: the customer row's picture and line (ui.md, Reuse), what
+   their check says, and the date on the right. Tap opens the customer, where 📅 Regular check is. */
+function ckRow(c, line, side){
+  return `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="customer" data-id="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
+    ${custAvatar(c)}
+    <div class="lrow-main"><div class="lrow-title">${esc(c.full_name)}${unsentPill(c.id)}</div>
+      <div class="lrow-sub">${esc(line)}</div>
+      <div class="lrow-sub cs">${custSub(c)}</div></div>
+    ${side ? `<div class="lrow-side"><span class="lrow-price">${esc(side)}</span></div>` : ''}
+  </div>`;
 }
 function checkupRow(k){
   const {c, last} = k, doneDay = last ? manilaDay(last.done_at) : null;
@@ -5609,6 +5649,7 @@ const ACTIONS = {
   inbox: (id, el) => { ui.inbox = el.dataset.v; saveUi(); render(); },
   day: (id, el) => { ui.day = el.dataset.v; saveUi(); render(); },
   techday: (id, el) => { ui.techDay = el.dataset.v; saveUi(); render(); },
+  ckview: (id, el) => { ui.ck = el.dataset.v; saveUi(); render(); },
   gostat: (id, el) => {
     if (el.dataset.tab === 'inbox') ui.inbox = el.dataset.v || 'new';
     if (el.dataset.tab === 'jobs') ui.day = el.dataset.v || 'today';
