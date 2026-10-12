@@ -338,6 +338,14 @@
   .work-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:6px 0 4px}
   .work-cell{display:block;margin:0;padding:0;border:0;border-radius:var(--radius-sm);overflow:hidden;aspect-ratio:1;background:var(--surface-alt);min-height:0;width:auto}
   .work-thumb{display:block;width:100%;height:100%;object-fit:cover}
+  .cust-pics{margin:0 0 10px}
+  .cust-pics .work-grid{margin:0}
+  /* 53: the booking form's pictures, before they are sent */
+  .bk-pics{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 8px}
+  .bk-pic{position:relative;width:88px;height:88px;border-radius:var(--radius-sm);overflow:hidden;background:var(--surface-alt)}
+  .bk-pic img{display:block;width:100%;height:100%;object-fit:cover}
+  .bk-pic-x{position:absolute;top:4px;right:4px;width:28px;height:28px;min-height:0;padding:0;border:0;border-radius:50%;
+    background:rgba(0,0,0,.6);color:#fff;font-size:18px;line-height:28px;text-align:center}
   .done-ask{font-size:18px;font-weight:700;margin:4px 0 2px}
   .b.grey{background:var(--surface-alt);color:var(--ink-soft);border-color:var(--border)}
   #viewer{position:fixed;inset:0;z-index:200;background:#000;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}

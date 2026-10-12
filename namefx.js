@@ -550,10 +550,13 @@ function fxMemberHtml(t){
    preview stays pinned at the top; Apply stays pinned at the bottom. */
 const fxCard = (icon, title, blurb, inner) => `<div class="fx-card"><div class="fx-card-head">${icon} <b>${esc(title)}</b></div>
   ${blurb ? `<div class="fx-card-blurb">${esc(blurb)}</div>` : ''}${inner}</div>`;
-const fxLabel = id => { const t = (db.team || {})[id] || {}; return t.display_name || (t.email || '').split('@')[0] || 'Name'; };
+// the person: the office's Users list, or — your own, from Settings (53) — the shop's people list
+const fxPerson = id => (db.team || {})[id]
+  || (id === (session && session.uid) && (db.staff || []).filter(x => x.id === id).map(s => ({display_name: s.name, name_fx: s.fx}))[0]) || null;
+const fxLabel = id => { const t = fxPerson(id) || {}; return t.display_name || (t.email || '').split('@')[0] || 'Name'; };
 function fxDraftOf(p){
   if (!p.draft){
-    const t = (db.team || {})[p.id] || {};
+    const t = fxPerson(p.id) || {};
     p.had = !!fxClean(t.name_fx);
     p.draft = p.had ? JSON.parse(JSON.stringify(fxClean(t.name_fx))) : fxDefaultDraft();
   }
@@ -616,7 +619,7 @@ function fxRestHtml(p){
     </div>`;
 }
 function panelNameFx(p){
-  if (!db.team || !db.team[p.id]) return {title: 'Name effect', body: '<div class="cart-empty">This person is no longer on this phone.</div>'};
+  if (!fxPerson(p.id)) return {title: 'Name effect', body: '<div class="cart-empty">This person is no longer on this phone.</div>'};
   const d = fxDraftOf(p);
   return {title: 'Name effect', sub: fxLabel(p.id), body: `<div class="fx-ed" data-fxed="${esc(p.id)}">
     <div class="fx-stage" data-fxstage>${fxPreview(fxLabel(p.id), d)}</div>
@@ -636,10 +639,10 @@ function fxRedraw(root, p, restToo = true){
   if (sc) sc.scrollTop = at;
 }
 function fxSave(id, fx){
-  const t = db.team[id]; if (!t) return;
+  const t = fxPerson(id); if (!t) return;
   const send = fx ? cleanFx(fx) : null;
   write('set_name_fx', {p_user: id, p_fx: send}, (send ? 'Name effect — ' : 'Name effect off — ') + (t.display_name || t.email || ''), [id], db => {
-    if (db.team[id]) db.team[id].name_fx = send;
+    if (db.team && db.team[id]) db.team[id].name_fx = send;
     const s = (db.staff || []).find(x => x.id === id); if (s) s.fx = send;
   });
   toast(send ? 'Effect saved — the shop sees it.' : 'Effect turned off — a plain name again, on every phone.');
@@ -790,7 +793,7 @@ document.addEventListener('input', e => {
 // app.js merges these into its own tables
 window.FX_PANELS = {namefx: panelNameFx, fxwheel: panelFxWheel};
 window.FX_ACTIONS = {
-  namefx: id => { if (db.team[id]) openPanel({kind: 'namefx', id}); },
-  namefxoff: (id, el) => { if (db.team[id] && confirmTwice(el, 'Tap again to turn it off')) fxSave(id, null); },
+  namefx: id => { if (fxPerson(id)) openPanel({kind: 'namefx', id}); },
+  namefxoff: (id, el) => { if (fxPerson(id) && confirmTwice(el, 'Tap again to turn it off')) fxSave(id, null); },
   fxshow: (id, el) => { try { localStorage.setItem('ws_fx_off', el.dataset.v === 'off' ? '1' : '0'); } catch (_){} render(); },
 };

@@ -168,7 +168,7 @@ let lastChangeAt = null;   // when a pull last brought something (R5)
 const dbKey = () => 'ws_db_' + session.uid;
 const qKey  = () => 'ws_queue_' + session.uid;
 const nKey  = () => 'ws_notices_' + session.uid;
-const DB_SHAPE = 46;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew)
+const DB_SHAPE = 53;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew, 53: customers.photos, bookings.photo_count)
 function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}}; }
 /* docs/rules/sync.md: when what the server sends changes shape, bump this, so every phone
    takes one full fresh copy instead of keeping rows that predate the change. 2026-09-26:
@@ -271,6 +271,7 @@ async function flush(){
     await pull();
     sweepWorkPhotos();   // 39
     reportHaves(); fetchMissingPhotos();   // 46
+    moveBookingPics();   // 53
     carryOver();         // 41
   } finally {
     flushing = false;
@@ -337,6 +338,12 @@ async function pull(){
     workList(before.jobs[row.id]).forEach(w => { if (!now.has(w.path)) dropKept(w.path); });
   }
   for (const id of res.removed_jobs || []) if (!busy.has(id) && db.jobs[id]) workList(db.jobs[id]).forEach(w => dropKept(w.path));
+  // 53: a customer's picture taken off, or a deleted customer's, leave this phone too
+  const picsGone = (was, row) => { if (!was || !row || !Array.isArray(row.photos)) return;
+    const now = new Set(row.photos.map(w => w.path)); custPicList(was).forEach(w => { if (!now.has(w.path)) dropKept(w.path); }); };
+  for (const row of res.customers || []) if (!busy.has(row.id)) picsGone(before.customers[row.id], row);
+  for (const row of res.jobs || []) if (!busy.has(row.id) && before.jobs[row.id]) picsGone(before.jobs[row.id].customer, row.customer);
+  for (const id of res.removed_customers || []) if (!busy.has(id) && db.customers[id]) custPicList(db.customers[id]).forEach(w => dropKept(w.path));
   for (const k of ['bookings', 'customers', 'jobs'])
     for (const row of res[k] || []) if (!busy.has(row.id)) db[k][row.id] = row;
   for (const row of res.team || []) db.team[row.id] = row;
@@ -953,7 +960,8 @@ const INFO = {
   textauto: ['Send texts by themselves', 'The phone with "This phone sends the texts" on sends them, at your times, even with the app closed — never the same text twice. A job is texted from the time this is turned on; jobs scheduled before then are not.\n\nThe reminders are written each time the app is open on that phone: a job cancelled on another phone after that can still get one. Open the app once in the evening and it is up to date.\n\nOff: nothing is sent unless you press 💬 Text on a job.'],
   slotcap: ['Most jobs a morning or afternoon', 'Counts the jobs on that day and time, and the bookings still waiting for it. When it is full, the booking page tells the customer to choose the afternoon or another day. — means no limit. Book a job (a call you take) is never refused.'],
   namefx: ['Name effect', 'A decoration on this person’s name — colours, a glow, an outline, an emoji and the way it moves. The shop sees it on every phone, on the screens ticked in “Where it shows”. Customers never do.\n\nIt is only a colour: it changes nothing about what this person can do.\n\nAnyone who finds it busy: Settings → This phone → Name effects → Plain names. That is for their own phone only.'],
-  fxshow: ['Name effects', 'Show: names the office gave an effect move and shine on this phone.\n\nPlain names: none at all — the quickest the app can be on an old phone. Only this phone; nobody else’s name changes.'],
+  fxmine: ['Name effect', 'Your own name’s look — colours, a glow, an outline, an emoji and the way it moves. The whole shop sees it on every phone; customers never do.\n\nThe office can change it too, from Users.\n\nOnly a colour: it changes nothing about what you can do.'],
+  fxshow: ['Show name effects (lag issue)', 'Show: names with an effect move and shine on this phone.\n\nPlain names: none at all — the quickest the app can be on an old phone. Only this phone; nobody else’s name changes.'],
   techothers: ['Other jobs', 'No: a technician (or helper) opens and works only the jobs they are assigned to — the head or a helper on the crew. Every other job still shows in their list, to see: tapping it only asks the office for it. A job with nobody on it is locked too, until you assign it.\n\nYes: every technician works every job, as before.'],
   techask: ['Asking for a job', 'Yes: a technician taps a job that is not theirs and asks for it. On your Jobs, that job’s badge turns yellow — “🙋 Assign to Ana” — until you answer: Assign puts Ana on it (the head if nobody is on it, else a helper); Say no takes it away.\n\nNo: only the office assigns.'],
   techreward: ['What they receive', 'Yes: each technician sees, under the job’s status, what they get from it — the job’s price × their own share (Users → the technician, 10% to start). No price yet says so.\n\nThe price itself still shows only with “Show prices to technicians & helpers” on. Helpers never see a share.'],
@@ -1356,6 +1364,7 @@ function bookFormHtml(ctx, s){
   return who + (s._removed ? `<p class="hint">${esc(s._removed)}</p>` : '') + bkAirconsHtml(ctx, s) + priceNote + wantChip + when + `
     <label>Anything else <span class="opt">— optional</span>
       <textarea data-bk="notes" data-cart="${ctx}" maxlength="1000" placeholder="${esc(w.notes)}">${esc(s.notes || '')}</textarea></label>
+    ${edit ? '' : bkPicsHtml(ctx, s)}
     ${pub ? `<!-- The honeypot. Hidden from people, filled in by bots. See book_job(). -->
       <div class="hp" aria-hidden="true"><label>Website<input data-bk="website" data-cart="pub" tabindex="-1" autocomplete="off" value="${esc(s.website)}"></label></div>
       <!-- RA 10173. Wording shown to the owner and approved (TODO.md, D). -->
@@ -2029,6 +2038,7 @@ function panelBooking(p){
       ${kv('Why rejected', esc(b.reject_reason || ''))}
       <div class="actions">${callBtn(b.contact)}${mapBtn(b)}${['new', 'accepted'].includes(b.status) && !job ? editBtn('editbooking', b.id) : ''}</div>
     </div>
+    ${bookingPicsHtml(b)}
     <div class="sec">🛒 Aircons &amp; appliances</div>
     ${cartHtml('view', unitsOf(b), {pf: officePrice, missing: 'Not every service has a price yet'})}
     ${b.quote ? `<p class="hint">That is the price list’s. The quotation says <b>${esc(peso(b.quote.total))}</b>, and Accept uses it.</p>` : ''}
@@ -2360,11 +2370,11 @@ function panelJob(p){
     </div>`;
   // L3: the gate photo first on a technician's screen — the first thing needed at the street
   return {title: c.full_name || 'Job', sub: svcList(j.services), body: `
-    ${tech && !helper && photo ? `<div class="gate-top">${housePhoto(photo)}<div class="gate-cap">📷 The gate — to find the house</div></div>` : ''}
+    ${tech && !helper ? custPicsHtml(j.customer_id, c, false, true) : ''}
     ${stepsHtml({booking: bookingOfJob(j), job: j})}
     ${techPrice && !helper ? `<div class="big-price"><span>To collect when the job is done</span><b>${esc(peso(j.price))}</b></div>` : ''}
     <div class="card" data-row="${esc(j.id)}" data-stamp="${esc(j.updated_at || '')}">
-      ${photo && !tech ? housePhoto(photo) : ''}
+      ${!tech ? custPicsHtml(j.customer_id, c, false, true) : ''}
       ${kv('Status', paidPill(j) + ' ' + statusPill(j.status) + unsentPill(j.id) + (by && ['in_progress', 'done', 'cancelled'].includes(j.status) ? ` <span class="muted">by ${whoHtml(by, j.status_by)}</span>` : ''))}
       ${assignBadge(j, true) ? kv('Assigned', assignBadge(j, true) + (crewOf(j).length > 1
         ? `<div class="crew-line">👑 ${nameFx(staffName(crewOf(j)[0]), crewOf(j)[0], 'jobs')} · Helpers: ${crewOf(j).slice(1).map(u => nameFx(staffName(u), u, 'jobs')).join(', ')}</div>` : '')) : ''}
@@ -2713,14 +2723,15 @@ function panelCustomer(p){
   const removed = c.full_name === '(removed)';
   return {title: c.full_name, sub: c.contact, body: `
     <div class="card" data-row="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
-      ${c.photo_path ? housePhoto(c.photo_path) : ''}
       ${kv('Number', esc(c.contact))}
       ${kv('Address', esc(c.address))}
       ${kv('Landmark', esc(c.landmark || ''))}
       ${kv('Customer since', esc(c.created_at ? new Date(c.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : ''))}
       <div class="actions">${callBtn(c.contact)}${mapBtn(c)}</div>
     </div>
-    ${removed ? '' : `<div class="stack"><button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">+ New job for ${esc(c.full_name.split(' ')[0])}</button></div>
+    ${removed ? '' : custPicsHtml(c.id, c, db.role === 'admin')}
+    ${removed ? '' : `<div class="stack"><button type="button" class="b wide" data-act="open" data-kind="editcust" data-id="${esc(c.id)}">✏️ Edit</button>
+      <button type="button" class="b primary wide" data-act="book" data-id="${esc(c.id)}">Book a Job for ${esc(c.full_name.split(' ')[0])}</button></div>
     <div class="sec">📅 Regular check${cu ? ` <span class="plan-now${k && k.due <= today ? ' due' : ''}">${esc(cu)}</span>` : ''}</div>
     <div class="card">${checkPlanHtml(c.id, c.check_every, c.check_next, c.check_day)}</div>`}
     ${removed ? airconHistoryHtml(c.id) : appliancesHtml(c)}
@@ -2940,14 +2951,40 @@ function checkPlanHtml(target, every, next, day){
     </div>`;
 }
 /* Add customer (Guile, 2026-09-27): a customer file on its own — no aircon, no job. */
-function panelAddCust(p){
+/* A customer's details — Add customer and Edit (53) draw the same boxes and check them the same way. */
+function custFieldsHtml(p, dupWord){
   const w = BK_WORDS.panel;
-  const who = bkInput('panel', p, 'full_name', w.name, '', 'maxlength="120" autocomplete="off"')
+  return bkInput('panel', p, 'full_name', w.name, '', 'maxlength="120" autocomplete="off"')
     + bkInput('panel', p, 'contact', 'Contact number', '', 'inputmode="tel" maxlength="30" autocomplete="off" placeholder="09XX XXX XXXX"', bkBookBtn('panel', p))
-    + (p._dup ? `<div class="inline-note">Same number as <b>${esc(p._dup)}</b>. Tap Save again to add them anyway.</div>` : '')
+    + (p._dup ? `<div class="inline-note">Same number as <b>${esc(p._dup)}</b>. Tap Save again to ${dupWord}.</div>` : '')
     + bkInput('panel', p, 'address', 'Address', '', 'maxlength="300" autocomplete="off" placeholder="Street, barangay, city"')
     + bkInput('panel', p, 'landmark', 'Landmark', '— optional', 'maxlength="200" autocomplete="off" placeholder="beside the chapel, blue gate…"')
     + bkLocHtml('panel', p);
+}
+function custProblems(p){
+  const bad = [];
+  if ((p.full_name || '').trim().length < 2) bad.push(['full_name', 'Type the customer’s name.']);
+  if (digits(p.contact).length < 7) bad.push(['contact', 'Type a contact number — at least 7 digits.']);
+  if ((p.address || '').trim().length < 4) bad.push(['address', 'Type the address.']);
+  return bad;
+}
+const custDetails = p => ({full_name: p.full_name.trim(), contact: p.contact.trim(), address: p.address.trim(),
+  landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null});
+/* ✏️ Edit (Guile, 2026-10-12, 53): the name, the number, the address, the landmark, the pin —
+   and the pictures, the same piece as the customer's file. The office only. */
+function panelEditCust(p){
+  const c = db.customers[p.id];
+  if (!c || db.role !== 'admin') return {title: 'Edit customer', body: empty('This customer is no longer on this phone.')};
+  if (!p._filled){
+    Object.assign(p, {full_name: c.full_name || '', contact: c.contact || '', address: c.address || '', landmark: c.landmark || '',
+      lat: c.lat != null ? String(c.lat) : '', lng: c.lng != null ? String(c.lng) : '', _filled: true});
+  }
+  return {title: 'Edit customer', sub: c.full_name, body: `<div class="card">${custFieldsHtml(p, 'save it anyway')}
+      <div class="stack"><button type="button" class="b primary wide" data-act="saveeditcust" data-id="${esc(c.id)}">Save changes</button></div></div>
+    ${custPicsHtml(c.id, c, true)}`};
+}
+function panelAddCust(p){
+  const who = custFieldsHtml(p, 'add them anyway');
   return {title: 'Add customer', sub: 'A customer file — no job', body: `<div class="card">${who}
       <div class="fieldlabel">📅 Regular check <span class="opt">— optional</span></div>
       ${checkPlanHtml('new', p.ck_every, p.ck_next, p.ck_day)}
@@ -4422,6 +4459,7 @@ let photoActive = 0;
    measured on the owner's tablet). The page reads a kept one as kept/<path>. The website has
    no such files: it keeps its browser cache, as before. */
 const KEEPS = !!(window.AndroidBridge && window.AndroidBridge.keepPhoto);
+const RELAYED = /^(work|cust)\//;   // the photos the server only relays: work photos (46), a customer's pictures (53)
 let keptSet = null;
 function kept(){
   if (!keptSet){ keptSet = new Set(); try { JSON.parse(window.AndroidBridge.keptList() || '[]').forEach(x => keptSet.add(x)); } catch (e) {} }
@@ -4431,8 +4469,8 @@ const isKept = path => KEEPS && kept().has(path);
 async function keepPhoto(path, blob){
   if (KEEPS){
     try {
-      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
-      if (window.AndroidBridge.keepPhoto(path, b64)){ kept().add(path); photoUrls[path] = 'kept/' + path; if (path.startsWith('work/')) haveAdd(path); return; }
+      const b64 = await blobB64(blob);
+      if (window.AndroidBridge.keepPhoto(path, b64)){ kept().add(path); photoUrls[path] = 'kept/' + path; if (RELAYED.test(path)) haveAdd(path); return; }
     } catch (e) {}
   }
   try { const c = await caches.open('ws-photos'); await c.put('photo/' + path, new Response(blob, {headers: {'Content-Type': 'image/jpeg'}})); } catch (e) {}
@@ -4462,7 +4500,7 @@ function haveAdd(path){ const h = lsGet('ws_have', []); if (!h.includes(path)){ 
 async function reportHaves(){
   if (!KEEPS || !db || !['admin', 'technician'].includes(db.role) || !online || !session) return;
   if (!lsGet('ws_have_init', false)){   // the first time: everything this phone already keeps
-    lsSet('ws_have_init', true); kept().forEach(x => { if (x.startsWith('work/')) haveAdd(x); });
+    lsSet('ws_have_init', true); kept().forEach(x => { if (RELAYED.test(x)) haveAdd(x); });
   }
   const h = lsGet('ws_have', []), day = manilaDate(0);
   if (!h.length && lsGet('ws_have_day', '') === day) return;   // and once a day to say "still here"
@@ -4472,13 +4510,15 @@ async function reportHaves(){
     lsSet('ws_have', lsGet('ws_have', []).filter(x => !send.includes(x))); lsSet('ws_have_day', day);
   } catch (e) {}   // a server before 46, or no signal: next refresh
 }
-// every work photo this phone does not keep yet, while the server still has it
+// every work photo and customer's picture this phone does not keep yet, while the server still has it
 function fetchMissingPhotos(){
   if (!KEEPS || !db || !['admin', 'technician'].includes(db.role) || !online) return;
-  Object.values(db.jobs).forEach(j => workList(j).forEach(w => {
+  const want = w => {
     if (w.off || isKept(w.path) || photoWant.has(w.path)) return;
     photoWant.add(w.path); photoQueue.push({p: w.path, b: WORK_BUCKET, tries: 0});
-  }));
+  };
+  Object.values(db.jobs).forEach(j => { workList(j).forEach(want); if (j.customer) custPicList(j.customer).forEach(want); });
+  Object.values(db.customers).forEach(c => custPicList(c).forEach(want));   // 53
   pumpPhotos();
 }
 function pumpPhotos(){
@@ -4544,6 +4584,17 @@ document.addEventListener('change', async e => {
    phone runs work_photo_sweep once a day, deletes the files it is handed and crosses them
    off. 1280 px at the house photo's 0.72. Downloads ride the house photos' queue. */
 const WORK_BUCKET = 'work-photos', WORK_MAX = 12;
+// up into the relay bucket; the same file twice is already there: fine (as the house photo)
+async function putPhoto(path, blob){
+  const r = await storage('POST', path, blob, false, WORK_BUCKET);
+  if (!r.ok && r.status !== 409 && r.status !== 400){
+    const b = await r.json().catch(() => ({}));
+    throw new Error(b.message || b.error || 'HTTP ' + r.status);
+  }
+  if (r.status === 400){ const b = await r.json().catch(() => ({})); if (!/exist/i.test(b.message || b.error || '')) throw new Error(b.message || b.error || 'HTTP 400'); }
+}
+const blobB64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+const b64Blob = b64 => { const s = atob(b64), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return new Blob([a], {type: 'image/jpeg'}); };
 const workBusy = {};   // job id → photos still on their way up
 const workList = j => Array.isArray(j && j.work_photos) ? j.work_photos : [];
 // the office any time; a technician on a job with a day, not cancelled — as the server says
@@ -4593,13 +4644,7 @@ document.addEventListener('change', async e => {
     try {
       const blob = await fitPhoto(file, 1280);
       const path = 'work/' + jid + '/' + await hashOf(blob) + '.jpg';
-      const r = await storage('POST', path, blob, false, WORK_BUCKET);
-      // the same file twice is already there: fine (as the house photo)
-      if (!r.ok && r.status !== 409 && r.status !== 400){
-        const b = await r.json().catch(() => ({}));
-        throw new Error(b.message || b.error || 'HTTP ' + r.status);
-      }
-      if (r.status === 400){ const b = await r.json().catch(() => ({})); if (!/exist/i.test(b.message || b.error || '')) throw new Error(b.message || b.error || 'HTTP 400'); }
+      await putPhoto(path, blob);
       await keepPhoto(path, blob);
       write('add_work_photo', {p_job: jid, p_path: path}, 'Work photo — ' + (jobCust(j).full_name || ''), [jid], db => {
         const x = db.jobs[jid]; if (!x) return;
@@ -4634,6 +4679,159 @@ async function sweepWorkPhotos(){
   } catch (e) { lsSet(key, ''); }   // tried again on the next refresh
 }
 
+/* ---------------------------------------------------------------- the customer's pictures (53)
+   Guile, 2026-10-12: the gate photo became a list — the gate, the house or store, the aircon,
+   the appliances, the road; 20 at most. The office adds and deletes them (the customer's file,
+   and ✏️ Edit); a technician sees them on the job. They live on the phones like work photos
+   (46): cust/<customer id>/<hash>.jpg in the work-photos bucket, the server relays it. The old
+   gate photo (photo_path, house-photos) stays where it is and shows first. */
+const CUST_PIC_MAX = 20;
+const custBusy = {};   // customer id → pictures still on their way up
+const custFor = cid => (db && db.customers[cid]) || (Object.values((db && db.jobs) || {}).find(j => j.customer_id === cid && j.customer) || {}).customer || null;
+const custPicList = c => Array.isArray(c && c.photos) ? c.photos : [];
+// the grid and the viewer show the same list: the old gate photo first
+const custPicsAll = c => [...(c && c.photo_path ? [{path: c.photo_path, bucket: 'house-photos', house: true}] : []),
+  ...custPicList(c).map(w => ({...w, bucket: WORK_BUCKET, gone: !!w.off && KEEPS && !isKept(w.path)}))];
+// a grid of pictures: the customer's, a booking's — one piece (ui.md)
+const picGridHtml = (list, act, id) => `<div class="work-grid">${list.map((x, i) => `<button type="button" class="work-cell" data-act="${act}" data-id="${esc(id)}" data-v="${i}" aria-label="Picture ${i + 1} — full screen">${
+  x.gone ? '<span class="work-gone">📷<small>On the other phones</small></span>'
+  : `<img class="work-thumb" data-house="${esc(x.path)}"${x.bucket ? ` data-bucket="${x.bucket}"` : ''}${x.off || !x.bucket ? ' data-off="1"' : ''} alt="" draggable="false">`}</button>`).join('')}</div>`;
+/* edit: the office's Add Picture under it. bare: on a job — no heading, nothing when empty. */
+function custPicsHtml(cid, c, edit, bare){
+  const all = custPicsAll(c), busy = custBusy[cid];
+  if (!all.length && !edit) return '';
+  if (bare) return `<div class="cust-pics">${picGridHtml(all, 'custview', cid)}</div>`;
+  const add = !edit ? '' : busy ? `<span class="b" aria-busy="true">Sending ${busy} picture${busy === 1 ? '' : 's'}…</span>`
+    : custPicList(c).length >= CUST_PIC_MAX ? `<p class="hint">${CUST_PIC_MAX} pictures — take one off to add another.</p>`
+    : `<label class="b">📷 Add Picture<input type="file" accept="image/*" multiple data-custpic-for="${esc(cid)}" hidden></label>`;
+  return `<div class="sec">📷 Pictures${all.length ? ` <span class="prep-count">${all.length}</span>` : ''}</div>
+    ${all.length ? picGridHtml(all, 'custview', cid) : '<p class="hint">The gate, the house or store, the aircon, the appliances, the road — whatever helps find it and do the job.</p>'}
+    ${add ? `<div class="actions">${add}</div>` : ''}`;
+}
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-custpic-for]')) return;
+  const cid = inp.dataset.custpicFor, files = [...(inp.files || [])];
+  inp.value = '';
+  const c = db.customers[cid];
+  if (!files.length || !session || !c || db.role !== 'admin') return;
+  const room = Math.max(0, CUST_PIC_MAX - custPicList(c).length - (custBusy[cid] || 0));
+  if (files.length > room) notice('A customer keeps ' + CUST_PIC_MAX + ' pictures. ' + (room ? 'The first ' + room + ' are going; the rest were left out.' : 'Take one off first.'), true);
+  const take = files.slice(0, room);
+  if (!take.length) return;
+  custBusy[cid] = (custBusy[cid] || 0) + take.length; render();
+  let sent = 0;
+  for (const file of take){
+    try {
+      const blob = await fitPhoto(file, 1280);
+      const path = 'cust/' + cid + '/' + await hashOf(blob) + '.jpg';
+      await putPhoto(path, blob);
+      await keepPhoto(path, blob);
+      addCustPic(cid, path, null);
+      sent++;
+    } catch (err) {
+      notice(err instanceof TypeError ? 'A picture needs signal to send. It was not saved — try again when there is signal.'
+                                      : 'A picture was not saved: ' + err.message, true);
+    } finally {
+      if (!--custBusy[cid]) delete custBusy[cid];
+      render();
+    }
+  }
+  if (sent) toast(sent === 1 ? 'Picture added.' : sent + ' pictures added.');
+});
+function addCustPic(cid, path, from){
+  write('add_customer_photo', {p_customer: cid, p_path: path, p_from: from}, (from ? 'Picture from ' + from : 'Picture') + ' — ' + ((db.customers[cid] || {}).full_name || ''), [cid], db => {
+    const x = db.customers[cid]; if (!x) return;
+    x.photos = custPicList(x).filter(w => w.path !== path).concat([{path, by: session.uid, at: new Date().toISOString(), ...(from ? {from} : {})}]);
+  });
+}
+
+/* Pictures from the booking (53): the customer's, sent with the booking page — kept on the
+   server apart from the booking, read here only while the office looks at it. */
+const bkPicCache = {}, bkPicAsked = {};   // booking id → [{path, b64}] · when last asked
+function bookingPics(b){
+  const have = bkPicCache[b.id];
+  if (have && have.length >= b.photo_count) return have;
+  if (online && session && db.role === 'admin' && !(Date.now() - (bkPicAsked[b.id] || 0) < 15000)){
+    bkPicAsked[b.id] = Date.now();
+    rpc('booking_photos', {p_booking: b.id}).then(r => {
+      bkPicCache[b.id] = (r || []).map(x => {
+        const path = 'bk/' + b.id + '/' + x.n;
+        if (!photoUrls[path]) photoUrls[path] = URL.createObjectURL(b64Blob(x.b64));
+        return {path, b64: x.b64};
+      });
+      render();
+    }).catch(() => {});
+  }
+  return have || null;
+}
+function bookingPicsHtml(b){
+  if (!(b.photo_count > 0)) return '';
+  const list = bookingPics(b);
+  return `<div class="sec">📷 Pictures from the customer <span class="prep-count">${b.photo_count}</span></div>
+    ${list && list.length ? picGridHtml(list, 'bkview', b.id) : `<p class="hint">${online ? 'Loading…' : 'They show with signal.'}</p>`}
+    <p class="hint">${b.status === 'new' ? 'Accept puts them on the customer’s pictures. Reject deletes them.' : 'Moving onto the customer’s pictures.'}</p>`;
+}
+/* Accepted: the office's phone moves them onto the customer's pictures (up into the relay
+   bucket, onto the customer), then the booking lets go of them. Once per refresh, signal only. */
+let bkPicsMoving = false;
+async function moveBookingPics(){
+  if (!db || db.role !== 'admin' || !online || bkPicsMoving) return;
+  const todo = Object.values(db.bookings).filter(b => b.photo_count > 0 && b.status === 'accepted' && b.customer_id
+    && db.customers[b.customer_id] && !unsentFor(b.id) && !unsentFor(b.customer_id));
+  if (!todo.length) return;
+  bkPicsMoving = true;
+  try {
+    for (const b of todo){
+      const cid = b.customer_id, list = await rpc('booking_photos', {p_booking: b.id});
+      if ((list || []).length && custPicList(db.customers[cid]).length + list.length > CUST_PIC_MAX) continue;   // no room: they wait (14 days)
+      for (const x of list || []){
+        const blob = b64Blob(x.b64), path = 'cust/' + cid + '/' + await hashOf(blob) + '.jpg';
+        await putPhoto(path, blob);
+        await keepPhoto(path, blob);
+        addCustPic(cid, path, b.ref);
+      }
+      write('drop_booking_photos', {p_booking: b.id}, 'Pictures moved — ' + b.ref, [b.id], db => { const y = db.bookings[b.id]; if (y) y.photo_count = 0; });
+    }
+  } catch (e) {}   // no signal, or a server before 53: the next refresh
+  finally { bkPicsMoving = false; }
+}
+
+/* The booking form's pictures (53): optional, up to 3, shrunk on the phone to 1280 px JPEG
+   (~115 KB) and sent INSIDE the booking — the page can write nothing else (trust-boundary.md).
+   The page and the office's Book a job draw the same piece (ui.md). Not kept in the draft. */
+const BK_PIC_MAX = 3;
+function bkPicsHtml(ctx, s){
+  const pics = s.pics || [], pub = ctx === 'pub';
+  return `<div class="bk-sec" data-bkf="pics">
+      <div class="fieldlabel">📷 Pictures <span class="opt">— optional, up to ${BK_PIC_MAX}</span></div>
+      ${pics.length ? `<div class="bk-pics">${pics.map((x, i) => `<span class="bk-pic"><img src="${esc(x.url)}" alt="Picture ${i + 1}">
+        <button type="button" class="bk-pic-x" data-act="bkpicx" data-cart="${ctx}" data-v="${i}" aria-label="Take picture ${i + 1} out">×</button></span>`).join('')}</div>` : ''}
+      ${s._picBusy ? '<span class="b" aria-busy="true">Getting it ready…</span>'
+        : pics.length < BK_PIC_MAX ? `<label class="b">📷 Add a picture<input type="file" accept="image/*" multiple data-bkpics="${ctx}" hidden></label>` : ''}
+      <div class="hint">${pub ? 'Your gate, house or store, the aircon, the appliances, the road — anything that helps us find you and do the job.'
+        : 'The gate, the house or store, the aircon, the road. Accept puts them on the customer’s pictures.'}</div>
+    </div>`;
+}
+document.addEventListener('change', async e => {
+  const inp = e.target;
+  if (!inp.matches || !inp.matches('input[data-bkpics]')) return;
+  const ctx = inp.dataset.bkpics, s = bkState(ctx), files = [...(inp.files || [])];
+  inp.value = '';
+  if (!s || !files.length) return;
+  s.pics = s.pics || [];
+  const take = files.slice(0, Math.max(0, BK_PIC_MAX - s.pics.length));
+  if (files.length > take.length) toast('Up to ' + BK_PIC_MAX + ' pictures' + (take.length ? ' — the first ' + take.length + ' were added.' : '.'), true);
+  if (!take.length) return;
+  s._picBusy = true; bkRedraw(ctx);
+  for (const f of take){
+    try { const blob = await fitPhoto(f, 1280); s.pics.push({b64: await blobB64(blob), url: URL.createObjectURL(blob)}); }
+    catch (err) { toast('That file is not a picture.', true); }
+  }
+  s._picBusy = false;
+  if (bkState(ctx) === s) bkRedraw(ctx);
+});
+
 /* An unfinished job moves to the next day by itself (Guile, 2026-10-10, 41): the first of the
    shop's phones to refresh on a new day moves every job still open from before today to
    today. The server keeps the day first promised (promised_on) for the third number. Once a
@@ -4652,10 +4850,14 @@ async function carryOver(){
    around a zoomed photo. Android's back closes it. Written here, no library. */
 let viewer = null;
 // what it shows: a job's work photos, or one gate photo (house) — the same swipe, pinch and zoom
+// (53) also a customer's pictures (cid), and the pictures sent with a booking (bk) — read only
 const vwList = () => !viewer ? [] : viewer.house ? [{path: viewer.house, bucket: 'house-photos', house: true}]
+  : viewer.cid ? custPicsAll(custFor(viewer.cid))
+  : viewer.bk ? (bkPicCache[viewer.bk] || []).map(x => ({path: x.path, bk: true, off: true}))
   : workList(db.jobs[viewer.jid]).map(w => ({...w, bucket: WORK_BUCKET, gone: !!w.off && KEEPS && !isKept(w.path)}));
-function openViewer(jid, i, house){
-  viewer = {jid, house: house || null, i: +i || 0, s: 1, x: 0, y: 0};
+const vwCanDrop = x => !!x && !x.bk && (viewer.cid ? db.role === 'admin' : !x.house && canDropWork(x));
+function openViewer(jid, i, house, more){
+  viewer = {jid, house: house || null, ...(more || {}), i: +i || 0, s: 1, x: 0, y: 0};
   try { history.pushState({wsv: 1}, ''); } catch (e) {}
   drawViewer();
 }
@@ -4683,7 +4885,7 @@ function drawViewer(){
   el.innerHTML = `<div class="vw-track">${list.map(w => `<div class="vw-slide">${w.gone
       ? '<div class="vw-gone">📷<br>This photo is on the other shop phones only.<br><small>It left the server once they all had it.</small></div>'
       : `<img class="vw-img" data-house="${esc(w.path)}" data-bucket="${w.bucket}"${w.off ? ' data-off="1"' : ''} alt="" draggable="false">`}</div>`).join('')}</div>
-    <div class="vw-ask" hidden><p><b>Delete this photo?</b><br>It is taken off this job on every phone — the office’s and the technicians’ — and cannot be brought back.</p>
+    <div class="vw-ask" hidden><p><b>Delete this photo?</b><br>It is taken off this ${viewer.cid ? 'customer' : 'job'} on every phone — the office’s and the technicians’ — and cannot be brought back.</p>
       <div class="vw-ask-btns"><button type="button" class="b" data-vw="delno">Cancel</button><button type="button" class="b danger" data-vw="delyes">🗑️ Delete</button></div></div>
     <div class="vw-top"><button type="button" class="vw-btn" data-vw="close" aria-label="Close">✕</button>
       <span class="vw-count"></span><button type="button" class="vw-btn vw-del" data-vw="del" aria-label="Take this photo off">🗑️</button></div>
@@ -4702,9 +4904,10 @@ function vwGo(i, animate){
   track.style.transform = `translateX(${-viewer.i * 100}%)`;
   $$('.vw-img', el).forEach(img => { img.style.transform = ''; });
   $('.vw-count', el).textContent = (viewer.i + 1) + ' / ' + list.length;
-  $('.vw-cap', el).textContent = x.house ? 'The gate — to find the house'
-    : staffName(x.by) + ' · ' + new Date(x.at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
-  $('.vw-del', el).style.visibility = !x.house && canDropWork(x) ? '' : 'hidden';
+  const when = x.at ? new Date(x.at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '';
+  $('.vw-cap', el).textContent = x.house ? 'The gate — to find the house' : x.bk ? 'Sent with the booking'
+    : x.from ? 'Sent with booking ' + x.from + ' · ' + when : staffName(x.by) + ' · ' + when;
+  $('.vw-del', el).style.visibility = vwCanDrop(x) ? '' : 'hidden';
   $('.vw-nav.prev', el).hidden = viewer.i === 0;
   $('.vw-nav.next', el).hidden = viewer.i === list.length - 1;
 }
@@ -4724,8 +4927,24 @@ function wireViewer(el){
     if (what === 'close') closeViewer();
     else if (what === 'prev') vwGo(viewer.i - 1);
     else if (what === 'next') vwGo(viewer.i + 1);
-    else if (what === 'del' && x && !x.house && j && canDropWork(x)){ $('.vw-ask', el).hidden = false; }
+    else if (what === 'del' && vwCanDrop(x)){ $('.vw-ask', el).hidden = false; }
     else if (what === 'delno') $('.vw-ask', el).hidden = true;
+    else if (what === 'delyes' && viewer.cid && vwCanDrop(x)){   // (53) a customer's picture, the old gate photo too
+      const cid = viewer.cid, name = (custFor(cid) || {}).full_name || '';
+      if (x.house){
+        const op = write('set_customer_photo', {p_customer: cid, p_path: null, p_job: null}, 'Gate photo off — ' + name, [cid], db => {
+          if (db.customers[cid]) db.customers[cid].photo_path = null;
+          Object.values(db.jobs).forEach(y => { if (y.customer_id === cid && y.customer) y.customer.photo_path = null; });
+        });
+        op.cleanup_photo = x.path; saveLocal();
+      } else {
+        dropKept(x.path);
+        write('remove_customer_photo', {p_customer: cid, p_path: x.path}, 'Picture off — ' + name, [cid], db => {
+          const y = db.customers[cid]; if (y) y.photos = custPicList(y).filter(w => w.path !== x.path);
+        });
+      }
+      drawViewer();
+    }
     else if (what === 'delyes' && x && !x.house && j && canDropWork(x)){
       dropKept(x.path);
       write('remove_work_photo', {p_job: j.id, p_path: x.path}, 'Work photo off — ' + (jobCust(j).full_name || ''), [j.id], db => {
@@ -4937,8 +5156,12 @@ function panelSettings(){
       ${kv('Last refresh', esc(lastPullOk ? timeAgo(lastPullOk.toISOString()) : 'not yet'))}
       <div class="actions"><button type="button" class="b" data-act="refresh">↻ Refresh now</button></div>
     </div>
+    ${staff && db.staff && db.staff.some(x => x.id === session.uid) ? `<div class="card row-between">
+      <div class="menu-title">Name effect ${infoBtn('fxmine')}</div>
+      <button type="button" class="b" data-act="namefx" data-id="${esc(session.uid)}">✨ ${fxFor(session.uid) ? 'Change mine' : 'Give my name one'}</button>
+    </div>` : ''}
     ${staff ? `<div class="card row-between">
-      <div class="menu-title">Name effects ${infoBtn('fxshow')}</div>
+      <div class="menu-title">Show name effects (lag issue) ${infoBtn('fxshow')}</div>
       <div class="segment mini">${[['on', 'Show'], ['off', 'Plain names']].map(([v, l]) =>
         `<button type="button" class="${(fxShown() ? 'on' : 'off') === v ? 'active' : ''}" data-act="fxshow" data-v="${v}">${l}</button>`).join('')}</div>
     </div>` : ''}
@@ -5433,7 +5656,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   editbooking: panelEditBooking, service: panelService, quote: panelQuote, jobquote: panelQuote, jobbill: panelQuote, utype: panelUtype, ppcrop: panelPpcrop,
   bookingstatus: panelStatus, jobstatus: panelStatus,
   cancel: panelCancel, customer: panelCustomer, forget: panelForget, tidy: panelTidy, member: panelMember,
-  book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust,
+  book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust, editcust: panelEditCust,
   deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
   assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField,   // 39, 43, 44
   jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
@@ -6015,22 +6238,33 @@ const ACTIONS = {
   addcust: () => openPanel({kind: 'addcust', mode: 'new', full_name: '', contact: '', address: '', landmark: '', lat: '', lng: '', ck_every: 0, ck_next: '', ck_day: null}),
   saveaddcust: () => {
     const p = topPanel(); if (!p || p.kind !== 'addcust') return;
-    const bad = [];
-    if ((p.full_name || '').trim().length < 2) bad.push(['full_name', 'Type the customer’s name.']);
-    if (digits(p.contact).length < 7) bad.push(['contact', 'Type a contact number — at least 7 digits.']);
-    if ((p.address || '').trim().length < 4) bad.push(['address', 'Type the address.']);
+    const bad = custProblems(p);
     if (bad.length) return bkShow('panel', p, bad);
     const same = Object.values(db.customers).find(c => digits(c.contact) === digits(p.contact));
     if (same && p._dup !== same.full_name){ p._dup = same.full_name; render(); return; }
     const id = uuid(), on = !!(p.ck_every && p.ck_next);
-    const d = {full_name: p.full_name.trim(), contact: p.contact.trim(), address: p.address.trim(),
-      landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null,
+    const d = {...custDetails(p),
       check_every: on ? p.ck_every : null, check_next: on ? p.ck_next : null, check_day: on ? (p.ck_day || Number(p.ck_next.slice(8, 10))) : null};
     write('add_customer', {p_id: id, p_details: d}, 'Add customer — ' + d.full_name, [id], db => {
       db.customers[id] = {id, ...d, landmark: d.landmark || null, created_at: new Date().toISOString()};
     });
     closePanel();
     toast(d.full_name + ' added' + (on ? ' — checked ' + everyWord(d.check_every) + ', first ' + niceDate(d.check_next) + '.' : '.'));
+  },
+  saveeditcust: id => {   // 53
+    const p = topPanel(), c = db.customers[id]; if (!p || p.kind !== 'editcust' || !c) return;
+    const bad = custProblems(p);
+    if (bad.length) return bkShow('panel', p, bad);
+    const same = Object.values(db.customers).find(x => x.id !== id && digits(x.contact) === digits(p.contact));
+    if (same && digits(p.contact) !== digits(c.contact) && p._dup !== same.full_name){ p._dup = same.full_name; render(); return; }
+    const d = custDetails(p);
+    const now = {...d, landmark: d.landmark || null, lat: d.lat != null ? Number(d.lat) : null, lng: d.lng != null ? Number(d.lng) : null};
+    write('edit_customer', {p_customer: id, p_details: d}, 'Edit customer — ' + d.full_name, [id], db => {
+      if (db.customers[id]) Object.assign(db.customers[id], now);
+      Object.values(db.jobs).forEach(j => { if (j.customer_id === id && j.customer) Object.assign(j.customer, now); });
+    });
+    closePanel();
+    toast(d.full_name + ' saved.');
   },
   // 📅 Regular check: how often (0 = off). A customer's is saved at once; the new form's on Save.
   ckevery: (id, el) => {
@@ -6173,13 +6407,18 @@ const ACTIONS = {
     if (fresh) Object.assign(details, {full_name: name, contact: p.contact.trim(), address: p.address.trim(),
       landmark: (p.landmark || '').trim(), lat: p.lat || null, lng: p.lng || null});
     else details.customer_id = c.id;
+    const pics = (p.pics || []).slice(0, BK_PIC_MAX);   // 53: the same pictures piece as the page
+    if (pics.length){
+      details.photos = pics.map(x => x.b64);
+      bkPicCache[bid] = pics.map((x, i) => { const path = 'bk/' + bid + '/' + (i + 1); photoUrls[path] = x.url; return {path, b64: x.b64}; });
+    }
     write('office_booking', {p_id: bid, p_details: details}, 'Booked by phone — ' + name, [bid], db => {
       const now = new Date().toISOString(), who = fresh ? details : c;
       db.bookings[bid] = {id: bid, ref: '…', source: 'office', status: 'new', for_customer: fresh ? null : c.id,
         full_name: name, contact: who.contact, address: who.address, landmark: who.landmark || null,
         lat: fresh ? (p.lat ? +p.lat : null) : c.lat, lng: fresh ? (p.lng ? +p.lng : null) : c.lng,
         services: unionServices(units), units, unit_count: units.length, notes: details.notes || null,
-        preferred_on: details.date, slot: details.slot || 'am', seen_at: now, created_at: now, updated_at: now};
+        preferred_on: details.date, slot: details.slot || 'am', seen_at: now, created_at: now, updated_at: now, photo_count: pics.length};
     });
     ui.tab = 'inbox'; ui.inbox = 'new'; saveUi();
     replacePanel({kind: 'booking', id: bid});
@@ -6392,6 +6631,14 @@ const ACTIONS = {
     if (s) s.value = ui.search; custSearchDraw(); },
   custclear: () => { ui.search = ''; saveUi(); const s = $('#custSearch'); if (s){ s.value = ''; s.focus(); } custSearchDraw(); },
   houseview: (id, el) => openViewer(null, 0, el.dataset.v),
+  custview: (id, el) => openViewer(null, el.dataset.v, null, {cid: id}),   // 53
+  bkview: (id, el) => openViewer(null, el.dataset.v, null, {bk: id}),      // 53
+  bkpicx: (id, el) => {   // a picture taken out of the booking form before it is sent
+    const ctx = el.dataset.cart, s = bkState(ctx); if (!s || !s.pics) return;
+    const [x] = s.pics.splice(Number(el.dataset.v), 1);
+    if (x) URL.revokeObjectURL(x.url);
+    bkRedraw(ctx);
+  },
   ufieldtype: (id, el) => {   // 44
     const p = topPanel(); if (!p || p.kind !== 'unitfield') return;
     const k = el.dataset.v; p.types = p.types.includes(k) ? p.types.filter(x => x !== k) : [...p.types, k]; render();
@@ -6725,6 +6972,7 @@ bookForm.addEventListener('submit', async e => {
   const payload = {full_name: s.full_name, contact: s.contact, address: s.address, landmark: s.landmark,
     lat: s.lat, lng: s.lng, preferred_on: s.date, slot: s.slot, notes: s.notes, website: s.website,
     units: pubUnits.map(unitCopy)};
+  if (s.pics && s.pics.length) payload.photos = s.pics.map(x => x.b64);   // 53, optional
 
   s._sending = true; s._msg = ''; drawPubCart();
   try {
