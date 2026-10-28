@@ -358,14 +358,16 @@ async function pull(){
     db.settings = res.settings;
     if (keep !== undefined) db.settings.page_photos = keep;
   }
-  if (res.services) db.services = res.services; // the price list, sent whole (admin only)
+  // the price list, sent whole (admin only) — not while a change or a new order is on its way (54)
+  if (res.services && !queue.some(o => o.fn === 'save_service' || (o.fn === 'set_order' && o.args.p_what === 'services'))) db.services = res.services;
   if (res.staff) db.staff = res.staff;          // the shop's people by name, for Assigned to (39)
   if (res.unit_fields && !queue.some(o => o.fn === 'set_unit_fields')) db.unitFields = res.unit_fields;   // the owner's boxes (44)
   // what to bring, per service, the shop's three roles (37) — not while a change is on its way
   if (res.checklists && !queue.some(o => o.fn === 'save_checklist')) db.checklists = res.checklists;
   // the appliance list, every role (27) — not while a change to it is still on its way: two
   // quick "↑ Earlier" taps moved it one place, the second read from a copy pulled in between
-  if (res.types && !queue.some(o => o.fn === 'save_unit_type')){
+  if (res.types && !queue.some(o => o.fn === 'save_unit_type' || o.fn === 'save_variant' || o.fn === 'save_service'   // 54
+                                    || (o.fn === 'set_order' && o.args.p_what !== 'services'))){
     const changed = JSON.stringify(res.types) !== JSON.stringify(db.types || null);
     db.types = res.types;
     // the booking form is drawn apart from render(): a signed-in customer's page kept the
@@ -413,7 +415,10 @@ const viewRole = () => db && db.role === 'admin' && ui.tab === 'jobs' && inField
 /* The price, as that view would have it: the office always; the field only with the owner's switch on. */
 const seesPrice = () => { const v = viewRole(); return v === 'admin' || (inField(v) && !!(db.settings || {}).show_prices_tech); };
 
+// 54: a row held mid-drag would be redrawn out from under the finger; the drop draws once
+let drag = null, dragAgain = false;
 function render(){
+  if (drag){ dragAgain = true; return; }
   const role = session ? (db && db.role) || session.role : null;
   const staff = role === 'admin' || inField(role);
   const profile = (db && db.profile) || {};
@@ -821,6 +826,15 @@ const typeOf = k => typeRows().find(t => t.key === k) || null;
 const typeLabel = k => { const t = typeOf(k); return t ? t.label : (k || 'Aircon'); };
 const typeOffers = (type, k) => { const t = typeOf(type); return !t || !Array.isArray(t.services) || t.services.includes(k); };
 const typePic = k => { const i = (typeOf(k) || {}).icon || 'ac-split'; return i.startsWith('data:') ? i : 'icons/' + i + '.png'; };
+/* 54: an appliance's own types (½ hp, 1 hp…), each with the services it offers and — where the
+   price list may show — its own prices. An old job's shared service maps to the appliance's own. */
+const variantsOf = t => (typeOf(t) || {}).variants || [];
+const activeVariants = t => variantsOf(t).filter(v => v.active !== false);
+const variantOf = (t, id) => id ? variantsOf(t).find(v => v.id === id) || null : null;
+const ownKey = (t, k) => ((typeOf(t) || {}).legacy || {})[k] || k;
+// the price on a type: picked → its own; types exist, none picked → none (the office rings)
+const variantPrice = (vs, k, v) => { const x = v ? vs.find(y => y.id === v) : null;
+  return x && x.prices && x.prices[k] != null ? Number(x.prices[k]) : null; };
 const svcRows = () => (db && db.services) || [];
 const svcLabel = k => { const r = svcRows().find(x => x.key === k); return r ? r.label : (serviceLabels[k] || k); };
 const activeServiceKeys = () => svcRows().length ? svcRows().filter(x => x.active).map(x => x.key) : Object.keys(serviceLabels);
@@ -936,9 +950,10 @@ const INFO = {
   team: ['Users', 'Anyone can make an account, and starts as a customer. Tap a person to make them a technician, a helper or an admin. “Says they work here” means they ticked that box when they signed up — it gives them nothing on its own.'],
   admin: ['Admin', 'Only admins see this tab. The price list and the services the booking page offers, the billing statement, and the three numbers the app was built to answer.'],
   showprices: ['Show prices', 'Off: customers never see a price; you tell them on the call.\n\nOn: once a customer picks the aircon type and the services, the booking page shows the total from this list. If a service has no price for their aircon type, it says you will tell them on the call.'],
-  service: ['A service', 'A price for each aircon type. Leave a type empty if the shop does not do it for that type — a booking with that type then shows no price until you set one. Customers never see prices.'],
+  service: ['A service', 'Each appliance has its own services: rename one here and only this appliance changes. Its price is for this appliance — or, when it has types (½ hp, 1 hp…), each type carries its own. Empty: a booking shows no price until you set one. Customers see prices only with Show prices on the booking page on.\n\nHidden takes it off the booking page; old jobs keep it. Hold ⠿ and drag to change the order.'],
+  variant: ['Types', 'Optional, per appliance: ½ hp, ¾ hp, 1 hp… A customer who picks one sees only the services ticked on it, at its prices. One who is not sure picks none: then there is no price, and you tell them on the call.\n\nAn appliance with no types uses its services’ own prices. Remove hides a type; jobs that have it keep it.'],
   editbooking: ['After the call', 'Change what they need and which aircon they have. The price shows as soon as every service has a price for that aircon type. It is frozen onto the job when you make it.'],
-  types: ['Aircon & Other Appliances', 'What a customer taps on the booking page — Window, Split, a chiller, a freezer… — in this order. Add one with its name, the services it offers (a freezer is not “installed” like a split) and a picture — one of ours, or ＋ Your own PNG; its prices go in Services & prices. A new service starts on the appliances ticked on its own screen; add or untick it here any time.\n\nRemove takes it off the booking page only. Jobs that already have it keep it, and so do its prices; Bring it back puts it all back. Renaming changes the name everywhere, old jobs too.'],
+  types: ['Aircon & Other Appliances', 'What a customer taps on the booking page — Window, Split, a chiller, a freezer… — in this order. Hold ⠿ and drag to change the order. Add one with its name and a picture — one of ours, or ＋ Your own PNG — then open it: its own services and prices, its types (½ hp, 1 hp…) and its specs, each in your order. It shows on the booking page once it has a service.\n\nRemove takes it off the booking page only. Jobs that already have it keep it, and so do its services and prices; Bring it back puts it all back. Renaming changes the name everywhere, old jobs too.'],
   pagephotos: ['Page photos', 'The photos at the top of the booking page — the first thing a customer sees. Add up to six; with two or more the page fades from one to the next every 6 seconds, on its own. With none, the page shows its own photo.\n\nAnyone who opens the page can see these photos: never a customer’s house, a face or a plate number without their say-so. The phone makes each photo smaller before sending, so the page stays quick on mobile data. Remove deletes the photo for good.'],
   quote: ['Quotation', 'The shop’s own quotation, made from this booking: the lines start as the customer’s aircons at the price list’s prices, and every word, Qty and price is yours to change. The page on top is exactly the paper.\n\nSave keeps it on the booking. Send as PDF: in the app, the quotation goes as a PDF file straight to Messenger, Viber, email, Bluetooth or Drive — pick one. Print or save as PDF: the print screen, for paper.\n\nSigned by the customer on the Conforme line, it is your agreement. Accept, left blank, takes its TOTAL as the job’s price.'],
   quoteshop: ['Letterhead and signer', 'The lines at the top of every quotation, and the name under the signature. Blank lines are left out. Kept on the server for admins only, not in the public page.'],
@@ -1028,6 +1043,7 @@ function unitsOf(x){
 const unitCopy = u => ({type: u.type, services: u.services.map(String), brand: u.brand || null, model: u.model || null,
                         serial: u.serial || null, extra: u.extra || null, problem: u.problem || null,
                         ...(u.cu ? {cu: u.cu} : {}),     // 43: which saved appliance it is
+                        ...(u.variant ? {variant: u.variant} : {}),   // 54: its type, ½ hp, 1 hp…
                         ...(u.specs && Object.keys(u.specs).length ? {specs: {...u.specs}} : {})});   // 44: the owner's boxes
 /* "Window #1", "Window #2", "Split #1". */
 function unitNames(units){
@@ -1042,13 +1058,20 @@ const unitsLine = units => {
 const unionServices = units => [...new Set(units.flatMap(u => u.services))];
 /* A price lookup, (service, type) → number or null. The page has one only while the owner
    shows prices; the office always has its list; a technician has none. */
-const officePrice = (k, t) => { const r = svcRows().find(x => x.key === k); return r && r.prices && r.prices[t] != null ? Number(r.prices[t]) : null; };
+const officePrice = (k, t, v) => {
+  const r = svcRows().find(x => x.key === k);
+  // 55: an old job's shared key ("clean", not the appliance's own) keeps its list price
+  if (v || (r && r.unit_type === t && activeVariants(t).length)) return variantPrice(variantsOf(t), k, v);
+  return r && r.prices && r.prices[t] != null ? Number(r.prices[t]) : null; };
+// the page's: list_services' types (pubTypes), even for a signed-in customer whose db.types has no prices
 const pagePrice = () => Object.values(pubPrices).some(Boolean)
-  ? (k, t) => (pubPrices[k] && pubPrices[k][t] != null ? Number(pubPrices[k][t]) : null) : null;
+  ? (k, t, v) => { const tp = (pubTypes || []).find(x => x.key === t) || {}, vs = tp.variants || [];
+      if (v || (vs.length && (tp.services || []).includes(k))) return variantPrice(vs, k, v);   // 55: as officePrice
+      return pubPrices[k] && pubPrices[k][t] != null ? Number(pubPrices[k][t]) : null; } : null;
 function unitPrice(u, pf){
   if (!pf || !u.type) return null;
   let sum = 0;
-  for (const k of u.services){ const p = pf(k, u.type); if (p == null) return null; sum += p; }
+  for (const k of u.services){ const p = pf(k, u.type, u.variant); if (p == null) return null; sum += p; }
   return sum;
 }
 /* A half-known total is never shown as if it were the total. */
@@ -1087,7 +1110,8 @@ function cartHtml(cart, units, opts){
   if (!units.length) return editable ? '<div class="cart-empty">Nothing yet — tap what it is, above.</div>' : '';
   const names = unitNames(units), total = unitsPrice(units, pf);
   return `<div class="cart-list">${units.map((u, i) => {
-      const up = unitPrice(u, pf), meta = [u.brand, u.model, u.serial ? 'SN ' + u.serial : ''].filter(Boolean).join(' · ');
+      const up = unitPrice(u, pf), meta = [(variantOf(u.type, u.variant) || {}).label,   // 54
+        u.brand, u.model, u.serial ? 'SN ' + u.serial : ''].filter(Boolean).join(' · ');
       return `<div class="cart-unit">
         <div class="cart-unit-head">
           ${editable ? `<button type="button" class="cart-unit-name" data-act="unitedit" data-cart="${cart}" data-i="${i}">${esc(names[i])} <span aria-hidden="true">›</span></button>`
@@ -1097,7 +1121,7 @@ function cartHtml(cart, units, opts){
           ${editable ? `<button type="button" class="cart-x" data-act="unitdel" data-cart="${cart}" data-i="${i}" aria-label="Remove ${esc(names[i])}">🗑</button>` : ''}
         </div>
         <div class="cart-svcs">${u.services.map(k => {
-          const p = pf && u.type ? pf(k, u.type) : null;
+          const p = pf && u.type ? pf(k, u.type, u.variant) : null;
           return `<span class="svc-chip">${esc(svcLabel(k))}${p != null ? ` <i>${esc(peso0(p))}</i>` : ''}${editable
             ? `<button type="button" data-act="unitsvcx" data-cart="${cart}" data-i="${i}" data-v="${esc(k)}" aria-label="Take off ${esc(svcLabel(k))}">×</button>` : ''}</span>`; }).join('')}</div>
         ${u.extra ? `<div class="cart-problem"><b>Additionals:</b> ${esc(u.extra)}</div>` : ''}
@@ -1155,7 +1179,9 @@ function drawUnitSheet(){
   if (!unitEd){ box.hidden = true; lockBody(); return; }
   const u = unitEd.unit, units = cartUnits(unitEd.cart), pf = cartPrice(unitEd.cart);
   const name = unitEd.index >= 0 ? unitNames(units)[unitEd.index] : typeLabel(u.type) + ' #' + (units.filter(x => x.type === u.type).length + 1);
-  const keys = cartKeys(unitEd.cart).filter(k => typeOffers(u.type, k) || u.services.includes(k));   // A2 (28)
+  // 54: its type (½ hp, 1 hp…), optional; picked, the services follow it
+  const vs = activeVariants(u.type), cur = variantOf(u.type, u.variant);
+  const keys = cartKeys(unitEd.cart).filter(k => (cur ? (cur.services || []).includes(k) : typeOffers(u.type, k)) || u.services.includes(k));   // A2 (28)
   box.hidden = false;
   const cid = cartCustomer(unitEd.cart), saved = cid ? savedOf(cid, u.cu) : null;
   if (unitEd.pick){   // 43: which of their saved ones is it?
@@ -1173,9 +1199,15 @@ function drawUnitSheet(){
   $('.unit-card', box).innerHTML = `
     <div class="unit-head"><div class="unit-title">${esc(name)}</div>
       <button type="button" class="cart-x" data-act="unitclose" aria-label="Close">✕</button></div>
+    ${vs.length || cur ? `<div class="fieldlabel">Which type? <span class="opt">— optional</span></div>
+    <div class="tabbar tight">${[...vs, ...(cur && !vs.includes(cur) ? [cur] : [])].map(v =>
+      `<button type="button" class="tab-btn${cur === v ? ' active' : ''}" data-act="unitvar" data-v="${esc(v.id)}">${esc(v.label)}</button>`).join('')}
+      <button type="button" class="tab-btn${cur ? '' : ' active'}" data-act="unitvar" data-v="">Not sure</button></div>
+    ${pf && !cur ? `<p class="hint">${unitEd.cart === 'pub' ? 'Its price depends on the type. Not sure? We tell you on the call.'
+                                                             : 'No type, no price — set it after the call.'}</p>` : ''}` : ''}
     <div class="fieldlabel">What services?</div>
     <div class="tabbar tight">${keys.map(k => {
-      const p = pf ? pf(k, u.type) : null;
+      const p = pf ? pf(k, u.type, u.variant) : null;
       return `<button type="button" class="tab-btn${u.services.includes(k) ? ' active' : ''}" data-act="unitsvc" data-v="${esc(k)}">${esc(svcLabel(k))}${p != null ? ' · ' + esc(peso0(p)) : ''}</button>`; }).join('')
       || '<p class="hint">The service list has not loaded — this needs signal.</p>'}</div>
     <div class="row">
@@ -2093,6 +2125,7 @@ function jobDayFilter(j, day){
   if (day === 'today') return j.scheduled_on === today && open;
   if (day === 'tomorrow') return j.scheduled_on === manilaDate(1) && open;
   if (day === 'unplanned') return !j.scheduled_on && open;
+  if (day === 'mine') return open && crewOf(j).includes(session && session.uid);   // TODO2 #4: on its crew
   if (day === 'unpaid') return j.status === 'done' && !j.paid_method;
   if (day === 'done') return j.status === 'done' && !!j.paid_method;
   if (day === 'cancelled') return j.status === 'cancelled';
@@ -2108,18 +2141,18 @@ function jobList(day){
    copies of one tab strip — the technician's had no Cancelled. One function draws both. Since
    38 (Guile, 2026-10-03) technicians and helpers get the jobs with no day too, so every tab
    is everyone's. */
-const JOB_TABS = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
+const JOB_TABS = [['today', 'Today'], ['mine', 'Assigned'], ['tomorrow', 'Tomorrow'], ['unplanned', 'No date'], ['all', 'Upcoming'],
                   ['unpaid', 'Unpaid'], ['done', 'Done'], ['cancelled', 'Cancelled']];
 function jobTabsHtml(){
   // the admin's View as (37) draws the field's tabs on the admin's own day
   const tech = inField(viewRole()), key = db.role === 'admin' ? 'day' : 'techDay';
-  const days = JOB_TABS;
+  const days = tech ? JOB_TABS : JOB_TABS.filter(d => d[0] !== 'mine');   // Assigned: technicians and helpers (TODO2 #4)
   if (!days.some(d => d[0] === ui[key])) ui[key] = 'today';
   const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;   // Unpaid counted: money owed
   const rows = jobList(ui[key]);
   // a helper has no map (37)
   return chips(key === 'day' ? 'day' : 'techday', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + (viewRole() === 'helper' ? '' : routeBar(ui[key])) + (tech ? '' : textAllBar(ui[key])) +
-    (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty('No jobs here.'));
+    (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty(ui[key] === 'mine' ? 'Nothing assigned to you yet.' : 'No jobs here.'));
 }
 function drawJobs(){ return jobTabsHtml(); }
 /* Idea 2 (2026-09-27): the day's jobs in order — morning first — on the map, and all of
@@ -2416,7 +2449,8 @@ function panelJob(p){
    "Checked by Guile (Technician)". A tick is keyed by the item's words, lower-cased. */
 const prepKey = t => String(t || '').trim().toLowerCase();
 function prepItems(j){
-  const keys = new Set([...(j.services || []), ...unionServices(unitsOf(j))]);
+  // 55: an old job's shared key reads the appliance's own copy, the list the owner edits now
+  const keys = new Set(unitsOf(j).flatMap(u => (u.services || []).map(k => ownKey(u.type, k))));
   const seen = new Set(), out = [];
   const add = (text, extra) => { const k = prepKey(text); if (k && !seen.has(k)){ seen.add(k); out.push({text, key: k, extra}); } };
   (db.checklists || []).filter(l => keys.has(l.key)).forEach(l => (l.items || []).forEach(t => add(t)));
@@ -2449,7 +2483,7 @@ function prepHtml(j){
           </button>
           ${i.extra ? `<button type="button" class="cart-x" data-act="prep" data-id="${id}" data-do="remove" data-v="${esc(i.text)}" aria-label="Take ${esc(i.text)} off this job">×</button>` : ''}
         </div>`; }).join('')
-        || `<p class="hint">Nothing listed for these services yet.${db.role === 'admin' ? ' The lists are in Admin → Services &amp; prices.' : ''}</p>`}
+        || `<p class="hint">Nothing listed for these services yet.${db.role === 'admin' ? ' The lists are in Admin → Appliances &amp; services.' : ''}</p>`}
       <div class="prep-add"><input data-pf="prepNew" maxlength="60" value="${esc(p.prepNew || '')}" placeholder="Add something for this job" autocomplete="off">
         <button type="button" class="b" data-act="prepadd" data-id="${id}">＋ Add</button></div>
     </div>`;
@@ -3146,12 +3180,13 @@ function panelMember(p){
 
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
-  const secs = [['services', 'Services & prices'], ['types', 'Appliances'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['texts', 'Texts'], ['job', 'Job'], ['specs', 'Specs'], ['numbers', 'Numbers']];   // job: 41, specs: 44
-  const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'services';
+  // 54: one tab where Services & prices, Appliances and Specs were
+  const secs = [['appliances', 'Appliances & services'], ['closed', 'Closed days'], ['shop', 'Shop'],
+    ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['texts', 'Texts'], ['job', 'Job'], ['numbers', 'Numbers']];   // job: 41
+  const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'appliances';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
-    ({services: drawServices, types: drawTypes, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, billing: drawBillSample, quote: drawQuoteAdmin,
-      texts: drawTexts, job: drawJobMover, specs: drawSpecs, numbers: drawNumbers})[v]();
+    ({appliances: drawAppliances, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, billing: drawBillSample, quote: drawQuoteAdmin,
+      texts: drawTexts, job: drawJobMover, numbers: drawNumbers})[v]();
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
    it"): the weekdays the shop never works, and a month calendar to close particular dates —
@@ -3412,99 +3447,126 @@ function drawShop(){
     </div>`;
 }
 const typeShort = k => k === 'Floor-mounted' ? 'Floor' : typeLabel(k);
-/* A1 (27): "Aircon & Other Appliances" — what a customer taps on the booking page, in the
-   owner's order. Add, rename, picture, order, Remove (and bring back). */
-function drawTypes(){
-  const all = typeRows(), shown = all.filter(t => t.active !== false), gone = all.filter(t => t.active === false);
-  const row = t => `<div class="lrow${t.active === false ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="utype" data-id="${esc(t.key)}">
-      <img class="type-ico" src="${esc(typePic(t.key))}" alt="">
-      <div class="lrow-main"><div class="lrow-title">${esc(t.label)}${unsentPill('type:' + t.key)}</div></div>
-      <div class="lrow-side">${t.active === false ? pill('off', 'Removed') : pill('scheduled', 'On the page')}</div></div>`;
-  return `<div class="card"><div class="menu-title">Aircon &amp; Other Appliances ${infoBtn('types')}</div>
-      <p class="hint">What a customer taps on the booking page, in this order. Each one’s prices are in Services &amp; prices.</p></div>
-    <div class="list">${shown.map(row).join('')}</div>
+/* Admin → Appliances & services (54; TODO2 items 1 and 5, Guile 2026-10-28): ONE tab where
+   "Services & prices", "Appliances" and "Specs" were. The appliances in the owner's order, and
+   open one: its types (½ hp, 1 hp…), its own services and prices, its specs. Every list is put
+   in order by holding ⠿ and dragging (drag, below). */
+const dragHandle = () => '<button type="button" class="drag-h" data-drag data-act="drag" aria-label="Hold and drag to change the order">⠿</button>';
+const ownServices = t => svcRows().filter(s => s.unit_type === t);
+function drawAppliances(){
+  const set = db.settings || {}, all = typeRows(), shown = all.filter(t => t.active !== false), gone = all.filter(t => t.active === false);
+  const sw = (act, on, title, info) => `<div class="card row-between">
+      <div class="menu-title">${title} ${infoBtn(info)}</div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
+        `<button type="button" class="${on === v ? 'active' : ''}" data-act="${act}" data-v="${v}">${t}</button>`).join('')}</div></div>`;
+  const row = (t, dr) => { const n = ownServices(t.key).filter(s => s.active).length, v = activeVariants(t.key).length;
+    return `<div class="lrow${t.active === false ? ' off' : ''}"${dr ? ` data-drag-row data-key="${esc(t.key)}"` : ''} role="button" tabindex="0" data-act="open" data-kind="utype" data-id="${esc(t.key)}">
+      ${dr ? dragHandle() : ''}<img class="type-ico" src="${esc(typePic(t.key))}" alt="">
+      <div class="lrow-main"><div class="lrow-title">${esc(t.label)}${unsentPill('type:' + t.key)}</div>
+        <div class="lrow-sub">${esc((n ? n + (n === 1 ? ' service' : ' services') : 'No services yet') + (v ? ' · ' + v + (v === 1 ? ' type' : ' types') : ''))}</div></div>
+      <div class="lrow-side">${t.active === false ? pill('off', 'Removed') : n ? pill('scheduled', 'On the page') : pill('off', 'Not on the page')}</div></div>`; };
+  return sw('showprices', !!set.show_prices, 'Show prices on the booking page', 'showprices')
+    + sw('showpricestech', !!set.show_prices_tech, 'Show prices to technicians &amp; helpers', 'showpricestech')
+    + `<div class="card"><div class="menu-title">Aircon &amp; Other Appliances ${infoBtn('types')}</div>
+      <p class="hint">What a customer taps on the booking page, in this order — hold ⠿ and drag to change it. Open one for its types, services, prices and specs.</p></div>
+    <div class="list" data-drag-list="types">${shown.map(t => row(t, shown.length > 1)).join('')}</div>
     <div class="stack"><button type="button" class="b primary wide" data-act="open" data-kind="utype" data-id="">+ Add an appliance</button></div>
-    ${gone.length ? `<div class="sec">Removed — tap one to bring it back</div><div class="list">${gone.map(row).join('')}</div>` : ''}`;
+    ${gone.length ? `<div class="sec">Removed — tap one to bring it back</div><div class="list">${gone.map(t => row(t, false)).join('')}</div>` : ''}`;
 }
+// a list whose rows are dragged into order: only with two or more to order
+const dragList = (what, rows, fn) => rows.length ? `<div class="list" data-drag-list="${esc(what)}">${rows.map(x => fn(x, rows.length > 1)).join('')}</div>` : '';
 function panelUtype(p){
-  const t = p.id ? typeOf(p.id) : null;
-  if (p.label == null){ p.label = t ? t.label : ''; p.icon = t ? t.icon : 'car-aircon';
-    // A2 (28): what it offers — a new one starts with nothing ticked
-    p.services = t ? (Array.isArray(t.services) ? [...t.services] : svcRows().map(x => x.key)) : []; }
-  const svcs = svcRows().filter(x => x.active || p.services.includes(x.key));
-  const shown = activeTypes(), i = t ? shown.findIndex(x => x.key === t.key) : -1;
+  const t = p.id ? typeOf(p.id) : null, k = t ? t.key : '';
+  if (p.label == null){ p.label = t ? t.label : ''; p.icon = t ? t.icon : 'car-aircon'; }
   const own = p.icon && p.icon.startsWith('data:') ? [p.icon] : [];
-  return {title: t ? t.label : 'New appliance', sub: 'Aircon & Other Appliances', info: 'types', body: `
+  const vAll = t ? variantsOf(k) : [], vOn = vAll.filter(v => v.active !== false), vOff = vAll.filter(v => v.active === false);
+  const fAll = t ? (db.unitFields || []).filter(f => (f.types || []).includes(k)) : [];
+  const vPrice = (v, s) => !(v.services || []).includes(s) ? null : v.prices && v.prices[s] != null ? peso0(v.prices[s]) : '—';
+  const vRow = (v, dr) => `<div class="lrow${v.active === false ? ' off' : ''}"${dr ? ` data-drag-row data-key="${esc(v.id)}"` : ''} role="button" tabindex="0" data-act="open" data-kind="variant" data-id="${esc(k + '|' + v.id)}">
+      ${dr ? dragHandle() : ''}<div class="lrow-main"><div class="lrow-title">${esc(v.label)}</div>
+      <div class="lrow-sub">${esc((v.services || []).map(s => svcLabel(s) + ' ' + vPrice(v, s)).join(' · ') || 'No services ticked')}</div></div>
+      <span class="menu-chev">›</span></div>`;
+  const sRow = (s, dr) => `<div class="lrow${s.active ? '' : ' off'}"${dr ? ` data-drag-row data-key="${esc(s.key)}"` : ''} role="button" tabindex="0" data-act="open" data-kind="service" data-id="${esc(s.key)}">
+      ${dr ? dragHandle() : ''}<div class="lrow-main"><div class="lrow-title">${esc(s.label)}${unsentPill('svc:' + s.key)}</div>
+      <div class="lrow-sub">${esc(vOn.length ? 'Price on each type' : s.prices && s.prices[k] != null ? peso0(s.prices[k]) : 'No price yet')}</div></div>
+      <div class="lrow-side">${s.active ? pill('scheduled', 'On the page') : pill('off', 'Hidden')}</div></div>`;
+  const fRow = (f, dr) => `<div class="lrow${f.removed ? ' off' : ''}"${dr ? ` data-drag-row data-key="${esc(f.key)}"` : ''} role="button" tabindex="0" data-act="open" data-kind="unitfield" data-id="${esc(f.key)}">
+      ${dr ? dragHandle() : ''}<div class="lrow-main"><div class="lrow-title">${esc(f.label)}</div>
+      <div class="lrow-sub">${esc([f.long ? 'bigger box' : 'one line', f.public ? 'on the booking page' : 'shop only', f.removed ? 'removed' : ''].filter(Boolean).join(' · '))}</div></div>
+      <span class="menu-chev">›</span></div>`;
+  const addBtn = (kind, words) => `<div class="stack"><button type="button" class="b wide" data-act="opennew" data-kind="${kind}" data-for="${esc(k)}">${words}</button></div>`;
+  return {title: t ? t.label : 'New appliance', sub: 'Appliances & services', info: 'types', body: `
+    ${t ? `<div class="sec">Types <span class="opt">— ½ hp, 1 hp… optional ${infoBtn('variant')}</span></div>
+    ${dragList('variants:' + k, vOn, vRow)}${addBtn('variant', '+ Add a type')}
+    ${vOff.length ? `<div class="fieldlabel">Removed types — tap one to bring it back</div><div class="list">${vOff.map(v => vRow(v, false)).join('')}</div>` : ''}
+    <div class="sec">Services ${infoBtn('service')}</div>
+    ${dragList('services:' + k, ownServices(k), sRow) || '<p class="hint">No services yet. It shows on the booking page once it has one.</p>'}
+    ${addBtn('service', '+ Add a service')}
+    <div class="sec">Specs <span class="opt">— your own boxes, under Additionals</span></div>
+    ${dragList('specs:' + k, fAll.filter(f => !f.removed), fRow) || '<p class="hint">No boxes on this one.</p>'}
+    ${fAll.some(f => f.removed) ? `<div class="list">${fAll.filter(f => f.removed).map(f => fRow(f, false)).join('')}</div>` : ''}
+    ${addBtn('unitfield', '+ Add a box')}
+    <div class="sec">Name and picture</div>` : ''}
     <label>Name <input data-pf="label" maxlength="40" value="${esc(p.label)}" placeholder="e.g. Chiller" autocomplete="off"></label>
-    <div class="fieldlabel">Services it offers <span class="opt">— what a customer can pick for it</span></div>
-    <div class="tabbar tight">${svcs.map(x => `<button type="button" class="tab-btn${p.services.includes(x.key) ? ' active' : ''}" data-act="typesvc" data-v="${esc(x.key)}">${p.services.includes(x.key) ? '✓ ' : ''}${esc(x.label)}</button>`).join('')
-      || '<p class="hint">The service list has not come down yet.</p>'}</div>
     <div class="fieldlabel">Picture</div>
     <div class="icon-pick">${[...TYPE_ICONS, ...own].map(ic => `<button type="button" class="icon-opt${p.icon === ic ? ' active' : ''}" data-act="pset" data-f="icon" data-v="${esc(ic)}" aria-label="Picture ${esc(ic.startsWith('data:') ? 'of his own' : ic)}"><img src="${esc(ic.startsWith('data:') ? ic : 'icons/' + ic + '.png')}" alt=""></button>`).join('')}
       <label class="icon-opt icon-up">＋ Your own<input type="file" accept="image/png,image/*" data-typeicon hidden></label></div>
     <p class="hint">Your own: a PNG with a see-through background looks best. The phone shrinks it to 128 px.</p>
-    ${t && t.active !== false && shown.length > 1 ? `<div class="fieldlabel">Place on the booking page — ${i + 1} of ${shown.length}</div>
-      <div class="actions"><button type="button" class="b" data-act="typemove" data-id="${esc(t.key)}" data-v="-1"${i <= 0 ? ' disabled' : ''}>↑ Earlier</button>
-        <button type="button" class="b" data-act="typemove" data-id="${esc(t.key)}" data-v="1"${i >= shown.length - 1 ? ' disabled' : ''}>↓ Later</button></div>` : ''}
-    <div class="stack"><button type="button" class="b primary wide" data-act="savetype" data-id="${esc(t ? t.key : '')}">${t ? 'Save' : 'Add it'}</button>
+    <div class="stack"><button type="button" class="b primary wide" data-act="savetype" data-id="${esc(k)}">${t ? 'Save the name and picture' : 'Add it'}</button>
       ${!t ? '' : t.active === false
-        ? `<button type="button" class="b wide" data-act="typeshow" data-id="${esc(t.key)}" data-v="1">Bring it back</button>`
-        : `<button type="button" class="b danger wide" data-act="typeshow" data-id="${esc(t.key)}" data-v="0">Remove</button>`}</div>
-    ${t ? '<p class="hint">Remove takes it off the booking page. Jobs that already have it keep it, and so do its prices — Bring it back puts everything back.</p>' : ''}`};
+        ? `<button type="button" class="b wide" data-act="typeshow" data-id="${esc(k)}" data-v="1">Bring it back</button>`
+        : `<button type="button" class="b danger wide" data-act="typeshow" data-id="${esc(k)}" data-v="0">Remove</button>`}</div>
+    ${t ? '<p class="hint">Remove takes it off the booking page. Jobs that already have it keep it, and so do its services, types and prices — Bring it back puts everything back.</p>'
+        : '<p class="hint">Then open it to add its services. It shows on the booking page once it has one.</p>'}`};
 }
 /* One write per change; the phone's copy is changed at once (write → applyLocal). */
 function saveType(t, change, label){
   const next = {...t, ...change};
-  write('save_unit_type', {p_key: t.key, p_label: next.label, p_icon: next.icon, p_active: next.active !== false, p_sort: next.sort,
-      p_services: 'services' in change ? change.services : null},
+  write('save_unit_type', {p_key: t.key, p_label: next.label, p_icon: next.icon, p_active: next.active !== false, p_sort: next.sort},
     label, ['type:' + t.key], db => {
       if (!db.types || !db.types.length) db.types = BUILTIN_TYPES.map((x, n) => ({...x, active: true, sort: (n + 1) * 10}));
       const r = db.types.find(x => x.key === t.key); if (r) Object.assign(r, change);
       db.types.sort((a, b) => (a.sort || 0) - (b.sort || 0));
     });
 }
-function drawServices(){
-  const rows = svcRows(), on = !!((db.settings || {}).show_prices);
-  const sw = `<div class="card row-between">
-      <div class="menu-title">Show prices on the booking page ${infoBtn('showprices')}</div>
-      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
-        `<button type="button" class="${on === v ? 'active' : ''}" data-act="showprices" data-v="${v}">${t}</button>`).join('')}</div>
-    </div>
-    <div class="card row-between">
-      <div class="menu-title">Show prices to technicians &amp; helpers ${infoBtn('showpricestech')}</div>
-      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, t]) =>
-        `<button type="button" class="${!!(db.settings || {}).show_prices_tech === v ? 'active' : ''}" data-act="showpricestech" data-v="${v}">${t}</button>`).join('')}</div>
-    </div>`;
-  const line = (s, ts) => ts.map(t => typeShort(t) + ' ' + (s.prices && s.prices[t] != null ? peso0(s.prices[t]) : '—')).join(' · ');
-  // two to a line, only the appliances that offer it (28)
-  const pairs = s => { const out = []; activeTypes().filter(t => typeOffers(t.key, s.key)).forEach((t, i) => {
-    if (i % 2 === 0) out.push([t.key]); else out[out.length - 1].push(t.key); }); return out; };
-  return sw + (rows.length ? `<div class="list">${rows.map(s => `<div class="lrow${s.active ? '' : ' off'}" role="button" tabindex="0" data-act="open" data-kind="service" data-id="${esc(s.key)}">
-      <div class="lrow-main"><div class="lrow-title">${esc(s.label)}${unsentPill('svc:' + s.key)}</div>
-        ${pairs(s).map(pr => `<div class="lrow-sub">${esc(line(s, pr))}</div>`).join('') || '<div class="lrow-sub">Not offered on any appliance</div>'}</div>
-      <div class="lrow-side">${s.active ? pill('scheduled', 'On the page') : pill('off', 'Hidden')}</div></div>`).join('')}</div>`
-    : empty('The service list has not come down yet.')) +
-    `<div class="stack"><button type="button" class="b primary wide" data-act="open" data-kind="service" data-id="">+ Add a service</button></div>`;
+/* An appliance's type (54): its name, the services it offers ticked, each at its own price. */
+function panelVariant(p){
+  const [k0, vid] = String(p.id || '').split('|'), k = p.for || k0, v = vid ? variantOf(k, vid) : null;
+  if (p.label == null){
+    Object.assign(p, {label: v ? v.label : '', vid: v ? v.id : uuid(), type: k, ticks: v ? [...(v.services || [])] : []});
+    ownServices(k).forEach(s => { p['vp_' + s.key] = v && v.prices && v.prices[s.key] != null ? String(v.prices[s.key]) : ''; });
+  }
+  const svcs = ownServices(k).filter(s => s.active || p.ticks.includes(s.key));
+  return {title: v ? v.label : 'New type', sub: typeLabel(k), info: 'variant', body: `
+    <label>Name <input data-pf="label" maxlength="40" value="${esc(p.label)}" placeholder="½ hp, 1 hp, 2 hp…" autocomplete="off"></label>
+    <div class="fieldlabel">Services it offers, and its price <span class="opt">— no price: you tell them on the call</span></div>
+    ${svcs.map(s => { const on = p.ticks.includes(s.key);
+      return `<div class="var-row"><button type="button" class="tab-btn${on ? ' active' : ''}" data-act="vartick" data-v="${esc(s.key)}">${on ? '✓ ' : ''}${esc(s.label)}</button>
+        ${on ? `<span class="peso-in"><i>₱</i><input data-pf="vp_${esc(s.key)}" inputmode="decimal" value="${esc(p['vp_' + s.key] || '')}" placeholder="—" aria-label="${esc(s.label)} price"></span>` : ''}</div>`; }).join('')
+      || '<p class="hint">This appliance has no services yet. Add them first, under Services.</p>'}
+    <div class="stack"><button type="button" class="b primary wide" data-act="savevariant">${v ? 'Save' : 'Add it'}</button>
+      ${v ? `<button type="button" class="b wide${v.active === false ? '' : ' danger'}" data-act="savevariant" data-v="${v.active === false ? 'back' : 'remove'}">${v.active === false ? 'Bring it back' : 'Remove'}</button>` : ''}</div>
+    ${v && v.active !== false ? '<p class="hint">Remove takes it off the booking page. Jobs that already have it keep it.</p>' : ''}`};
 }
-/* The price boxes: every shown appliance for a new service, those that offer it after (28). */
-const priceTypes = r => activeTypes().filter(t => !r || typeOffers(t.key, r.key));
+/* A service is one appliance's own (54): its name, its price there — or on each type, when the
+   appliance has types — shown or hidden, and what to bring. */
 function panelService(p){
-  const r = p.id ? svcRows().find(x => x.key === p.id) : null;
+  const r = p.id ? svcRows().find(x => x.key === p.id) : null, own = r ? r.unit_type : p.for;
   if (p.label == null){
     p.label = r ? r.label : ''; p.active = r && !r.active ? '0' : '1';
     p.check = r ? checklistOf(r.key) : []; p.check0 = JSON.stringify(p.check);   // 37
-    p.types = [];   // 39: a new one is on the appliances ticked, none to start with
-    activeTypes().forEach(t => { p['price_' + t.key] = r && r.prices && r.prices[t.key] != null ? String(r.prices[t.key]) : ''; });
+    p.price = r && own && r.prices && r.prices[own] != null ? String(r.prices[own]) : '';
   }
-  const priced = r ? priceTypes(r) : activeTypes().filter(t => p.types.includes(t.key));
-  return {title: r ? r.label : 'New service', sub: r ? 'Service' : 'Shows on the booking page', info: 'service', body: `
+  const vs = own ? activeVariants(own) : [], start = starterOf(p);
+  const onType = v => !r || !(v.services || []).includes(r.key) ? 'not offered' : v.prices && v.prices[r.key] != null ? peso0(v.prices[r.key]) : '—';
+  return {title: r ? r.label : 'New service', sub: own ? typeLabel(own) : 'Service', info: 'service', body: `
     <label>Name <input data-pf="label" maxlength="60" value="${esc(p.label)}" placeholder="Freon recharge"></label>
-    ${r ? '' : `<div class="fieldlabel">Offered on <span class="opt">— tick the appliances it is for</span></div>
-    <div class="tabbar tight">${activeTypes().map(t => `<button type="button" class="tab-btn${p.types.includes(t.key) ? ' active' : ''}" data-act="svctype" data-v="${esc(t.key)}">${p.types.includes(t.key) ? '✓ ' : ''}${esc(t.label)}</button>`).join('')}</div>`}
-    <div class="fieldlabel">Price for each one ${r ? '<span class="opt">— the appliances that offer it; which ones is in Admin → Appliances</span>' : '<span class="opt">— the appliances ticked</span>'}</div>
-    ${priced.length ? `<div class="price-grid">${priced.map(t => `<label class="price-cell"><span>${esc(t.label)}</span>
-      <span class="peso-in"><i>₱</i><input data-pf="price_${esc(t.key)}" inputmode="decimal" value="${esc(p['price_' + t.key] || '')}" placeholder="—"></span></label>`).join('')}</div>`
-      : '<p class="hint">Tick an appliance above, and its price box shows here.</p>'}
+    ${!own ? '<p class="hint">A service from before each appliance had its own. Old jobs keep it.</p>'
+      : vs.length ? `<div class="fieldlabel">Price <span class="opt">— on each type</span></div>
+        <p class="hint">${esc(vs.map(v => v.label + ' ' + onType(v)).join(' · '))}</p>
+        <p class="hint">Open a type to tick this service on it and give its price.</p>`
+      : `<div class="price-grid"><label class="price-cell"><span>Price — ${esc(typeLabel(own))}</span>
+        <span class="peso-in"><i>₱</i><input data-pf="price" inputmode="decimal" value="${esc(p.price)}" placeholder="—"></span></label></div>`}
     <div class="fieldlabel">On the booking page</div>
     <div class="segment">${[['1', 'Shown'], ['0', 'Hidden']].map(([k, t]) =>
       `<button type="button" class="${p.active === k ? 'active' : ''}" data-act="pset" data-f="active" data-v="${k}">${t}</button>`).join('')}</div>
@@ -3512,12 +3574,79 @@ function panelService(p){
     <div class="card prep">
       ${p.check.map((t, i) => `<div class="prep-row"><span class="prep-main"><span class="prep-text">${esc(t)}</span></span>
         <button type="button" class="cart-x" data-act="chkx" data-i="${i}" aria-label="Take ${esc(t)} off the list">×</button></div>`).join('')
-        || `<p class="hint">Nothing yet.${STARTER_LISTS[p.id] ? '' : ' Add what the team must not forget.'}</p>`}
-      ${!p.check.length && STARTER_LISTS[p.id] ? `<button type="button" class="b" data-act="chkstarter">Start from our usual list (${STARTER_LISTS[p.id].length})</button>` : ''}
+        || `<p class="hint">Nothing yet.${start ? '' : ' Add what the team must not forget.'}</p>`}
+      ${!p.check.length && start ? `<button type="button" class="b" data-act="chkstarter">Start from our usual list (${start.length})</button>` : ''}
       <div class="prep-add"><input data-pf="chkNew" maxlength="60" value="${esc(p.chkNew || '')}" placeholder="Wire tester, electrical tape…" autocomplete="off">
         <button type="button" class="b" data-act="chkadd">＋ Add</button></div>
     </div>
     <div class="stack"><button type="button" class="b primary wide" data-act="saveservice">Save</button></div>`};
+}
+// the usual list a copied service started from (54: "split_clean_…" keeps "clean"'s)
+const starterOf = p => { const r = p.id && svcRows().find(x => x.key === p.id); return STARTER_LISTS[(r && r.origin) || p.id] || null; };
+
+/* ---------------------------------------------------------------- drag into order (54)
+   A list data-drag-list="what", its rows data-drag-row data-key, each with a ⠿ handle
+   (data-drag). Pointer events, so a finger works as a mouse does; the handle has
+   touch-action: none, so holding it does not scroll the page. The others slide aside to show
+   the gap; on the drop, dragDone writes the new order once.
+   shortcut: no scrolling while a row is held — fine for lists of a screen or two; add an
+   edge scroll if a list ever grows past that. */
+document.addEventListener('pointerdown', e => {
+  const h = e.target.closest && e.target.closest('[data-drag]'); if (!h || e.button > 0) return;
+  const row = h.closest('[data-drag-row]'), list = row && row.parentElement;
+  if (!list || !list.dataset.dragList) return;
+  e.preventDefault();
+  const rows = [...list.children].filter(r => r.hasAttribute('data-drag-row')), boxes = rows.map(r => r.getBoundingClientRect());
+  const i0 = rows.indexOf(row), step = rows.length > 1 ? Math.abs(boxes[1].top - boxes[0].top) - boxes[0].height : 0;
+  drag = {list, row, rows, boxes, i0, to: i0, y0: e.clientY, id: e.pointerId, shift: boxes[i0].height + step};
+  try { h.setPointerCapture(e.pointerId); } catch (x) {}
+  row.classList.add('dragging');
+});
+document.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const {rows, boxes, i0} = drag, dy = e.clientY - drag.y0, mid = boxes[i0].top + boxes[i0].height / 2 + dy;
+  let to = 0;
+  boxes.forEach((b, i) => { if (i !== i0 && mid > b.top + b.height / 2) to++; });
+  drag.to = to;
+  drag.row.style.transform = `translateY(${dy}px)`;
+  rows.forEach((r, i) => { if (i === i0) return;
+    const s = i0 < to && i > i0 && i <= to ? -drag.shift : i0 > to && i >= to && i < i0 ? drag.shift : 0;
+    r.style.transform = s ? `translateY(${s}px)` : ''; });
+});
+function dragEnd(e){
+  if (!drag || e.pointerId !== drag.id) return;
+  const {list, rows, i0, to} = drag;
+  rows.forEach(r => { r.style.transform = ''; r.classList.remove('dragging'); });
+  drag = null;
+  if (to !== i0 && e.type === 'pointerup'){
+    const keys = rows.map(r => r.dataset.key), [k] = keys.splice(i0, 1);
+    keys.splice(to, 0, k);
+    dragDone(list.dataset.dragList, keys);
+  }
+  if (dragAgain){ dragAgain = false; render(); }
+}
+document.addEventListener('pointerup', dragEnd);
+document.addEventListener('pointercancel', dragEnd);
+// the new order: 10, 20, 30… on the server (set_order), and on this phone at once
+function dragDone(what, keys){
+  const [kind, scope] = what.split(':'), n = new Map(keys.map((k, i) => [k, (i + 1) * 10]));
+  const bySort = (a, b) => (a.sort || 0) - (b.sort || 0) || String(a.label).localeCompare(String(b.label));
+  if (kind === 'specs'){   // his boxes are one list: these change places among themselves
+    const all = [...(db.unitFields || [])], at = all.map((f, i) => n.has(f.key) ? i : -1).filter(i => i >= 0);
+    const byKey = new Map(all.map(f => [f.key, f]));
+    at.forEach((i, j) => { all[i] = byKey.get(keys[j]); });
+    write('set_unit_fields', {p_fields: all}, 'Specs — order', ['unitfields'], db => { db.unitFields = all; });
+    return;
+  }
+  const words = {types: 'appliances', services: 'services — ' + typeLabel(scope), variants: 'types — ' + typeLabel(scope)}[kind];
+  write('set_order', {p_what: kind, p_keys: keys}, 'Order — ' + words, [kind === 'services' ? 'svc:order' : 'type:order'], db => {
+    if (kind === 'types') (db.types || []).forEach(t => { if (n.has(t.key)) t.sort = n.get(t.key); });
+    if (kind === 'services') (db.services || []).forEach(s => { if (n.has(s.key)) s.sort = n.get(s.key); });
+    if (kind === 'variants') variantsOf(scope).forEach(v => { if (n.has(v.id)) v.sort = n.get(v.id); });
+    (db.types || []).sort(bySort);
+    (db.services || []).sort(bySort);
+    const t = (db.types || []).find(x => x.key === scope); if (t && t.variants) t.variants.sort(bySort);
+  });
 }
 /* A first list per service, for the owner to cut down (37, 2026-10-03): what a crew usually
    carries for each in the trade — not measured here. Offered only while his list is empty;
@@ -3541,7 +3670,7 @@ function receiptOf(j){
   const c = jobCust(j), b = j.booking_id && db.bookings[j.booking_id];
   const units = unitsOf(j), names = unitNames(units);
   const lines = units.flatMap((u, i) => u.services.map(k => ({unit: names[i], label: svcLabel(k), type: u.type || '—',
-    amount: u.type ? officePrice(k, u.type) : null})));
+    amount: u.type ? officePrice(k, u.type, u.variant) : null})));
   const sum = lines.every(l => l.amount != null) ? lines.reduce((a, l) => a + l.amount, 0) : null;
   const total = j.price != null ? Number(j.price) : sum;
   // a technician's phone has no bookings: the job brings its booking's code (19)
@@ -3941,14 +4070,14 @@ window.addEventListener('resize', fitQuotes);
 function quoteLinesFrom(units){
   const m = new Map();
   units.forEach(u => u.services.forEach(k => {
-    const key = k + '|' + (u.type || ''), r = m.get(key);
-    if (r) r.qty++; else m.set(key, {k, type: u.type, qty: 1});
+    const key = k + '|' + (u.type || '') + '|' + (u.variant || ''), r = m.get(key);   // 54: and its type
+    if (r) r.qty++; else m.set(key, {k, type: u.type, variant: u.variant, qty: 1});
   }));
   return [...m.values()].map(r => {
-    const pr = r.type ? officePrice(r.k, r.type) : null;
+    const pr = r.type ? officePrice(r.k, r.type, r.variant) : null, vl = (variantOf(r.type, r.variant) || {}).label;
     // "Repair of Split Type Aircon"; an appliance that is not one of the four, by its own name
     const what = !r.type ? 'Aircon' : BUILTIN_TYPES.some(b => b.key === r.type) ? typeLabel(r.type) + ' Type Aircon' : typeLabel(r.type);
-    return {text: svcLabel(r.k) + ' of ' + what, qty: String(r.qty), price: pr != null ? String(pr) : ''};
+    return {text: svcLabel(r.k) + ' of ' + what + (vl ? ' (' + vl + ')' : ''), qty: String(r.qty), price: pr != null ? String(pr) : ''};
   });
 }
 /* Where a quotation lives: a New booking (the Inbox), or a job until it is Done (26). A
@@ -5529,20 +5658,9 @@ function moverMeans(at){
   return 'At ' + clock12(at) + (at === '12:00' ? ' (noon)' : '') + ' each day, every job of that day — and any older one — that is not Done or Cancelled moves to the next day, same time. A job whose own time is later than ' + clock12(at) + ' stays.'
     + (at < '17:00' ? ' This is during the working day: a job still being worked on at ' + clock12(at) + ' moves too.' : '');
 }
-/* Admin → Specs (44): his own boxes on an aircon, below Additionals. */
-function drawSpecs(){
-  const list = [...(db.unitFields || [])].sort((a, b) => !!a.removed - !!b.removed);
-  return `<div class="card"><p class="hint">Your own boxes on an aircon — Horsepower, Refrigerant, anything — under Brand, Model, Serial number and Additionals. Each one on the appliances you tick; shown on the booking page only if you say so.</p></div>
-    ${list.length ? `<div class="list">${list.map(f => `<div class="lrow${f.removed ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="unitfield" data-id="${esc(f.key)}">
-        <div class="lrow-main"><div class="lrow-title">${esc(f.label)}</div>
-          <div class="lrow-sub">${esc([(f.types || []).map(typeLabel).join(', ') || 'No appliance', f.long ? 'bigger box' : 'one line',
-            f.public ? 'on the booking page' : 'shop only', f.removed ? 'removed' : ''].filter(Boolean).join(' · '))}</div></div>
-        <span class="menu-chev">›</span></div>`).join('')}</div>` : ''}
-    <div class="stack"><button type="button" class="b primary wide" data-act="open" data-kind="unitfield" data-id="">＋ Add a box</button></div>`;
-}
 function panelUnitField(p){
   const f = p.id ? (db.unitFields || []).find(x => x.key === p.id) : null;
-  if (p.label == null) Object.assign(p, {label: f ? f.label : '', types: f ? [...(f.types || [])] : [], long: f ? (f.long ? '1' : '') : '',
+  if (p.label == null) Object.assign(p, {label: f ? f.label : '', types: f ? [...(f.types || [])] : p.for ? [p.for] : [], long: f ? (f.long ? '1' : '') : '',   // 54: + Add a box on an appliance
     pub: f ? (f.public ? '1' : '') : '', key: f ? f.key : 'f_' + Math.random().toString(36).slice(2, 10).replace(/[^a-z0-9]/g, 'x')});
   const seg = (k, opts) => `<div class="segment">${opts.map(([v, t]) => `<button type="button" class="${(p[k] || '') === v ? 'active' : ''}" data-act="pset" data-f="${k}" data-v="${v}">${t}</button>`).join('')}</div>`;
   return {title: f ? f.label : 'New box', sub: 'Specs', body: `
@@ -5659,6 +5777,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   book: panelBook, editjob: panelEditJob, settings: panelSettings, addcust: panelAddCust, editcust: panelEditCust,
   deljob: panelDelete, delbooking: panelDelete, text: panelText, textall: panelTextAll,
   assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField,   // 39, 43, 44
+  variant: panelVariant,   // 54
   jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
   askjob: panelAskJob, askanswer: panelAskAnswer,   // 49
   ...(window.FX_PANELS || {})};   // 50: name effects, web/namefx.js
@@ -5933,26 +6052,53 @@ const ACTIONS = {
         || (!id && typeRows().some(x => x.key.toLowerCase() === label.toLowerCase()))){
       notice('There is already one called ' + label + '. Nothing was saved.', true); return;
     }
-    if (!p.services.some(k => (svcRows().find(x => x.key === k) || {}).active)){
-      notice('Tick at least one service it offers. Nothing was saved.', true); return;
-    }
     const t = id ? typeOf(id) : null;
-    if (t){ saveType(t, {label, icon: p.icon, services: [...p.services]}, 'Appliance — ' + label); closePanel(); return; }
-    // a new one: its first name is its key, for good (27)
+    if (t){ saveType(t, {label, icon: p.icon}, 'Appliance — ' + label); closePanel(); return; }
+    // a new one: its first name is its key, for good (27); its services are its own, added next (54)
     const sort = Math.max(0, ...typeRows().map(x => x.sort || 0)) + 10;
-    write('save_unit_type', {p_key: null, p_label: label, p_icon: p.icon, p_active: true, p_sort: sort, p_services: [...p.services]},
+    write('save_unit_type', {p_key: null, p_label: label, p_icon: p.icon, p_active: true, p_sort: sort},
       'Appliance — ' + label, ['type:' + label], db => {
         if (!db.types || !db.types.length) db.types = BUILTIN_TYPES.map((x, n) => ({...x, active: true, sort: (n + 1) * 10}));
-        db.types.push({key: label, label, icon: p.icon, active: true, sort, services: [...p.services]});
+        db.types.push({key: label, label, icon: p.icon, active: true, sort, services: [], variants: [], legacy: {}});
       });
     closePanel();
-    toast(label + ' is on the booking page. Give it its prices in Services & prices.');
+    toast(label + ' is added. Open it and add its services — it shows on the booking page once it has one.');
   },
-  typesvc: (id, el) => {
-    const p = topPanel(); if (!p || p.kind !== 'utype') return;
-    const k = el.dataset.v, i = p.services.indexOf(k);
-    if (i >= 0) p.services.splice(i, 1); else p.services.push(k);
+  // ---- Appliances & services (54)
+  opennew: (id, el) => openPanel({kind: el.dataset.kind, id: '', for: el.dataset.for}),
+  drag: () => {},   // the ⠿ handle: holding it drags; a tap does nothing
+  vartick: (id, el) => {
+    const p = topPanel(); if (!p || p.kind !== 'variant') return;
+    const k = el.dataset.v; p.ticks = p.ticks.includes(k) ? p.ticks.filter(x => x !== k) : [...p.ticks, k];
     render();
+  },
+  savevariant: (id, el) => {
+    const p = topPanel(); if (!p || p.kind !== 'variant') return;
+    const label = String(p.label || '').trim(), k = p.type, v = variantOf(k, p.vid);
+    if (!label || label.length > 40 || /[<>"&]/.test(label)){ notice('Give the type a name, up to 40 letters, without < > " or &. Nothing was saved.', true); return; }
+    if (variantsOf(k).some(x => x.id !== p.vid && x.label.toLowerCase() === label.toLowerCase())){
+      notice('There is already a type called ' + label + '. Nothing was saved.', true); return;
+    }
+    const active = el.dataset.v === 'remove' ? false : el.dataset.v === 'back' ? true : !(v && v.active === false);
+    if (active && !p.ticks.length){ notice('Tick at least one service this type offers. Nothing was saved.', true); return; }
+    const services = {};
+    for (const s of p.ticks){
+      const raw = String(p['vp_' + s] || '').trim();
+      if (!raw){ services[s] = null; continue; }
+      const n = parsePrice(raw);
+      if (n == null){ notice('The ' + svcLabel(s) + ' price “' + raw + '” is not a number I can read. Nothing was saved.', true); return; }
+      services[s] = n;
+    }
+    write('save_variant', {p_id: p.vid, p_unit_type: k, p_label: label, p_active: active, p_services: services}, 'Type — ' + label, ['type:' + k], db => {
+      const t = (db.types || []).find(x => x.key === k); if (!t) return;
+      const list = t.variants || (t.variants = []);
+      let x = list.find(y => y.id === p.vid);
+      if (!x){ x = {id: p.vid, sort: Math.max(0, ...list.map(y => y.sort || 0)) + 10}; list.push(x); }
+      Object.assign(x, {label, active, services: [...p.ticks],
+        prices: Object.fromEntries(Object.entries(services).filter(([, n]) => n != null))});
+    });
+    closePanel();
+    toast(!active ? label + ' is off the booking page. Bring it back any time.' : 'Saved — ' + label);
   },
   typeshow: (id, el) => {
     const t = typeOf(id); if (!t) return;
@@ -5964,14 +6110,6 @@ const ACTIONS = {
   },
   ppuse: () => usePagePhoto(),
   ppremove: id => setPagePhotos(pagePhotos().filter(p => p !== id), 'Page photos — one removed'),
-  typemove: (id, el) => {
-    const shown = activeTypes().slice(), i = shown.findIndex(x => x.key === id), j = i + Number(el.dataset.v);
-    if (i < 0 || j < 0 || j >= shown.length) return;
-    [shown[i], shown[j]] = [shown[j], shown[i]];
-    // number the shown ones 10, 20, 30… and write only the ones that moved
-    shown.forEach((t, n) => { const want = (n + 1) * 10; if (t.sort !== want) saveType(t, {sort: want}, 'Order — ' + t.label); });
-    render();
-  },
   // ---- the quotation (25)
   qtzoom: () => { qtFull = !qtFull; render(); },
   qtline: (id, el) => {
@@ -6074,36 +6212,28 @@ const ACTIONS = {
     closePanel();
     toast('Saved — ' + name);
   },
-  svctype: (id, el) => {   // 39: New service, the appliances it is on
-    const p = topPanel(); if (!p || p.kind !== 'service') return;
-    const k = el.dataset.v;
-    p.types = p.types.includes(k) ? p.types.filter(x => x !== k) : [...p.types, k];
-    render();
-  },
   saveservice: () => {
     const p = topPanel(); if (!p || p.kind !== 'service') return;
     const label = (p.label || '').trim();
     if (label.length < 2){ notice('Give the service a name. Nothing was saved.', true); return; }
-    if (!p.id && !(p.types || []).length){ notice('Tick at least one appliance it is offered on. Nothing was saved.', true); return; }
+    const old = p.id ? svcRows().find(x => x.key === p.id) : null, own = old ? old.unit_type : p.for;
     const prices = {};
-    // the shown ones only: a removed one is not sent, so its prices stay (27); new: the ticked (39)
-    for (const t of (p.id ? priceTypes(svcRows().find(x => x.key === p.id)) : activeTypes().filter(x => p.types.includes(x.key))).map(x => x.key)){
-      const raw = (p['price_' + t] || '').trim();
-      if (!raw){ prices[t] = null; continue; }
-      const v = parsePrice(raw);
-      if (v == null){ notice('The ' + typeLabel(t) + ' price “' + raw + '” is not a number I can read. Nothing was saved.', true); return; }
-      prices[t] = v;
+    // 54: its own appliance's price, while that has no types — a type carries its own
+    if (own && !activeVariants(own).length){
+      const raw = String(p.price || '').trim(), v = raw ? parsePrice(raw) : null;
+      if (raw && v == null){ notice('The price “' + raw + '” is not a number I can read. Nothing was saved.', true); return; }
+      prices[own] = v;
     }
     const key = p.id || (label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'svc')
       + '_' + Math.random().toString(16).slice(2, 6);
     const active = p.active !== '0';
-    const ticked = p.id ? null : [...p.types];
-    const op = write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices, ...(ticked ? {p_types: ticked} : {})}, 'Service — ' + label, ['svc:' + key], db => {
+    const op = write('save_service', {p_key: key, p_label: label, p_active: active, p_prices: prices, ...(old ? {} : {p_unit_type: own})}, 'Service — ' + label, ['svc:' + key], db => {
       const list = db.services || (db.services = []);
       let r = list.find(x => x.key === key);
-      if (!r){ r = {key, sort: 9999}; list.push(r);
-        // a new service starts on the appliances ticked (39)
-        (db.types || []).forEach(t => { if (Array.isArray(t.services) && ticked.includes(t.key) && !t.services.includes(key)) t.services.push(key); }); }
+      if (!r){ r = {key, unit_type: own, origin: null, sort: Math.max(0, ...list.filter(x => x.unit_type === own).map(x => x.sort || 0)) + 10};
+        list.push(r);
+        // a new service is its appliance's own, and offered there (54)
+        const t = (db.types || []).find(x => x.key === own); if (t && Array.isArray(t.services) && !t.services.includes(key)) t.services.push(key); }
       const kept = {...(r.prices || {})};
       Object.entries(prices).forEach(([t, v]) => { if (v == null) delete kept[t]; else kept[t] = v; });
       Object.assign(r, {label, active, prices: kept});
@@ -6131,7 +6261,7 @@ const ACTIONS = {
     p.chkNew = ''; againTyping('chkNew', render);
   },
   chkx: (id, el) => { const p = topPanel(); if (p && p.check){ p.check.splice(+el.dataset.i, 1); render(); } },
-  chkstarter: () => { const p = topPanel(); if (p && STARTER_LISTS[p.id]){ p.check = [...STARTER_LISTS[p.id]]; render(); } },
+  chkstarter: () => { const p = topPanel(), l = p && starterOf(p); if (l){ p.check = [...l]; render(); } },
   viewas: (id, el) => { ui.viewAs = el.dataset.v; ui.viewMenu = false; saveUi(); render(); },
   viewmenu: () => { ui.viewMenu = !ui.viewMenu; render(); },
   inbox: (id, el) => { ui.inbox = el.dataset.v; saveUi(); render(); },
@@ -6193,7 +6323,14 @@ const ACTIONS = {
   notesmore: (id, el) => { const k = el.dataset.v; if (openNotes.has(k)) openNotes.delete(k); else openNotes.add(k); if (unitEd) drawUnitSheet(); render(); },
   unitedit: (id, el) => {
     const u = cartUnits(el.dataset.cart)[+el.dataset.i]; if (!u) return;
-    unitEd = {cart: el.dataset.cart, index: +el.dataset.i, unit: {...u, services: [...u.services]}};
+    // 54: an old job's shared service is this appliance's own now, so it shows once, ticked
+    unitEd = {cart: el.dataset.cart, index: +el.dataset.i, unit: {...u, services: [...new Set(u.services.map(k => ownKey(u.type, k)))]}};
+    drawUnitSheet();
+  },
+  unitvar: (id, el) => {   // 54: its type; the services it does not offer come off
+    if (!unitEd) return;
+    const u = unitEd.unit, v = variantOf(u.type, el.dataset.v);
+    if (v){ u.variant = v.id; u.services = u.services.filter(k => (v.services || []).includes(k)); } else delete u.variant;
     drawUnitSheet();
   },
   unitsvc: (id, el) => {
@@ -6651,7 +6788,8 @@ const ACTIONS = {
     const old = (db.unitFields || []).find(x => x.key === p.key);
     const removed = el.dataset.v === 'remove' ? true : el.dataset.v === 'back' ? false : !!(old && old.removed);
     const f = {key: p.key, label, types: [...p.types], long: !!p.long, public: !!p.pub, removed};
-    const list = [...(db.unitFields || []).filter(x => x.key !== f.key), f];
+    // in its place: an edited box used to go to the end of the list (54, the order is his now)
+    const list = (db.unitFields || []).some(x => x.key === f.key) ? db.unitFields.map(x => x.key === f.key ? f : x) : [...(db.unitFields || []), f];
     write('set_unit_fields', {p_fields: list}, 'Specs — ' + label, ['unitfields'], db => { db.unitFields = list; });
     closePanel();
     toast(removed ? 'Removed. Bring it back any time.' : 'Saved. It shows on the aircons you ticked.');
