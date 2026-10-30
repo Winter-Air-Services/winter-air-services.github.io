@@ -168,8 +168,8 @@ let lastChangeAt = null;   // when a pull last brought something (R5)
 const dbKey = () => 'ws_db_' + session.uid;
 const qKey  = () => 'ws_queue_' + session.uid;
 const nKey  = () => 'ws_notices_' + session.uid;
-const DB_SHAPE = 53;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew, 53: customers.photos, bookings.photo_count)
-function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}}; }
+const DB_SHAPE = 56;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew, 53: customers.photos, bookings.photo_count, 56: checkins)
+function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}, checkins: {}}; }
 /* docs/rules/sync.md: when what the server sends changes shape, bump this, so every phone
    takes one full fresh copy instead of keeping rows that predate the change. 2026-09-26:
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
@@ -186,6 +186,7 @@ const REPAIR_ID = 9;   // 4: customers carry photo_path; a technician's jobs car
 function loadLocal(){
   db = lsGet(dbKey(), null) || emptyDb();
   if (db.repair !== REPAIR_ID){ db.cursor = null; db.repair = REPAIR_ID; }
+  if (!db.checkins) db.checkins = {};   // 56: a copy made before the times
   queue = lsGet(qKey(), []);
   notices = lsGet(nKey(), []);
 }
@@ -273,6 +274,7 @@ async function flush(){
     reportHaves(); fetchMissingPhotos();   // 46
     moveBookingPics();   // 53
     carryOver();         // 41
+    sendPlace();         // 58
   } finally {
     flushing = false;
     render();
@@ -329,7 +331,7 @@ async function pull(){
   const busy = new Set(queue.flatMap(o => o.touches));
   const before = {bookings: {...db.bookings}, customers: {...db.customers}, jobs: {...db.jobs}};
   if (db.cursor === null){           // a full copy: anything not in it is gone
-    for (const k of ['bookings', 'customers', 'jobs', 'team'])
+    for (const k of ['bookings', 'customers', 'jobs', 'team', 'checkins'])
       for (const id of Object.keys(db[k])) if (!busy.has(id)) delete db[k][id];
   }
   // 46: a work photo taken off a job, or a deleted job's photos, leave this phone too
@@ -350,6 +352,18 @@ async function pull(){
   for (const id of res.removed_jobs || []) if (!busy.has(id)) delete db.jobs[id];
   for (const id of res.removed_bookings || []) if (!busy.has(id)) delete db.bookings[id];
   for (const id of res.removed_customers || []) if (!busy.has(id)) delete db.customers[id];   // 22
+  // 56: the times — a tombstone takes one off (the office keeps it, to show who and to bring it
+  // back); older than the server's window leaves this phone
+  for (const row of res.checkins || []) if (!busy.has(row.id)){
+    if (row.removed_at && db.role !== 'admin') delete db.checkins[row.id]; else db.checkins[row.id] = row;
+  }
+  const ckFrom = manilaDate(db.role === 'admin' ? -100 : -35);
+  for (const k of Object.values(db.checkins)) if (k.day < ckFrom && !busy.has(k.id)) delete db.checkins[k.id];
+  if (res.checkin_rules && !queue.some(o => o.fn === 'set_checkin_rule')) db.checkinRules = res.checkin_rules;
+  if (res.seen) db.seen = res.seen;   // 56: everybody's last heartbeat (admin only)
+  if (res.places) db.places = res.places;   // 58: the users map, and who was asked (admin only)
+  if (res.asked && !queue.some(o => o.fn === 'ask_location')) db.asked = res.asked;
+  if ('ask_location' in res) db.askLocation = res.ask_location;   // 58: the office asked this person
   db.cursor = res.cursor || db.cursor;
   if (res.profile) db.profile = res.profile;   // name and the "I work here" claim
   if (res.settings){   // the shop's own settings (admin only)
@@ -987,6 +1001,10 @@ const INFO = {
   shopfb: ['Facebook page', 'With a link here, the booking page shows “Message us on Facebook” beside the call button. Leave it empty to hide it.'],
   shopgcash: ['GCash', 'The billing statement shows the number and the name, so the customer can pay on the spot. With a picture named gcash-qr.png in web/img, it shows the QR code too.'],
   gap: ['Check-up gap', 'Counted from a customer’s last finished job. Every admin phone uses the same number.'],
+  checkin: ['Check-ins', 'Their Time in and Time out for the day, and each job’s arrived and left — Start the job and Mark done count for the whole crew, at the time they were tapped (even with no signal).\n\nOnly the office changes a time: Edit, Remove, or add a forgotten time out. Each change shows under the time, with who changed it. The last 100 days are on this phone.'],
+  ckloc: ['Require location', 'Off: Time in and Time out are one tap.\n\nOn: the phone sends where it is with each time; with location off, the time is not kept and the phone says why. You see it on the person’s times.'],
+  report: ['Service report', 'One for each appliance on the job, like the paper one: tick the work done, write the findings, Save. The number is given by the office’s server when it is first saved, counting up from the number set in Admin → Service report.\n\nThe office and technicians fill it in and change it; the customer signs it on the phone. Print it, or send it as a PDF.'],
+  reportadmin: ['Service report', 'The ticks, the line over the client’s signature, and the number the next report takes. Each job’s reports are on the job: one for each appliance.\n\nThe letterhead and the QR are the quotation’s (Admin → Quotation).'],
   reset: ['Take the office’s copy', 'Throws away everything on this phone that has not been sent, and takes the office’s copy again. Nothing else ever overwrites what you did here.'],
 };
 const infoBtn = k => `<button type="button" class="info-btn" data-act="info" data-v="${k}" aria-label="What is this?">i</button>`;
@@ -1741,8 +1759,10 @@ function eventRow(e){
     case 'job_carry': return ['⏭️', 'Moved to the next day — not finished', [['Day',   // 41
       before.scheduled_on ? niceDate(before.scheduled_on) : '', after.scheduled_on ? niceDate(after.scheduled_on) : '']], ''];
     case 'job_workphoto': return after.photo ? ['📷', 'Work photo added', null, by] : ['🗑️', 'Work photo taken off', null, by];   // 39
+    case 'job_report': return after.removed ? ['🗑️', 'Service report № ' + after.no + ' taken off', null, by]   // 57
+      : ['📋', 'Service report № ' + after.no + (before && before.no ? ' changed' : ' made'), null, by];
     case 'job_sign': {   // 47: the customer's signature — taken by whom
-      const paper = after.paper === 'quote' ? 'quotation' : 'billing statement';
+      const paper = after.paper === 'quote' ? 'quotation' : after.paper === 'bill' ? 'billing statement' : 'service report';   // 57
       return after.removed ? ['🗑️', 'Signature taken off the ' + paper, null, by]
         : ['✍️', (before && before.at ? 'Signed the ' + paper + ' again' : 'Signed the ' + paper) + (after.name ? ' — ' + after.name : ''), null, by];
     }
@@ -2151,10 +2171,151 @@ function jobTabsHtml(){
   const n = k => ['done', 'cancelled'].includes(k) ? 0 : Object.values(db.jobs).filter(j => jobDayFilter(j, k)).length;   // Unpaid counted: money owed
   const rows = jobList(ui[key]);
   // a helper has no map (37)
-  return chips(key === 'day' ? 'day' : 'techday', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + (viewRole() === 'helper' ? '' : routeBar(ui[key])) + (tech ? '' : textAllBar(ui[key])) +
+  return locCardHtml() + timeCardHtml() + chips(key === 'day' ? 'day' : 'techday', days.map(([k, t]) => [k, t, n(k)]), ui[key]) + (viewRole() === 'helper' ? '' : routeBar(ui[key])) + (tech ? '' : textAllBar(ui[key])) +
     (rows.length ? `<div class="list">${rows.map(jobRow).join('')}</div>` : empty(ui[key] === 'mine' ? 'Nothing assigned to you yet.' : 'No jobs here.'));
 }
 function drawJobs(){ return jobTabsHtml(); }
+
+/* ---------------------------------------------------------------- check-in (56)
+   Guile, 2026-10-28 (TODO2 #2): technicians and helpers tap Time in / Time out for the day;
+   Start the job and Mark done are the job's arrived / left, for the whole crew — the server
+   writes those. A tap is kept here with its own time and sent later, like any write. Only the
+   office changes a time, and each change keeps a line with both names. */
+const byAt = (a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0;
+const ckRows = (uid, day) => Object.values(db.checkins || {}).filter(k => k.uid === uid && (!day || k.day === day)).sort(byAt);
+const clockOf = iso => new Date(iso).toLocaleTimeString('en-PH', {hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila'});
+// the day's time in not closed yet — within 20 hours, as the server counts it
+function ckOpen(uid){
+  const day = ckRows(uid).filter(k => !k.job_id && Date.now() - new Date(k.at) < 20 * 36e5);
+  const last = day[day.length - 1];
+  return last && last.kind === 'in' ? last : null;
+}
+function timeCardHtml(){
+  if (!inField(db.role)) return '';   // not the admin's View as: the office does not time in
+  const open = ckOpen(session.uid), today = manilaDate(0);
+  const rows = ckRows(session.uid).filter(k => !k.job_id && (k.day === today || (open && k.day === open.day)));
+  const line = rows.map(k => (k.kind === 'in' ? 'In ' : 'Out ') + esc(clockOf(k.at)) + unsentPill(k.id)).join(' · ');
+  return `<div class="card row-between time-card">
+    <div class="lrow-main"><div class="menu-title">${open ? 'Timed in since ' + esc(clockOf(open.at)) : 'Not timed in'}</div>
+      ${line ? `<div class="sms-note">${line}</div>` : ''}</div>
+    <button type="button" class="b${open ? '' : ' primary'}" data-act="timeclock" data-v="${open ? 'out' : 'in'}">${open ? '■ Time out' : '▶ Time in'}</button></div>`;
+}
+let ckLastTap = 0;
+function timeClock(kind){
+  // a double tap would be Time in, then Time out: the button changes under the finger
+  if (Date.now() - ckLastTap < 2500) return;
+  ckLastTap = Date.now();
+  const open = ckOpen(session.uid), id = uuid();
+  const send = (lat, lng) => write('check_in', {p_id: id, p_kind: kind, p_lat: lat, p_lng: lng, p_decided_at: null},
+    kind === 'in' ? 'Time in' : 'Time out', [id], (db, op) => {
+      db.checkins[id] = {id, uid: session.uid, kind, job_id: null, at: op.at, lat, lng, history: [],
+                         day: kind === 'out' && open ? open.day : manilaDate(0)};
+    });
+  if (!(db.checkinRules || {}).require_location){ send(null, null); return; }
+  if (!navigator.geolocation){ toast('The office asks for your location, and this phone cannot share it. Ring the office.', true); return; }
+  toast('Finding you…');
+  navigator.geolocation.getCurrentPosition(
+    p => send(Math.round(p.coords.latitude * 1e6) / 1e6, Math.round(p.coords.longitude * 1e6) / 1e6),
+    () => toast('The office asks for your location with each time. Turn on location and tap again.', true),
+    {enableHighAccuracy: true, timeout: 15000, maximumAge: 60000});
+}
+
+/* Last online (56, TODO2 #8): the phone's pull every 30 s while the app is open is the
+   heartbeat. One word for Users — and for the map's circles later (TODO2 #6). */
+function seenWord(uid){
+  const t = db.seen && db.seen[uid]; if (!t) return '';
+  if (Date.now() - new Date(t) < 3 * 60000) return 'Online';   // a heartbeat is at most a minute old, and this phone's copy 30 s more
+  return 'Last online ' + agoWord(t);
+}
+function agoWord(t){
+  const m = Math.max(0, (Date.now() - new Date(t)) / 60000), n = m < 60 ? Math.round(m) : Math.round(m / 60);
+  return m < 1 ? 'just now' : m < 60 ? n + (n === 1 ? ' min' : ' mins') + ' ago' : m < 1440 ? n + (n === 1 ? ' hr' : ' hrs') + ' ago'
+    : m < 2880 ? 'yesterday' : new Date(t).toLocaleDateString('en-PH', {day: 'numeric', month: 'short'});
+}
+
+/* The users map (58, Guile 2026-10-30, TODO2 #6). While the app is open, this phone's place
+   every 2 minutes, or why it has none: on · off (location switched off) · ask (not allowed yet)
+   · blocked (Android, or the browser, no longer asks) · web (a browser with no location).
+   It never asks by itself — only Allow on the card does. Not queued: an old place is no use. */
+let placeAt = 0;
+async function locState(){
+  if (inApk) return window.AndroidBridge.locationState ? window.AndroidBridge.locationState() : '';   // an APK before 58: nothing
+  if (!navigator.geolocation || !navigator.permissions) return 'web';
+  try { const s = (await navigator.permissions.query({name: 'geolocation'})).state;
+        return s === 'granted' ? 'on' : s === 'denied' ? 'blocked' : 'ask'; } catch (e) { return 'web'; }
+}
+async function sendPlace(){
+  if (!session || !db || !['admin', 'technician', 'helper'].includes(db.role) || !online) return;
+  const st = await locState(), was = ui.locSt;
+  ui.locSt = st;
+  if (st !== was) render();   // the card
+  if (!st || (st === was && Date.now() - placeAt < 120000)) return;
+  placeAt = Date.now();
+  const send = (lat, lng, loc) => rpc('set_my_place', {p_lat: lat, p_lng: lng, p_loc: loc})
+    .then(() => { if (lat != null) db.askLocation = false; }).catch(() => {});   // a server before 58, or no signal: next refresh
+  if (st !== 'on') return send(null, null, st);
+  navigator.geolocation.getCurrentPosition(
+    p => send(Math.round(p.coords.latitude * 1e6) / 1e6, Math.round(p.coords.longitude * 1e6) / 1e6, 'on'),
+    e => { if (e.code === 2) send(null, null, 'off'); },   // a timeout indoors says nothing: the last place stays
+    {enableHighAccuracy: true, timeout: 20000, maximumAge: 60000});
+}
+// the card on the Jobs screen: when the office asked, or once while location was never allowed
+function locCardHtml(){
+  const st = ui.locSt;
+  if (!['admin', 'technician', 'helper'].includes(db.role) || !st || st === 'on' || st === 'web' || ui.locLater) return '';
+  if (!db.askLocation && (st !== 'ask' || lsGet('ws_loc_once', false))) return '';
+  const how = st === 'blocked' ? (inApk ? 'Allow opens the app’s settings: tap Permissions, then Location.' : 'Allow it for this site with the lock by the address.')
+    : st === 'off' ? 'Location is switched off on this ' + (inApk ? 'phone' : 'device') + '. Allow opens the switch.' : '';
+  return `<div class="card loc-card"><div class="menu-title">📍 The office asks to see where you are</div>
+    <div class="sms-note">On the shop’s map, only while this app is open. Never when it is closed.${how ? ' ' + how : ''}</div>
+    <div class="row-gap"><button type="button" class="b primary" data-act="locallow">Allow</button>
+      <button type="button" class="b" data-act="loclater">Not now</button></div></div>`;
+}
+async function allowLocation(){
+  const st = await locState(), b = window.AndroidBridge;
+  lsSet('ws_loc_once', true);
+  if (st === 'ask'){
+    if (inApk) { try { await wsNet.call('askLocation', []); } catch (e) {} }
+    else await new Promise(r => navigator.geolocation.getCurrentPosition(r, r, {timeout: 20000}));
+  } else if (st === 'blocked'){
+    if (inApk) b.openAppSettings(); else toast('Allow location for this site with the lock by the address, then come back.', true);
+  } else if (st === 'off'){
+    if (inApk && b.openLocationSettings) b.openLocationSettings(); else toast('Turn on location on this device, then come back.', true);
+  }
+  placeAt = 0; await sendPlace(); render();
+}
+// why someone is not on the office's map, in words
+const LOC_WHY = {off: 'Location is off on their phone', ask: 'Has not allowed location', blocked: 'Said no to location — now it is allowed only in settings',
+                 web: 'On a browser that gives no place'};
+function locWhy(uid){
+  const pl = (db.places || {})[uid];
+  if (!pl) return 'Not seen since this update';
+  const last = pl.lat != null ? ' · last place ' + agoWord(pl.at) : '';
+  return pl.loc === 'on' ? (pl.lat != null ? '' : 'Location on, no place yet') : (LOC_WHY[pl.loc] || pl.loc) + last;
+}
+function usersMap(){
+  const pts = [], why = [];
+  const staff = Object.values(db.team).filter(t => ['admin', 'technician', 'helper'].includes(t.role) && t.active !== false)
+    .sort((a, b) => (a.display_name || '').localeCompare(b.display_name || ''));
+  for (const t of staff){
+    const pl = (db.places || {})[t.id], name = t.display_name || (t.email || '').split('@')[0], on = seenWord(t.id) === 'Online';
+    if (pl && pl.lat != null) pts.push({lat: +pl.lat, lng: +pl.lng, html: avatarHtml(t.id, name), cls: 'who' + (on ? ' on' : ''), anchor: 'center',
+      title: name + (on ? ' — Online' : ' — here ' + agoWord(pl.at)), onTap: () => mapGo('member', t.id)});
+    const w = locWhy(t.id);
+    if (w) why.push(`<div class="lrow">${avatarHtml(t.id, name)}<div class="lrow-main"><div class="lrow-title">${esc(name)}</div>
+      <div class="lrow-sub">${esc(w)}${(db.asked || {})[t.id] ? ' · asked ' + esc(agoWord(db.asked[t.id])) : ''}</div></div>
+      ${t.id === session.uid ? '' : `<button type="button" class="b" data-act="askloc" data-id="${esc(t.id)}">Ask again</button>`}</div>`);
+  }
+  const legend = `<div class="map-legend"><span><i style="background:#3b82f6"></i>online now</span><span><i style="background:#9aa5b1"></i>the last place seen</span></div>`;
+  openMapView('Who is where', pts.length + ' of ' + staff.length + ' on the map · only while their app is open', pts,
+    legend + (why.length ? `<div class="fieldlabel">${why.length} not on the map, or not sending now</div>` + why.join('') : ''));
+}
+function askLocation(uid){
+  const name = (db.team[uid] || {}).display_name || 'They';
+  write('ask_location', {p_uid: uid}, 'Ask ' + name + ' for location', [], db => { db.asked = {...db.asked, [uid]: new Date().toISOString()}; });
+  toast('Asked — ' + name + ' sees a card next time the app is open.');
+  if (!$('#mapSheet').hidden) usersMap();
+}
 /* Idea 2 (2026-09-27): the day's jobs in order — morning first — on the map, and all of
    them in one Google Maps trip. Only jobs still to do; a stop is its pin, or its address. */
 const stopOf = c => c.lat != null && c.lng != null ? c.lat + ',' + c.lng
@@ -2391,11 +2552,13 @@ function panelJob(p){
     ? 'Saved ' + niceDate(manilaDay(j.quote.saved_at)) + ' · ' + peso(j.quote.total)
     : 'Make one to send — its total becomes the price') : '';
   const signRow = canSign(j) ? menuRow('jobsign', j.id, '✍️', 'Customer’s signature', signWords(j)) : '';
-  const techMenu = (techPrice && j.quote ? quoteRow : '') + (techPrice ? billRow : '') + signRow;
+  const reportRow = reportRows(j);   // 57: one service report per appliance, prices or not
+  const techMenu = (techPrice && j.quote ? quoteRow : '') + (techPrice ? billRow : '') + reportRow + signRow;
   const menu = helper ? '' : tech ? (techMenu ? `<div class="menu">${techMenu}</div>` : '') : `<div class="menu">
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
       ${quoteRow}
       ${billRow}
+      ${reportRow}
       ${signRow}
       ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'History & Checkup', c.full_name) : ''}
       ${open ? menuRow('cancel', j.id, '✕', 'Cancel the job', 'You will be asked why', 'is-danger') : ''}
@@ -3114,15 +3277,20 @@ function drawTeam(){
       <div class="stat-card"><div class="stat-num">${n('helper')}</div><div class="stat-label">Helpers</div></div>
       <div class="stat-card"><div class="stat-num">${n('customer')}</div><div class="stat-label">Customers</div></div>
     </div>
+    <div class="menu"><button type="button" class="menu-row" data-act="usersmap">
+      <span class="menu-ico">🗺️</span><span class="menu-main"><span class="menu-title">Who is where</span>
+      <span class="menu-sub">${Object.values(db.places || {}).filter(p => p.lat != null).length} on the map · everyone with an account, never customers</span></span><span class="menu-chev">›</span></button></div>
     ${all.length > 6 ? `<input type="search" class="find" id="teamSearch" placeholder="🔎 Search ${all.length} people" value="${esc(ui.teamSearch || '')}" autocomplete="off">` : ''}
     <div id="teamList">${teamListHtml()}</div>`;
 }
 function teamRow(t){
   const off = t.active === false, waits = t.signup_kind === 'employee' && t.role === 'customer';
+  const seen = seenWord(t.id);   // 56
   return `<div class="lrow${off ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="member" data-id="${esc(t.id)}" data-stamp="${esc(t.updated_at || '')}">
     ${avatarHtml(t.id, t.display_name || t.email)}
     <div class="lrow-main"><div class="lrow-title">${newDot(userUnseen(t))}${nameFx(t.display_name || (t.email || '').split('@')[0], t.id, 'users')}${unsentPill(t.id)}</div>
-      <div class="lrow-sub">${esc(t.email || '')}</div></div>
+      <div class="lrow-sub">${esc(t.email || '')}</div>
+      ${seen ? `<div class="lrow-sub${seen === 'Online' ? ' seen-on' : ''}">${esc(seen)}</div>` : ''}</div>
     <div class="lrow-side">${rolePill(t.role)}
       ${t.id === session.uid ? '<span class="lrow-time">you</span>' : ''}
       ${waits ? '<span class="tag">says they work here</span>' : ''}
@@ -3147,8 +3315,12 @@ function panelMember(p){
       ${kv('Role', rolePill(t.role) + unsentPill(t.id) + (off ? ' <span class="tag bad">switched off</span>' : ''))}
       ${kv('Signed up as', t.signup_kind === 'employee' ? 'Says they work here' : 'Customer')}
       ${kv('Joined', esc(t.created_at ? new Date(t.created_at).toLocaleDateString('en-PH', {day: 'numeric', month: 'short', year: 'numeric'}) : '—'))}
-      ${kv('Last seen', esc(timeAgo(t.last_sign_in_at)))}
+      ${kv('Last online', esc(seenWord(t.id).replace(/^Last online /, '') || 'Not seen since this update'))}
+      ${['admin', 'technician', 'helper'].includes(t.role) && db.role === 'admin' ? kv('Location', esc(locWhy(t.id) || 'On the map · ' + agoWord(db.places[t.id].at))
+        + ((db.asked || {})[t.id] ? ' · asked ' + esc(agoWord(db.asked[t.id])) : '')
+        + (me || !locWhy(t.id) ? '' : ` <button type="button" class="b" data-act="askloc" data-id="${esc(t.id)}">Ask again</button>`)) : ''}
     </div>
+    ${inField(t.role) ? ckCardHtml(t, p) : ''}
     ${t.role === 'admin' ? `<div class="card row-between">
       <div class="lrow-main"><div class="menu-title">Sends texts to customers ${infoBtn('texter')}</div>
         <div class="sms-note">${textTexters().includes(t.id) ? 'Sees Texts to customers in Settings, 💬 Text on jobs and Text all.' : 'Sees none of the texting.'}</div></div>
@@ -3178,15 +3350,83 @@ function panelMember(p){
     </div>`}`};
 }
 
+/* Users → a technician or helper: their times as a month (56). A day with times is filled in;
+   tap it for its list — the day's time in and out, each job's arrived and left. The office
+   changes, removes or adds a time; every change is a line under it with the office's name. */
+function ckCardHtml(t, p){
+  const today = manilaDate(0), first = manilaDate(-100).slice(0, 7);
+  const month = p.ckMonth && p.ckMonth <= today.slice(0, 7) && p.ckMonth >= first ? p.ckMonth : today.slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const start = new Date(Date.UTC(y, m - 1, 1)), days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const worked = new Set(ckRows(t.id).filter(k => !k.removed_at).map(k => k.day));
+  const pick = p.ckDay || (worked.has(today) ? today : null);
+  const cells = [];
+  for (let i = 0; i < start.getUTCDay(); i++) cells.push('<span class="cal-pad"></span>');
+  for (let d = 1; d <= days; d++){
+    const ymd = month + '-' + String(d).padStart(2, '0');
+    cells.push(`<button type="button" class="cal-day${worked.has(ymd) ? ' worked' : ''}${ymd === today ? ' today' : ''}${ymd === pick ? ' picked' : ''}"
+      data-act="ckday" data-v="${ymd}" ${ymd > today ? 'disabled' : ''}>${d}</button>`);
+  }
+  const label = start.toLocaleDateString('en-PH', {month: 'long', year: 'numeric', timeZone: 'UTC'});
+  return `<div class="card">
+    <div class="row-between"><div class="menu-title">Check-ins ${infoBtn('checkin')}</div>
+      <div class="cal-nav"><button type="button" class="b" data-act="ckmonth" data-v="-1" ${month > first ? '' : 'disabled'} aria-label="Month before">‹</button>
+        <b>${esc(label)}</b><button type="button" class="b" data-act="ckmonth" data-v="1" ${month < today.slice(0, 7) ? '' : 'disabled'} aria-label="Next month">›</button></div></div>
+    <div class="cal">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(x => `<span class="cal-head">${x}</span>`).join('')}${cells.join('')}</div>
+    ${pick ? ckDayHtml(t, p, pick) : '<p class="hint">Filled in: a day with times. Tap one to see it.</p>'}
+  </div>`;
+}
+function ckDayHtml(t, p, day){
+  const rows = ckRows(t.id, day), own = rows.filter(k => !k.job_id), alive = own.filter(k => !k.removed_at), last = alive[alive.length - 1];
+  const hist = k => (k.history || []).map(h => `<div class="sms-note">${esc(staffName(h.by))} ${
+    h.undo ? 'undid the step' : !h.from ? 'added it' : !h.to ? 'took it off' : 'changed it'} ${
+    esc(niceDate(manilaDay(h.at)))}${h.from && h.to ? ': ' + esc(clockOf(h.from)) + ' → ' + esc(clockOf(h.to)) : ''}</div>`).join('');
+  const editor = (id, kind, at) => `<div class="share-row"><input type="time" data-pf="ckTime" value="${esc(p.ckTime != null ? p.ckTime : at ? new Date(at).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila'}) : '')}" aria-label="Time">
+      <button type="button" class="b primary" data-act="cksave" data-id="${esc(id)}" data-v="${kind}" data-day="${day}">Save</button>
+      <button type="button" class="b" data-act="ckedit" data-id="">Cancel</button></div>`;
+  const line = (k, label) => k.removed_at ? `<div class="lrow flat off">
+      <div class="lrow-main"><div class="lrow-title"><s>${esc(label)} ${esc(clockOf(k.at))}</s> — taken off${unsentPill(k.id)}</div>${hist(k)}</div>
+      <button type="button" class="b" data-act="ckback" data-id="${esc(k.id)}">Bring back</button></div>` : `<div class="lrow flat">
+      <div class="lrow-main"><div class="lrow-title">${esc(label)} ${esc(clockOf(k.at))}${unsentPill(k.id)}${k.lat != null && k.lng != null
+          ? ` <a target="_blank" rel="noopener" href="${esc('https://www.google.com/maps/search/?api=1&query=' + k.lat + ',' + k.lng)}">📍 where</a>` : ''}</div>
+        ${k.by_uid && k.by_uid !== t.id && !(k.history || []).length ? `<div class="lrow-sub">by ${esc(staffName(k.by_uid))}</div>` : ''}${hist(k)}
+        ${p.ckEdit === k.id ? editor(k.id, k.kind, k.at) : ''}</div>
+      ${p.ckEdit === k.id ? '' : `<button type="button" class="b" data-act="ckedit" data-id="${esc(k.id)}">Edit</button>
+        <button type="button" class="b danger" data-act="ckremove" data-id="${esc(k.id)}">Remove</button>`}</div>`;
+  const jobs = [...new Set(rows.filter(k => k.job_id).map(k => k.job_id))];
+  const add = !last ? 'in' : last.kind === 'in' ? 'out' : null;
+  return `<div class="sec">${esc(niceDate(day))}</div>
+    <div class="list ck-list">
+      ${own.map(k => line(k, k.kind === 'in' ? 'Time in' : 'Time out')).join('')}
+      ${jobs.map(jid => { const j = db.jobs[jid], name = j ? jobCust(j).full_name || 'A job' : 'A job no longer here';
+        return rows.filter(k => k.job_id === jid).map(k => line(k, name + ' — ' + (k.kind === 'in' ? 'arrived' : 'left'))).join(''); }).join('')}
+      ${!rows.length ? empty('No times this day.') : ''}
+    </div>
+    ${add ? (p.ckEdit === 'new' ? editor('new', add, null)
+      : `<div class="stack"><button type="button" class="b wide" data-act="ckedit" data-id="new">＋ Add a time ${add}</button></div>`) : ''}`;
+}
+
 /* ---------------------------------------------------------------- the Admin tab */
 function drawAdminTab(){
   // 54: one tab where Services & prices, Appliances and Specs were
   const secs = [['appliances', 'Appliances & services'], ['closed', 'Closed days'], ['shop', 'Shop'],
-    ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['texts', 'Texts'], ['job', 'Job'], ['numbers', 'Numbers']];   // job: 41
+    ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['report', 'Service report'], ['texts', 'Texts'], ['job', 'Job'],
+    ['checkin', 'Check-in'], ['numbers', 'Numbers']];   // job: 41, checkin: 56, report: 57
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'appliances';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
     ({appliances: drawAppliances, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, billing: drawBillSample, quote: drawQuoteAdmin,
-      texts: drawTexts, job: drawJobMover, numbers: drawNumbers})[v]();
+      report: drawReportAdmin, texts: drawTexts, job: drawJobMover, checkin: drawCheckinAdmin, numbers: drawNumbers})[v]();
+}
+/* Admin → Check-in (56): the office's switch. Off: a tap is enough and the phone never asks
+   where it is. (The picture's switch comes with the picture.) */
+function drawCheckinAdmin(){
+  const on = !!(db.checkinRules || {}).require_location;
+  return `<div class="card row-between">
+      <div class="lrow-main"><div class="menu-title">Require location ${infoBtn('ckloc')}</div>
+        <div class="sms-note">${on ? 'Each time in and out sends where the phone is. No location, no time.' : 'A tap is enough. The phone never asks where it is.'}</div></div>
+      <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
+        `<button type="button" class="${on === v ? 'active' : ''}" data-act="ckrule" data-v="${v}">${l}</button>`).join('')}</div></div>
+    <p class="hint">Each person’s times: Users → tap a technician or a helper.</p>`;
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
    it"): the weekdays the shop never works, and a month calendar to close particular dates —
@@ -3319,7 +3559,7 @@ function panelPpcrop(p){
       : '<button type="button" class="b primary wide" data-act="ppuse">Use this picture</button>'}</div>`};
   const sig = p.for === 'sig', title = sig ? 'Crop the signature' : 'Crop the photo';
   if (!p.url) return {title, body: empty(sig ? 'Take the picture again.' : 'Pick the photo again — Admin → Page photos.')};
-  return {title, sub: sig ? SIG_PAPERS[String(p.sig).split('|')[1]] || '' : 'Page photo', info: sig ? '' : 'pagephotos', body: `
+  return {title, sub: sig ? sigPaper(String(p.sig).split('|')[1]) : 'Page photo', info: sig ? '' : 'pagephotos', body: `
     <div class="pp-crop" data-ppcrop><img src="${esc(p.url)}" alt="" draggable="false" style="${ppStyle(p)}">
       ${sig ? '' : '<div class="pp-phone"><span>Phones show this part</span></div>'}</div>
     <label class="pp-zoom">Zoom <input type="range" min="1" max="4" step="0.01" value="${esc(p.zoom)}" data-ppzoom aria-label="Zoom"></label>
@@ -3842,6 +4082,7 @@ function billMeta(j){
    it, a helper never. pull carries only the stamp (j.signed); the picture comes once from
    job_signatures and is kept on this phone, the last 30 (~20 KB each). */
 const SIG_PAPERS = {quote: 'Quotation', bill: 'Billing statement'};
+const sigPaper = k => SIG_PAPERS[k] || (/^r:/.test(k || '') ? 'Service report' : '');   // 57: 'r:' + the report's id
 let csigs = null;
 const csigAsking = {};
 const csigStore = () => csigs || (csigs = lsGet('ws_csig', {}));
@@ -3863,7 +4104,7 @@ function custSig(j, paper){
   if (online && session && !csigAsking[j.id]){
     csigAsking[j.id] = true;
     rpc('job_signatures', {p_job: j.id}).then(r => {
-      Object.keys(SIG_PAPERS).forEach(k => {
+      Object.keys(r || {}).forEach(k => {
         const now = j.signed && j.signed[k];
         if (r && r[k] && now) csigKeep(j.id + '|' + k, {at: now.at, png: r[k].png, name: r[k].name || ''});
       });
@@ -3877,9 +4118,9 @@ function saveCustSig(jid, paper, png, name){
   const at = new Date().toISOString(), nm = String(name || '').trim().slice(0, 80);
   csigKeep(jid + '|' + paper, {at, png, name: nm});
   write('sign_job', {p_job: jid, p_paper: paper, p_png: png, p_name: nm || null},
-    'Signature on the ' + SIG_PAPERS[paper].toLowerCase() + ' — ' + (jobCust(j).full_name || 'job'), [jid],
+    'Signature on the ' + sigPaper(paper).toLowerCase() + ' — ' + (jobCust(j).full_name || 'job'), [jid],
     () => { j.signed = {...(j.signed || {}), [paper]: {at, name: nm || null}}; });
-  toast('Signature saved on the ' + SIG_PAPERS[paper].toLowerCase() + '.');
+  toast('Signature saved on the ' + sigPaper(paper).toLowerCase() + '.');
 }
 function panelJobSign(p){
   const j = db.jobs[p.id];
@@ -3901,6 +4142,203 @@ function panelJobSign(p){
   }).join('') + '<p class="hint">It goes on the paper: Print, Send as PDF and Send as Word.</p>'};
 }
 
+/* ---------------------------------------------------------------- the service report (57)
+   Guile, 2026-10-30: his paper Service report (№ 2012, on a done job of 2026-10-10) in the app,
+   one per appliance, filled in by a technician or the office and changed like the quotation.
+   Kept on the job (jobs.reports, its own copy of the appliance); the № is the shop's own,
+   given by the server on the first save. The customer signs it as the other papers (47). */
+const REPORT_ITEMS = ['Cleaning of air dust filter.', 'Cleaning of cooling coil/ condenser coil/ evaporator coil.',
+  'Cleaning of drain pan, flooring and blower fan.', 'Flushing of condensate pan, p-trap and floor drain.',
+  'Cleaning of cover and exterior panel.', 'Checking of blower and motor pulley, align if necessary.',
+  'Checking of bearing or bushing, lubricate if necessary.', 'Checking for sign of water leakage at cooling coil, valves and fittings.',
+  'Straightening of cooling coil fins.', 'Checking and retightening of screws and mounting bolts.',
+  'Checking noise level of the blower and motor.', 'Verifying of refrigerant charge.',
+  'Safety checking of all operating controls.', 'Verifying amperage and electrical connections.'];
+const REPORT_NOTE = 'I hereby certify that the work performed above has been done satisfactorily completed & agree to the recommendation.';
+const reportItems = () => { const l = (db.settings || {}).report_items; return Array.isArray(l) && l.length ? l : REPORT_ITEMS; };
+const reportNote = () => { const n = (db.settings || {}).report_note; return typeof n === 'string' ? n : REPORT_NOTE; };
+const reportsOf = j => (j && Array.isArray(j.reports) ? j.reports : []);
+const canReport = j => canSign(j);   // the office and technicians, never a helper; a job until it is cancelled
+const reportNo = r => r && r.no ? '№ ' + r.no : '№ given when it is sent';
+// the ticks on the paper: the owner's list, and any ticked on an older list
+const reportTicks = r => { const l = reportItems(); return l.concat((r.ticks || []).filter(t => !l.includes(t))); };
+/* A saved report names its own appliance too (its brand and model, from its own copy).
+   shortcut: a report knows its appliance by its place in the job's list, so taking an
+   appliance off shifts the ones after it; this name shows which one the paper is about.
+   Upgrade: give each appliance on a job its own id. */
+const reportName = (j, r, unit) => (unitNames(unitsOf(j))[unit] || 'an appliance no longer on the job')
+  + (r && (r.brand || r.model) ? ' · ' + [r.brand, r.model].filter(Boolean).join(' ') : '');
+/* The job's rows: each appliance's report, or one to make. */
+function reportRows(j){
+  const us = unitsOf(j), names = unitNames(us), rs = reportsOf(j), out = [];
+  const row = r => menuRow('jobreport', j.id + '|' + r.id, '📋', 'Service report — ' + reportName(j, r, r.unit),
+    reportNo(r) + ' · saved ' + niceDate(manilaDay(r.saved_at)));
+  us.forEach((u, i) => {
+    const mine = rs.filter(r => r.unit === i);
+    mine.forEach(r => out.push(row(r)));
+    if (!mine.length && canReport(j)) out.push(menuRow('jobreport', j.id + '|new:' + i, '📋', 'Service report — ' + names[i], 'Not made yet'));
+  });
+  rs.filter(r => r.unit >= us.length).forEach(r => out.push(row(r)));
+  return out.join('');
+}
+/* The screen's job and report: p.id is "job|report id", or "job|new:2" for the third appliance's. */
+function reportFind(p){
+  const [jid, key] = String(p.id || '').split('|'), j = db.jobs[jid];
+  if (!j) return {};
+  if (!p.rid){ if (/^new:\d+$/.test(key || '')){ p.rid = uuid(); p.unit = Number(key.slice(4)); } else p.rid = key; }
+  const saved = reportsOf(j).find(r => r.id === p.rid) || null;
+  if (saved) p.unit = saved.unit;
+  return {j, saved};
+}
+/* A new one starts from the job: its day, the customer, the appliance, the crew. */
+function reportStart(j, unit, saved){
+  if (saved) return {...saved, kind: saved.kind || '', call: saved.call || '', served_on: saved.served_on || '', ticks: [...(saved.ticks || [])]};
+  const c = jobCust(j), u = unitsOf(j)[unit] || {}, day = j.scheduled_on || manilaDate(0);
+  const crew = (j.crew && j.crew.length ? j.crew : j.assigned_uid ? [j.assigned_uid] : []).map(staffName);
+  return {date: day, client: c.full_name || '', location: c.address || '', kind: '', brand: u.brand || '',
+    capacity: [(variantOf(u.type, u.variant) || {}).label, u.type ? typeLabel(u.type) : ''].filter(Boolean).join(' '),
+    model: u.model || '', serial: u.serial || '', ticks: [], others: '', call: '', findings: '',
+    served_by: crew.join(', '), served_on: j.done_at ? manilaDay(j.done_at) : day};
+}
+const reportView = (j, p, saved) => ({...p.r, no: saved ? saved.no : null, csig: custSig(j, 'r:' + p.rid)});
+function reportHtml(r){
+  // the left column one longer, as his paper (8 and 6, Others under the right one)
+  const s = quoteShop(), box = on => on ? '☑' : '☐', items = reportTicks(r), half = Math.ceil((items.length + 1) / 2);
+  const tick = t => `<div class="rp-tick"><span>${box((r.ticks || []).includes(t))}</span><span>${esc(t)}</span></div>`;
+  const ln = (label, v) => `<div class="rp-f"><span>${label}:</span><b>${esc(v || '')}</b></div>`;
+  return `<div class="quote report">
+    ${r.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
+    ${qtHeadHtml(s)}
+    <div class="rp-top"><div class="rp-title">SERVICE REPORT</div><div class="rp-no">№ ${esc(r.no ? String(r.no) : '')}</div></div>
+    <div class="rp-facts">
+      <div>${ln('Date', r.date ? qtLongDate(r.date) : '')}${ln('Client’s Name', r.client)}${ln('Location', r.location)}
+        <div class="rp-kind">${box(r.kind === 'res')} Residential <span class="rp-gap"></span>${box(r.kind === 'com')} Commercial</div></div>
+      <div>${ln('Brand', r.brand)}${ln('Capacity and Type', r.capacity)}${ln('Model', r.model)}${ln('Serial Number', r.serial)}</div>
+    </div>
+    <div class="rp-h">Detailed Scope of Service. <span>Tick all that apply:</span></div>
+    <div class="rp-ticks"><div>${items.slice(0, half).map(tick).join('')}</div>
+      <div>${items.slice(half).map(tick).join('')}<div class="rp-tick"><span>${box(!!r.others)}</span><span class="rp-other">Others, Specify: <u>${esc(r.others || '')}</u></span></div></div></div>
+    <div class="rp-h">Technical Findings or General Remarks &amp; Recommendation:</div>
+    <div class="rp-kind">${box(r.call === 'service')} Service Call <span class="rp-gap"></span>${box(r.call === 'maintenance')} Maintenance Call</div>
+    <div class="rp-find">${esc(r.findings || '')}</div>
+    <div class="rp-sign">
+      <div><div class="rp-f"><span>Serviced by:</span><b>${esc(r.served_by || '')}</b></div>
+        <div class="rp-f"><span>Date:</span><b>${esc(r.served_on ? qtLongDate(r.served_on) : '')}</b></div></div>
+      <div><p class="rp-cert">${esc(reportNote())}</p>
+        ${r.csig ? `<img class="qt-sig" src="${esc(r.csig.png)}" alt="">` : '<div class="qt-sigspace"></div>'}
+        <div class="bl-ln">${r.csig && r.csig.name ? `<b>${esc(r.csig.name)}</b><br>` : ''}Client’s Name and Signature</div></div>
+    </div>
+  </div>`;
+}
+function reportSample(){
+  const l = reportItems();
+  return {sample: true, no: Number((db.settings || {}).report_next) || 1, date: manilaDate(0), client: 'ZZ Sample Customer',
+    location: 'ZZ Street 1, ZZ Barangay, Bacolod City', kind: 'res', brand: 'ZZ Brand', capacity: '1 hp Split', model: 'ZZ-25',
+    serial: 'ZZ0000001', ticks: l.slice(0, 3), others: '', call: 'maintenance', findings: 'ZZ Cleaned and tested. Running well.',
+    served_by: 'ZZ Technician', served_on: manilaDate(0)};
+}
+function panelReport(p){
+  const {j, saved} = reportFind(p);
+  if (!j) return {title: 'Service report', body: empty('This job is no longer on this phone.')};
+  if (!p.r) p.r = reportStart(j, p.unit, saved);
+  const open = canReport(j), sub = (jobCust(j).full_name || '') + ' · ' + reportName(j, saved, p.unit);
+  const said = saved ? esc(reportNo(saved) + ' · saved ' + timeAgo(saved.saved_at) + (saved.saved_by_name ? ' by ' + saved.saved_by_name : '')) + unsentPill(j.id)
+    : 'Not saved yet';
+  const btns = `<button type="button" class="b${open ? '' : ' primary'} wide" data-act="printreport">🖨️ Print or save as PDF</button>
+    <button type="button" class="b wide" data-act="sharereport">📤 Send as PDF — Messenger, email…</button>`;
+  if (!open) return {title: 'Service report', sub, info: 'report', body: `
+    ${paperBox(reportHtml(reportView(j, p, saved)), 'reportPreview')}
+    <p class="hint">${said}. ${j.status === 'cancelled' ? 'The job is cancelled, so it stays as it was.' : 'Only the office or a technician changes it.'}</p>
+    <div class="stack">${btns}</div>`};
+  const f = (k, label, max, ph) => `<label>${label} <input data-rf="${k}" maxlength="${max}" value="${esc(p.r[k] || '')}"${ph ? ` placeholder="${esc(ph)}"` : ''} autocomplete="off"></label>`;
+  const seg = (k, opts) => `<div class="segment mini">${opts.map(([v, l]) =>
+    `<button type="button" class="${p.r[k] === v ? 'active' : ''}" data-act="repseg" data-id="${k}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  // the customer's signature: on a saved report only — the server signs a report it has
+  const paper = 'r:' + p.rid, st = j.signed && j.signed[paper], cs = st ? custSig(j, paper) : null, sid = esc(j.id + '|' + paper);
+  const sign = saved ? `<div class="sec">✍️ Customer’s signature</div><div class="card">
+      ${st ? `<div class="sig-show">${cs ? `<img src="${esc(cs.png)}" alt="The customer’s signature">`
+          : `<span class="muted">${online ? 'Getting the signature…' : 'The signature shows when there is signal.'}</span>`}</div>
+        <p class="hint">Signed ${esc(niceDate(manilaDay(st.at)))}${st.name ? ' · ' + esc(st.name) : ''}</p>` : '<p class="hint">Not signed yet.</p>'}
+      <div class="actions"><button type="button" class="b${st ? '' : ' primary'}" data-act="open" data-kind="sigdraw" data-id="${sid}">✍️ ${st ? 'Sign again' : 'Draw signature'}</button>
+        <label class="b">📷 Picture on white paper<input type="file" accept="image/*" data-csig-photo="${sid}" hidden></label>
+        ${st && p.ask !== paper ? `<button type="button" class="b danger" data-act="sigoff" data-id="${sid}">Take it off</button>` : ''}</div>
+      ${st && p.ask === paper ? `<div class="inline-note"><span>Take the customer’s signature off the service report?</span>
+        <button type="button" class="b danger" data-act="sigoffyes" data-id="${sid}">Take it off</button>
+        <button type="button" class="b" data-act="sigoffno">Keep it</button></div>` : ''}</div>`
+    : '<p class="hint">Save it first; then the customer can sign it.</p>';
+  return {title: 'Service report', sub, info: 'report', body: `
+    ${paperBox(reportHtml(reportView(j, p, saved)), 'reportPreview')}
+    <p class="hint">${said}. Tap the page to see it full size.</p>
+    <label>Date <input type="date" data-rf="date" value="${esc(p.r.date || '')}"></label>
+    ${f('client', 'Client’s name', 120)}
+    <label>Location <textarea data-rf="location" rows="2" maxlength="300">${esc(p.r.location || '')}</textarea></label>
+    <div class="row-between rp-seg"><span class="fieldlabel">The place</span>${seg('kind', [['res', 'Residential'], ['com', 'Commercial']])}</div>
+    ${f('brand', 'Brand', 80)}${f('capacity', 'Capacity and type', 80, 'e.g. 2 hp Split')}${f('model', 'Model', 80)}${f('serial', 'Serial number', 80)}
+    <div class="fieldlabel">Detailed scope of service — tick all that apply</div>
+    <div class="rp-checks">${reportTicks(p.r).map(t => `<label class="tick"><input type="checkbox" data-rtick="${esc(t)}" ${p.r.ticks.includes(t) ? 'checked' : ''}> ${esc(t)}</label>`).join('')}</div>
+    ${f('others', 'Others, specify', 200)}
+    <div class="row-between rp-seg"><span class="fieldlabel">The call</span>${seg('call', [['service', 'Service call'], ['maintenance', 'Maintenance call']])}</div>
+    <label>Findings, remarks and recommendation <textarea data-rf="findings" rows="4" maxlength="2000">${esc(p.r.findings || '')}</textarea></label>
+    ${f('served_by', 'Serviced by', 160)}
+    <label>Serviced on <input type="date" data-rf="served_on" value="${esc(p.r.served_on || '')}"></label>
+    <div class="stack"><button type="button" class="b primary wide" data-act="savereport">Save the service report</button>
+      ${btns}</div>
+    ${sign}
+    ${saved && db.role === 'admin' ? '<div class="stack"><button type="button" class="b danger wide" data-act="delreport">Take this service report off</button></div>' : ''}`};
+}
+/* Typing redraws the page beside the boxes, never the box being typed in (ui.md). */
+function drawReportPreview(p){
+  const w = $('#reportPreview'), {j, saved} = reportFind(p);
+  if (w && j) w.firstElementChild.innerHTML = reportHtml(reportView(j, p, saved));
+  fitQuotes();
+}
+function saveReport(){
+  const p = topPanel(); if (!p || p.kind !== 'jobreport' || !p.r) return false;
+  const {j, saved} = reportFind(p);
+  if (!canReport(j)){ toast('Only the office or a technician changes a service report.', true); return false; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(p.r.date || '')){ toast('Choose the date. Nothing was saved.', true); return false; }
+  const x = p.r, r = {id: p.rid, unit: p.unit, date: x.date, client: x.client || '', location: x.location || '', kind: x.kind || '',
+    brand: x.brand || '', capacity: x.capacity || '', model: x.model || '', serial: x.serial || '', ticks: x.ticks.slice(),
+    others: x.others || '', call: x.call || '', findings: x.findings || '', served_by: x.served_by || '', served_on: x.served_on || ''};
+  const v = (saved && saved.v) || 0, jid = j.id;
+  write('save_service_report', {p_job: jid, p_report: r, p_based_on: v}, 'Service report — ' + (jobCust(j).full_name || 'job'), [jid], db => {
+    const jj = db.jobs[jid]; if (!jj) return;
+    const row = {...r, kind: r.kind || null, call: r.call || null, served_on: r.served_on || null, no: saved ? saved.no : null, v: v + 1,
+      saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
+    jj.reports = reportsOf(jj).some(y => y.id === r.id) ? reportsOf(jj).map(y => y.id === r.id ? row : y) : reportsOf(jj).concat([row]);
+  });
+  p.dirty = false;
+  toast(saved ? 'Service report saved.' : 'Service report saved. Its number comes from the office’s server when it is sent.');
+  render();
+  return true;
+}
+// what is on the paper is what is saved: a changed (or never saved) report saves first
+function reportPaper(share){
+  const p = topPanel();
+  if (!p || p.kind !== 'jobreport') return printHtml(reportHtml(reportSample()), 'Service report sample', share);
+  const {j, saved} = reportFind(p); if (!j) return;
+  if (canReport(j) && (p.dirty || !saved) && !saveReport()) return;
+  const now = reportFind(p).saved;
+  printHtml(reportHtml(reportView(j, p, now)), 'Service report ' + (now && now.no ? now.no + ' ' : '') + (jobCust(j).full_name || ''), share);
+}
+/* Admin → Service report: the ticks, the certify line, where the numbers start, the sample. */
+function drawReportAdmin(){
+  const set = db.settings || {};
+  return `<p class="hint">The letterhead and the QR are the quotation’s — change them in Admin → Quotation. ${infoBtn('reportadmin')}</p>
+    <div class="card"><div class="menu-title">The next number</div>
+      <div class="share-row"><input data-k="rp_next" inputmode="numeric" maxlength="7" value="${esc(set.report_next != null ? String(set.report_next) : '')}" placeholder="e.g. 2013" aria-label="The next number">
+        <button type="button" class="b primary" data-act="savereportset" data-id="report_next">Save</button></div>
+      <p class="hint">The next report made takes it; then it counts up by itself. A number is never given twice.</p></div>
+    <div class="card"><div class="menu-title">The ticks</div>
+      <label><span class="opt">One per line, in the paper’s order</span><textarea data-k="rp_items" rows="10" maxlength="6000">${esc(reportItems().join('\n'))}</textarea></label>
+      <div class="actions"><button type="button" class="b primary" data-act="savereportset" data-id="report_items">Save</button></div></div>
+    <div class="card"><div class="menu-title">The line over the client’s signature</div>
+      <textarea data-k="rp_note" rows="3" maxlength="500" aria-label="The line over the client’s signature">${esc(reportNote())}</textarea>
+      <div class="actions"><button type="button" class="b primary" data-act="savereportset" data-id="report_note">Save</button></div></div>
+    ${paperBox(reportHtml(reportSample()))}
+    <div class="stack"><button type="button" class="b primary wide" data-act="printreport">🖨️ Print the sample (A4)</button></div>`;
+}
+
 /* The pen, as on Guile's Mi Canvas (measured on his Pad 6: the fountain pen at Stroke width 15,
    Sensitivity 50%, Tip size 2, Opacity 100%): Fountain or Ballpoint, the four sliders, kept
    on this phone. A stylus gives its real pressure; a finger has none, so Sensitivity reads the
@@ -3913,10 +4351,10 @@ const PEN_RANGE = {width: [1, 30, 'Stroke width', v => v], sens: [0, 100, 'Sensi
 const SIG_H = 0.4;   // the pad is 5 : 2; points are kept as fractions of its width
 function panelSigDraw(p){
   const [jid, paper] = String(p.id || '').split('|'), j = db.jobs[jid];
-  if (!j || !SIG_PAPERS[paper]) return {title: 'Signature', body: empty('This job is no longer on this phone.')};
+  if (!j || !sigPaper(paper)) return {title: 'Signature', body: empty('This job is no longer on this phone.')};
   if (!p.strokes){ p.strokes = []; p.name = (j.signed && j.signed[paper] && j.signed[paper].name) || jobCust(j).full_name || ''; }
   const none = p.strokes.length ? '' : ' disabled';
-  return {title: 'Draw the signature', sub: SIG_PAPERS[paper] + ' · ' + (jobCust(j).full_name || ''), body: `
+  return {title: 'Draw the signature', sub: sigPaper(paper) + ' · ' + (jobCust(j).full_name || ''), body: `
     <div class="sig-pad"><canvas data-sigpad aria-label="Sign here"></canvas><div class="sig-line"><span>✕</span></div></div>
     <div class="actions sig-tools">
       ${['fountain', 'ballpoint'].map(k => `<button type="button" class="b${penSet.pen === k ? ' primary' : ''}" data-act="sigpen" data-v="${k}">${k === 'fountain' ? '🖋️ Fountain pen' : '🖊️ Ballpoint'}</button>`).join('')}
@@ -4051,8 +4489,9 @@ document.addEventListener('change', async e => {
 });
 
 let qtFull = false;
-const quoteBox = (q, id) => `<div class="qt-wrap${qtFull ? ' full' : ''}"${id ? ` id="${id}"` : ''} data-act="qtzoom"
-  title="${qtFull ? 'Tap to fit the screen' : 'Tap to see it full size'}"><div class="qt-scale">${quoteHtml(q)}</div></div>`;
+const paperBox = (html, id) => `<div class="qt-wrap${qtFull ? ' full' : ''}"${id ? ` id="${id}"` : ''} data-act="qtzoom"
+  title="${qtFull ? 'Tap to fit the screen' : 'Tap to see it full size'}"><div class="qt-scale">${html}</div></div>`;
+const quoteBox = (q, id) => paperBox(quoteHtml(q), id);
 /* Scale the A4 page to the box's width; full size scrolls instead. */
 function fitQuotes(){
   $$('.qt-wrap').forEach(w => {
@@ -5779,6 +6218,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField,   // 39, 43, 44
   variant: panelVariant,   // 54
   jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
+  jobreport: panelReport,   // 57
   askjob: panelAskJob, askanswer: panelAskAnswer,   // 49
   ...(window.FX_PANELS || {})};   // 50: name effects, web/namefx.js
 const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
@@ -5998,6 +6438,56 @@ const ACTIONS = {
     if (navigator.share){ try { await navigator.share({title: 'Winter Air', text}); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
     copyText(url, el);
   },
+  // ---- check-in (56)
+  timeclock: (id, el) => timeClock(el.dataset.v),
+  ckday: (id, el) => { const p = topPanel(); if (p){ p.ckDay = el.dataset.v; p.ckEdit = null; p.ckTime = null; render(); } },
+  ckmonth: (id, el) => {
+    const p = topPanel(); if (!p) return;
+    const [y, m] = (p.ckMonth || manilaDate(0).slice(0, 7)).split('-').map(Number), d = new Date(Date.UTC(y, m - 1 + Number(el.dataset.v), 1));
+    p.ckMonth = d.toISOString().slice(0, 7); render();
+  },
+  ckedit: id => { const p = topPanel(); if (p){ p.ckEdit = id || null; p.ckTime = null; render(); } },
+  cksave: (id, el) => {
+    const p = topPanel(), t = p && db.team[p.id], day = el.dataset.day; if (!t || !day) return;
+    if (id !== 'new' && !db.checkins[id]){ toast('That time is no longer on this phone.', true); return; }
+    const box = $('#panels [data-pf="ckTime"]'), v = (box && box.value) || p.ckTime || '';
+    if (!/^\d{2}:\d{2}$/.test(v)){ toast('Pick a time first.', true); return; }
+    const kind = el.dataset.v;
+    let at = new Date(day + 'T' + v + ':00+08:00');
+    // a time out before the day's time in is after midnight: the next morning
+    const din = ckRows(t.id, day).find(k => !k.job_id && !k.removed_at && k.kind === 'in');
+    if (kind === 'out' && din && at < new Date(din.at)) at = new Date(at.getTime() + 864e5);
+    if (at > new Date()){ toast('Pick a time that has already happened.', true); return; }
+    const iso = at.toISOString(), kid = id === 'new' ? uuid() : id;
+    write('edit_checkin', {p_id: kid, p_uid: t.id, p_kind: kind, p_day: day, p_at: iso, p_remove: false, p_decided_at: null},
+      (kind === 'in' ? 'Time in ' : 'Time out ') + clockOf(iso) + ' — ' + (t.display_name || 'them'), [kid], (db, op) => {
+        const was = db.checkins[kid];
+        db.checkins[kid] = {...(was || {id: kid, uid: t.id, day: day, kind, job_id: null, by_uid: session.uid}), at: iso,
+          history: [...((was && was.history) || []), {at: op.at, by: session.uid, from: was ? was.at : null, to: iso}]};
+      });
+    p.ckEdit = null; p.ckTime = null; render();
+  },
+  ckremove: (id, el) => {
+    const k = db.checkins[id], t = k && db.team[k.uid]; if (!k) return;
+    if (!confirmTwice(el, 'Remove it?')) return;
+    write('edit_checkin', {p_id: id, p_remove: true, p_decided_at: null},
+      'Removed ' + (k.kind === 'in' ? 'a time in' : 'a time out') + ' — ' + ((t && t.display_name) || 'them'), [id], (db, op) => {
+        db.checkins[id] = {...k, removed_at: op.at, history: [...(k.history || []), {at: op.at, by: session.uid, from: k.at, to: null}]};
+      });
+  },
+  ckback: id => {   // a time taken off by mistake: the same time, back
+    const k = db.checkins[id], t = k && db.team[k.uid]; if (!k || !k.removed_at) return;
+    write('edit_checkin', {p_id: id, p_at: k.at, p_remove: false, p_decided_at: null},
+      'Brought back ' + (k.kind === 'in' ? 'a time in' : 'a time out') + ' — ' + ((t && t.display_name) || 'them'), [id], (db, op) => {
+        db.checkins[id] = {...k, removed_at: null, history: [...(k.history || []), {at: op.at, by: session.uid, from: null, to: k.at}]};
+      });
+  },
+  ckrule: (id, el) => {
+    const on = el.dataset.v === 'true'; if (!!(db.checkinRules || {}).require_location === on) return;
+    write('set_checkin_rule', {p_key: 'checkin_require_location', p_on: on}, 'Require location — ' + (on ? 'on' : 'off'), ['ckrule'], db => {
+      db.checkinRules = {...(db.checkinRules || {}), require_location: on};
+    });
+  },
   techrule: (id, el) => {   // 49
     const k = el.dataset.f, on = el.dataset.v === 'true', now = jobRules();
     if ({tech_edit_others: now.others, tech_request: now.ask, tech_reward: now.reward}[k] === on) return;
@@ -6146,6 +6636,45 @@ const ACTIONS = {
   printquote: () => quotePaper(false),
   sharequote: () => quotePaper(true),
   wordquote: () => quoteWord(),   // 39
+  // ---- the service report (57)
+  repseg: (k, el) => {   // Residential / Commercial, Service / Maintenance call: tap again to clear
+    const p = topPanel(); if (!p || !p.r || !['kind', 'call'].includes(k)) return;
+    p.r[k] = p.r[k] === el.dataset.v ? '' : el.dataset.v; p.dirty = true; render();
+  },
+  savereport: () => saveReport(),
+  printreport: () => reportPaper(false),
+  sharereport: () => reportPaper(true),
+  delreport: (id, el) => {
+    const p = topPanel(); if (!p || p.kind !== 'jobreport') return;
+    const {j, saved} = reportFind(p); if (!j || !saved || db.role !== 'admin') return;
+    if (!confirmTwice(el, 'Take it off? Tap again')) return;
+    const jid = j.id, rid = saved.id;
+    write('save_service_report', {p_job: jid, p_report: {id: rid}, p_based_on: saved.v || 0, p_remove: true},
+      'Service report taken off — ' + (jobCust(j).full_name || 'job'), [jid], db => {
+        const jj = db.jobs[jid]; if (!jj) return;
+        jj.reports = reportsOf(jj).filter(y => y.id !== rid);
+        const s = {...(jj.signed || {})}; delete s['r:' + rid]; jj.signed = s;
+      });
+    closePanel();
+    toast('Service report ' + reportNo(saved) + ' taken off.');
+  },
+  savereportset: key => {
+    const set = db.settings || {};
+    let v;
+    if (key === 'report_next'){
+      const t = String(val('rp_next') || '').trim();
+      if (!/^\d{1,7}$/.test(t) || Number(t) < 1) return toast('The next number is a whole number, like 2013.', true);
+      v = Number(t);
+    } else if (key === 'report_items'){
+      v = String(val('rp_items') || '').split('\n').map(x => x.trim()).filter(Boolean);
+      if (!v.length || v.length > 40) return toast('Keep 1 to 40 ticks, one per line.', true);
+    } else if (key === 'report_note') v = String(val('rp_note') || '').trim();
+    else return;
+    if (JSON.stringify(set[key]) === JSON.stringify(v)) return toast('Nothing changed.');
+    write('set_report_setting', {p_key: key, p_value: v}, 'Service report — ' + {report_next: 'the next number', report_items: 'the ticks', report_note: 'the certify line'}[key],
+      [key], db => { db.settings = {...(db.settings || {}), [key]: v}; });
+    toast('Saved.');
+  },
   savequoteshop: () => {
     const cur = (db.settings || {}).quote_shop || {}, v = {};
     ['name', 'tagline', 'address', 'contact', 'tin', 'signer', 'title'].forEach(k => { v[k] = (($('#qs_' + k) || {}).value || '').trim(); });
@@ -6602,14 +7131,14 @@ const ACTIONS = {
     closePanel();
     saveCustSig(jid, paper, png, p.name);
   },
-  sigoff: id => { const p = topPanel(); if (p && p.kind === 'jobsign'){ p.ask = String(id).split('|')[1]; render(); } },   // asks first
+  sigoff: id => { const p = topPanel(); if (p && (p.kind === 'jobsign' || p.kind === 'jobreport')){ p.ask = String(id).split('|')[1]; render(); } },   // asks first
   sigoffno: () => { const p = topPanel(); if (p){ p.ask = null; render(); } },
   sigoffyes: id => {
     const [jid, paper] = String(id).split('|'), j = db.jobs[jid], p = topPanel();
     if (p) p.ask = null;
-    if (!j || !SIG_PAPERS[paper]) return;
+    if (!j || !sigPaper(paper)) return;
     write('sign_job', {p_job: jid, p_paper: paper, p_png: null, p_name: null},
-      'Signature taken off the ' + SIG_PAPERS[paper].toLowerCase() + ' — ' + (jobCust(j).full_name || 'job'), [jid],
+      'Signature taken off the ' + sigPaper(paper).toLowerCase() + ' — ' + (jobCust(j).full_name || 'job'), [jid],
       () => { const s = {...(j.signed || {})}; delete s[paper]; j.signed = s; });
   },
   mapopen: (id, el) => showMapChoice(el.dataset.href, el.dataset.waze, !!el.dataset.pinned, el.dataset.landmark),
@@ -6675,6 +7204,10 @@ const ACTIONS = {
   bookagain: id => bookAgain(id),   // idea 7
   exportmonth: (id, el) => exportMonth(Number(el.dataset.v)),   // idea 10
   custmap: () => customersMap(),
+  usersmap: () => usersMap(),   // 58
+  askloc: id => askLocation(id),
+  locallow: () => allowLocation(),
+  loclater: () => { lsSet('ws_loc_once', true); ui.locLater = true; render(); },
   routemap: (id, el) => routeMap(el.dataset.v),
   mapgo: (id, el) => mapGo(el.dataset.kind, id),
   usewant: id => {   // R1: the job gets the day the customer asked for, one tap
@@ -6932,6 +7465,15 @@ document.addEventListener('input', e => {
     else { const [i, k] = t.dataset.ql.split(':'); if (p.q.lines[i]) p.q.lines[i][k] = t.value; }
     p.dirty = true;
     drawQuotePreview(p);
+    return;
+  }
+  // the service report (57): the same, for its boxes and its ticks
+  if (t.dataset && (t.dataset.rf || t.dataset.rtick != null)){
+    const p = topPanel(); if (!p || !p.r) return;
+    if (t.dataset.rf) p.r[t.dataset.rf] = t.value;
+    else { const k = t.dataset.rtick; p.r.ticks = p.r.ticks.filter(x => x !== k).concat(t.checked ? [k] : []); }
+    p.dirty = true;
+    drawReportPreview(p);
     return;
   }
   if (f){
@@ -7255,10 +7797,11 @@ async function openMapView(title, sub, points, below){
   points.forEach(pt => {
     const el = document.createElement('button');
     el.type = 'button'; el.className = 'map-mark ' + (pt.cls || ''); el.title = pt.title || '';
-    el.innerHTML = `<b>${esc(pt.label)}</b><span aria-hidden="true">${pt.icon || '🏠'}</span>`;
+    el.innerHTML = pt.html || `<b>${esc(pt.label)}</b><span aria-hidden="true">${pt.icon || '🏠'}</span>`;
     el.addEventListener('click', ev => { ev.stopPropagation(); if (pt.onTap) pt.onTap(); });
-    mapMarks.push(new maplibregl.Marker({element: el, anchor: 'bottom'}).setLngLat([pt.lng, pt.lat]).addTo(mapObj));
+    mapMarks.push(new maplibregl.Marker({element: el, anchor: pt.anchor || 'bottom'}).setLngLat([pt.lng, pt.lat]).addTo(mapObj));
   });
+  hydratePhotos();   // 58: the people's pictures in their circles
   if (points.length > 1){
     const b = new maplibregl.LngLatBounds();
     points.forEach(pt => b.extend([pt.lng, pt.lat]));

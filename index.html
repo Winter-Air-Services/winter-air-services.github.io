@@ -522,6 +522,12 @@
   .map-mark.due b{background:#d64545}
   .map-mark.never b{background:#3b82f6}
   .map-mark.stop b{background:#1f8a5b}
+  /* 58: a person — their picture or initials in a circle; blue while online, grey for the last place */
+  .map-mark.who .avatar{width:40px;height:40px;font-size:15px;border:3px solid #9aa5b1;background-color:#fff}
+  .map-mark.who.on .avatar{border-color:#3b82f6}
+  .map-mark.who .avatar.face img{border-radius:50%}
+  .loc-card{margin-bottom:10px}
+  .loc-card .row-gap{margin-top:8px}
 
   /* ---------- the paper's SAMPLE mark (quotation, billing statement) ---------- */
   .rc-sample{position:absolute;top:38%;left:0;right:0;text-align:center;font-size:5em;font-weight:800;color:rgba(0,0,0,.06);
@@ -582,6 +588,26 @@
   .qt-conf{display:grid;grid-template-columns:1fr auto;gap:40px;margin-top:52px;white-space:nowrap}
   .qt-conf .ln{display:inline-block;border-bottom:1px solid #000;vertical-align:bottom}
   .qt-conf small{display:block;font-size:14.5px;padding-left:130px}
+  .quote.report{min-height:0;font-size:14.5px}
+  .rp-top{position:relative;text-align:center;margin-top:12px}
+  .rp-title{font-weight:700;font-size:21px;text-decoration:underline}
+  .rp-no{position:absolute;right:0;top:-2px;color:#b3261e;font-size:20px}
+  .rp-facts{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:8px}
+  .rp-f{display:flex;gap:6px;align-items:baseline;margin-top:7px}
+  .rp-f>span{white-space:nowrap}
+  .rp-f b{flex:1;font-weight:400;border-bottom:1px solid #000;min-height:1.35em;padding-left:4px;overflow-wrap:anywhere}
+  .rp-kind{margin-top:9px}
+  .rp-gap{display:inline-block;width:28px}
+  .rp-h{margin-top:16px;font-weight:700}
+  .rp-h span{font-weight:400}
+  .rp-ticks{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;margin-top:4px;font-size:13.5px;line-height:1.4}
+  .rp-tick{display:flex;gap:6px}
+  .rp-other{flex:1}
+  .rp-find{min-height:84px;border-bottom:1px solid #000;white-space:pre-line;margin-top:6px;padding:0 4px 4px}
+  .rp-sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:26px;align-items:end}
+  .rp-cert{font-style:italic;margin:0 0 4px;font-size:13.5px}
+  .rp-checks .tick{align-items:flex-start;margin:6px 0}
+  .rp-seg{margin:10px 0}
   .qt-line{border:1px solid var(--border);border-radius:var(--radius-md);padding:10px;margin-bottom:10px}
   .qt-line textarea{min-height:0}
   .qt-nums{display:flex;gap:8px;align-items:flex-end;margin-top:6px}
@@ -713,6 +739,12 @@
   .cal-day.shut{background:#d64545;border-color:#d64545;color:#fff;opacity:1}
   .cal-day.weekly{background:var(--surface-alt);text-decoration:line-through}
   .cal-nav{display:flex;align-items:center;gap:8px}
+  /* check-in (56): a day with times, the day shown, a time's list, Online */
+  .cal-day.worked{background:var(--good-bg);border-color:var(--good);color:var(--good)}
+  .cal-day.picked{background:var(--primary);border-color:var(--primary);color:var(--primary-ink)}
+  .ck-list .lrow-title{white-space:normal}
+  .time-card{margin-bottom:10px}
+  .seen-on{color:var(--good);font-weight:700}
   /* 📅 Regular check (24) */
   .plan-every{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}   /* 3 × 2 at every width */
   .plan-every .tab-btn{min-width:0;min-height:40px;justify-content:center;text-align:center}
