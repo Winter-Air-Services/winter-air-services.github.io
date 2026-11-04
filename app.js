@@ -168,8 +168,8 @@ let lastChangeAt = null;   // when a pull last brought something (R5)
 const dbKey = () => 'ws_db_' + session.uid;
 const qKey  = () => 'ws_queue_' + session.uid;
 const nKey  = () => 'ws_notices_' + session.uid;
-const DB_SHAPE = 56;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew, 53: customers.photos, bookings.photo_count, 56: checkins)
-function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}, checkins: {}}; }
+const DB_SHAPE = 60;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew, 53: customers.photos, bookings.photo_count, 56: checkins, 60: the pay)
+function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}, checkins: {}, payslips: {}, loans: {}}; }
 /* docs/rules/sync.md: when what the server sends changes shape, bump this, so every phone
    takes one full fresh copy instead of keeping rows that predate the change. 2026-09-26:
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
@@ -187,6 +187,8 @@ function loadLocal(){
   db = lsGet(dbKey(), null) || emptyDb();
   if (db.repair !== REPAIR_ID){ db.cursor = null; db.repair = REPAIR_ID; }
   if (!db.checkins) db.checkins = {};   // 56: a copy made before the times
+  if (!db.payslips) db.payslips = {};   // 60: and before the pay
+  if (!db.loans) db.loans = {};
   queue = lsGet(qKey(), []);
   notices = lsGet(nKey(), []);
 }
@@ -331,7 +333,7 @@ async function pull(){
   const busy = new Set(queue.flatMap(o => o.touches));
   const before = {bookings: {...db.bookings}, customers: {...db.customers}, jobs: {...db.jobs}};
   if (db.cursor === null){           // a full copy: anything not in it is gone
-    for (const k of ['bookings', 'customers', 'jobs', 'team', 'checkins'])
+    for (const k of ['bookings', 'customers', 'jobs', 'team', 'checkins', 'payslips', 'loans'])
       for (const id of Object.keys(db[k])) if (!busy.has(id)) delete db[k][id];
   }
   // 46: a work photo taken off a job, or a deleted job's photos, leave this phone too
@@ -359,6 +361,12 @@ async function pull(){
   }
   const ckFrom = manilaDate(db.role === 'admin' ? -100 : -35);
   for (const k of Object.values(db.checkins)) if (k.day < ckFrom && !busy.has(k.id)) delete db.checkins[k.id];
+  // 60: the payslips (the office: every one and the loans; the field: their own released ones) —
+  // a tombstone leaves the field's phone; the office keeps it, to bring it back
+  for (const row of res.payslips || []) if (!busy.has(row.id)){
+    if (row.removed_at && db.role !== 'admin') delete db.payslips[row.id]; else db.payslips[row.id] = row;
+  }
+  for (const row of res.pay_loans || []) if (!busy.has(row.id)) db.loans[row.id] = row;
   if (res.checkin_rules && !queue.some(o => o.fn === 'set_checkin_rule')) db.checkinRules = res.checkin_rules;
   if (res.seen) db.seen = res.seen;   // 56: everybody's last heartbeat (admin only)
   if (res.places) db.places = res.places;   // 58: the users map, and who was asked (admin only)
@@ -1005,6 +1013,10 @@ const INFO = {
   ckloc: ['Require location', 'Off: Time in and Time out are one tap.\n\nOn: the phone sends where it is with each time; with location off, the time is not kept and the phone says why. You see it on the person’s times.'],
   report: ['Service report', 'One for each appliance on the job, like the paper one: tick the work done, write the findings, Save. The number is given by the office’s server when it is first saved, counting up from the number set in Admin → Service report.\n\nThe office and technicians fill it in and change it; the customer signs it on the phone. Print it, or send it as a PDF.'],
   reportadmin: ['Service report', 'The ticks, the line over the client’s signature, and the number the next report takes. Each job’s reports are on the job: one for each appliance.\n\nThe letterhead and the QR are the quotation’s (Admin → Quotation).'],
+  pay: ['Pay', 'What each new payslip starts with: the daily rate (× the days with a time on them), SSS, and how much of the loan to take off each payslip.\n\nEvery box can still be changed on the payslip itself.'],
+  payslip: ['Payslip', 'Made by the office: pick From and To, and it fills itself — the days with any time on them (their own Time in, or a job’s Start / Mark done), the jobs done with them on the crew (technicians: price × their share), SSS and the loan part. Change any box; add a damage.\n\nOnly the office sees a draft. Release it, and the person sees their own payslip on their phone (Settings → My payslips). A change after that shows under it, with who changed it. Print it, or send it as a PDF.'],
+  loans: ['Loans / utang', 'Lend records money given to this person. Each released payslip takes its loan part off, and the balance carries over to the next payslip.\n\nA loan typed by mistake can be taken off, unless released payslips already took part of it.'],
+  ckhours: ['The shop’s hours', 'Full attendance, on a technician’s or a helper’s day in Users, puts in their time in and time out at these hours — the times they did not tap. Each one is a line with your name, like any other change.'],
   reset: ['Take the office’s copy', 'Throws away everything on this phone that has not been sent, and takes the office’s copy again. Nothing else ever overwrites what you did here.'],
 };
 const infoBtn = k => `<button type="button" class="info-btn" data-act="info" data-v="${k}" aria-label="What is this?">i</button>`;
@@ -1030,6 +1042,26 @@ let pubUnits = [];
    its Facebook link. From list_services(), kept for the next time with no signal. */
 let pubShop = lsGet('ws_shop', null) || {closed_days: [], closed_dates: [], facebook_url: ''};
 const PAY = {cash: 'cash', gcash: 'GCash', other: 'other'};
+/* Payments (59, TODO2 item 9): the office's list on a job — a down payment, then the rest.
+   The server's paid mark follows them; a job marked paid before 59 has none and counts its price. */
+const paysOf = j => (j && Array.isArray(j.payments) ? j.payments : []);
+const cents = n => Math.round(n * 100) / 100;
+const paidSum = j => { const l = paysOf(j);
+  return l.length ? cents(l.reduce((a, x) => a + Number(x.amount), 0)) : j.paid_method && j.price != null ? Number(j.price) : 0; };
+const jobBalance = j => (j.price == null ? null : cents(Number(j.price) - paidSum(j)));
+// the server's trigger (jobs_paid_follow), here, so the phone is right before the next pull
+function payFollow(j, paysChanged){
+  const l = paysOf(j), last = l[l.length - 1], full = !!last && j.price != null && paidSum(j) >= Number(j.price);
+  if (!l.length && !paysChanged) return;   // a price change on a job marked paid before 59: as it was
+  j.paid_method = full ? last.method : null; j.paid_at = full ? last.at : null;
+}
+function payLine(j){
+  const s = paidSum(j), b = jobBalance(j);
+  if (j.price == null) return s ? 'Paid ' + peso(s) + ' · price not set yet' : 'Price not set yet';
+  if (!s) return 'Not paid yet · ' + peso(j.price);
+  if (b > 0) return 'Paid ' + peso(s) + ' of ' + peso(j.price) + ' · Balance ' + peso(b);
+  return b < 0 ? 'Paid in full · Overpaid ' + peso(-b) : 'Paid in full · ' + peso(s);
+}
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 /* Idea 4: is the shop closed that day? The office reads its own settings; the page, pubShop. */
 function closedOn(ymd){
@@ -1752,6 +1784,12 @@ function eventRow(e){
     }
     case 'job_onway': return ['🚐', 'On the way', null, by];
     case 'job_paid':  return ['💵', after.paid ? 'Paid · ' + (PAY[after.paid] || after.paid) : 'Marked not paid', null, by];   // 21
+    case 'job_payment': {   // 59: a payment, or one taken off, and where that leaves the job
+      const left = after.price != null ? Number(after.price) - Number(after.paid || 0) : null;
+      const where = left == null ? 'paid ' + peso(after.paid || 0) : left > 0 ? 'balance ' + peso(left) : left < 0 ? 'overpaid ' + peso(-left) : 'paid in full';
+      return after.removed ? ['🗑️', peso(before.amount || 0) + ' ' + (PAY[before.method] || '') + ' taken off · ' + where, null, by]
+        : ['💵', peso(after.amount || 0) + ' ' + (PAY[after.method] || '') + ' · ' + where + (after.note ? ' — ' + after.note : ''), null, by];
+    }
     case 'job_followup': return ['☎️', 'After-job call', after.note ? [['Note', '', after.note]] : null, by];
     case 'job_seen':  return ['👀', 'Seen', null, by];   // one per person who opened the job (20)
     case 'job_undo':  return ['↩️', 'Undone', [['Status', lab(before.status), lab(after.status)]], by];
@@ -2346,6 +2384,10 @@ function paidPill(j){
   if (!db || !(db.role === 'admin' || inField(db.role)) || !j || j.status === 'cancelled') return '';
   if (j.paid_method === 'gcash') return pill('gcash', 'GCash');
   if (j.paid_method) return pill('paid', 'Paid');
+  // 59: part paid — what is still owed (the office's phone only; the field never gets payments)
+  const b = paysOf(j).length ? jobBalance(j) : null;
+  if (b > 0) return pill('unpaid', 'Balance ' + peso0(b));
+  if (paysOf(j).length && j.price == null) return pill('unpaid', 'Down ' + peso0(paidSum(j)));   // no price yet
   return pill('unpaid', 'Not paid');
 }
 /* ---------------------------------------------------------------- Assigned to (39)
@@ -2582,11 +2624,7 @@ function panelJob(p){
       ${kv('Notes', j.notes ? esc(j.notes) : '')}
       ${tech ? (helper && techPrice ? kv('Price', esc(peso(j.price))) : '') : kv('Price', esc(j.price != null ? peso(j.price) : 'Not set yet'))}
       ${rewardPill(j) ? kv('You receive', rewardPill(j)) : ''}
-      ${tech || j.status === 'cancelled' ? '' : `<div class="paid-row">${j.paid_method
-        ? `<span class="pill done">Paid · ${esc(PAY[j.paid_method])}${j.paid_at ? ' · ' + esc(shortDate(manilaDay(j.paid_at))) : ''}</span>
-           <button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="">Not paid</button>`
-        : `<span class="muted">Not paid yet</span>${['cash', 'gcash', 'other'].map(m =>
-            `<button type="button" class="b" data-act="paid" data-id="${esc(j.id)}" data-v="${m}">${m === 'cash' ? '💵 Cash' : m === 'gcash' ? '📱 GCash' : 'Other'}</button>`).join('')}`}</div>`}
+      ${tech || j.status === 'cancelled' ? '' : paysHtml(j, p)}
       ${j.status === 'done' && j.done_at ? kv('Done', esc(new Date(j.done_at).toLocaleString('en-PH', {dateStyle: 'medium', timeStyle: 'short'}))) : ''}
       ${j.status === 'cancelled' && !helper ? kv('Why cancelled', esc(j.cancel_reason || '')) : ''}
       ${helper ? '' : `<div class="actions">${callBtn(c.contact)}${tech ? '' : textBtn(j)}${mapBtn(c)}${canAssign(j) && db.staff
@@ -2718,6 +2756,40 @@ function panelPrice(p){
     <label>Price agreed with the customer, in pesos
       <input data-pf="price" inputmode="decimal" placeholder="1500" value="${esc(p.price != null ? p.price : (j.price != null ? j.price : ''))}"></label>
     <div class="stack"><button type="button" class="b primary wide" data-act="price" data-id="${esc(j.id)}">Save the price</button></div>`};
+}
+/* The job's money (59, TODO2 item 9): what was paid, what is left, each payment, Add a payment.
+   A job marked paid before 59 keeps its old line and its Not paid button. Office only. */
+function paysHtml(j, p){
+  const id = esc(j.id), l = paysOf(j);
+  if (!l.length && j.paid_method) return `<div class="paid-row">
+      <span class="pill done">Paid · ${esc(PAY[j.paid_method])}${j.paid_at ? ' · ' + esc(shortDate(manilaDay(j.paid_at))) : ''}</span>
+      <button type="button" class="b" data-act="paid" data-id="${id}" data-v="">Not paid</button></div>`;
+  const b = jobBalance(j);
+  return `<div class="pays">
+      <div class="pays-sum${b != null && b <= 0 && l.length ? ' is-paid' : ''}">${esc(payLine(j))}</div>
+      ${l.map(x => `<div class="pay-row"><span><b>${esc(peso(x.amount))}</b> · ${esc(PAY[x.method] || x.method)} · ${esc(shortDate(manilaDay(x.at)))}${x.by_name
+          ? ' · ' + nameFx(x.by_name, x.by || null, 'history') : ''}${x.note ? `<br><span class="muted">${esc(x.note)}</span>` : ''}</span>
+        ${p.payAsk === x.id ? `<span class="pay-ask"><span>Take ${esc(peso(x.amount))} off?</span><button type="button" class="b danger" data-act="payoffyes" data-id="${id}" data-v="${esc(x.id)}">Take it off</button>
+            <button type="button" class="b" data-act="payoffno">Keep it</button></span>`
+          : `<button type="button" class="linkish" data-act="payoff" data-v="${esc(x.id)}">Take off</button>`}</div>`).join('')}
+      <button type="button" class="b${b == null || b > 0 ? ' primary' : ''} wide" data-act="open" data-kind="payment" data-id="${id}">💵 Add a payment</button>
+    </div>`;
+}
+/* Add a payment: its box starts at the balance, so one tap is still "paid in full". */
+function panelPayment(p){
+  const j = db.jobs[p.id];
+  if (!j) return {title: 'Add a payment', body: empty('This job is no longer on this phone.')};
+  const b = jobBalance(j);
+  if (p.amount == null) p.amount = b > 0 ? String(b) : '';
+  const m = p.method || 'cash';
+  return {title: 'Add a payment', sub: jobCust(j).full_name, body: `
+    <p class="hint">${esc(payLine(j))}</p>
+    <label>Amount received, in pesos <input data-pf="amount" inputmode="decimal" placeholder="1500" value="${esc(p.amount)}"></label>
+    <div class="fieldlabel">Paid by</div>
+    <div class="segment">${['cash', 'gcash', 'other'].map(k => `<button type="button" class="${m === k ? 'active' : ''}" data-act="paymethod" data-v="${k}">${
+      k === 'cash' ? '💵 Cash' : k === 'gcash' ? '📱 GCash' : 'Other'}</button>`).join('')}</div>
+    <label>Note <span class="opt">— optional</span><input data-pf="note" maxlength="200" value="${esc(p.note || '')}" placeholder="Down payment, second of three…" autocomplete="off"></label>
+    <div class="stack"><button type="button" class="b primary wide" data-act="addpay" data-id="${esc(j.id)}">Save the payment</button></div>`};
 }
 function panelCancel(p){
   const j = db.jobs[p.id];
@@ -2918,8 +2990,11 @@ function panelCustomer(p){
   const cu = !k ? '' : k.busy && k.due <= today ? 'Due — but a job is already booked'
     : k.due <= today ? 'Due now — in Check-ups' : 'Next ' + niceDate(k.due);
   const removed = c.full_name === '(removed)';
+  // 59: their utang — what their done jobs still owe
+  const owes = cents(jobs.filter(j => j.status === 'done' && j.price != null).reduce((a, j) => a + Math.max(jobBalance(j), 0), 0));
   return {title: c.full_name, sub: c.contact, body: `
     <div class="card" data-row="${esc(c.id)}" data-stamp="${esc(c.updated_at || '')}">
+      ${owes > 0 ? kv('Owes', `<span class="owes">${esc(peso(owes))}</span>`) : ''}
       ${kv('Number', esc(c.contact))}
       ${kv('Address', esc(c.address))}
       ${kv('Landmark', esc(c.landmark || ''))}
@@ -3320,7 +3395,7 @@ function panelMember(p){
         + ((db.asked || {})[t.id] ? ' · asked ' + esc(agoWord(db.asked[t.id])) : '')
         + (me || !locWhy(t.id) ? '' : ` <button type="button" class="b" data-act="askloc" data-id="${esc(t.id)}">Ask again</button>`)) : ''}
     </div>
-    ${inField(t.role) ? ckCardHtml(t, p) : ''}
+    ${inField(t.role) ? ckCardHtml(t, p) + payCardHtml(t, p) : ''}
     ${t.role === 'admin' ? `<div class="card row-between">
       <div class="lrow-main"><div class="menu-title">Sends texts to customers ${infoBtn('texter')}</div>
         <div class="sms-note">${textTexters().includes(t.id) ? 'Sees Texts to customers in Settings, 💬 Text on jobs and Text all.' : 'Sees none of the texting.'}</div></div>
@@ -3395,6 +3470,9 @@ function ckDayHtml(t, p, day){
         <button type="button" class="b danger" data-act="ckremove" data-id="${esc(k.id)}">Remove</button>`}</div>`;
   const jobs = [...new Set(rows.filter(k => k.job_id).map(k => k.job_id))];
   const add = !last ? 'in' : last.kind === 'in' ? 'out' : null;
+  // 60: Full attendance — the day's missing time in and time out, at the shop's hours
+  const h = PAY_HOURS(), full = !alive.some(k => k.kind === 'in') || !alive.some(k => k.kind === 'out');
+  const fullBtn = full ? `<div class="stack"><button type="button" class="b primary wide" data-act="ckfull" data-day="${day}">✓ Full attendance — ${esc(clockOf(day + 'T' + h.in + ':00+08:00'))} to ${esc(clockOf(day + 'T' + h.out + ':00+08:00'))}</button></div>` : '';
   return `<div class="sec">${esc(niceDate(day))}</div>
     <div class="list ck-list">
       ${own.map(k => line(k, k.kind === 'in' ? 'Time in' : 'Time out')).join('')}
@@ -3402,8 +3480,240 @@ function ckDayHtml(t, p, day){
         return rows.filter(k => k.job_id === jid).map(k => line(k, name + ' — ' + (k.kind === 'in' ? 'arrived' : 'left'))).join(''); }).join('')}
       ${!rows.length ? empty('No times this day.') : ''}
     </div>
+    ${fullBtn}
     ${add ? (p.ckEdit === 'new' ? editor('new', add, null)
       : `<div class="stack"><button type="button" class="b wide" data-act="ckedit" data-id="new">＋ Add a time ${add}</button></div>`) : ''}`;
+}
+
+/* ---------------------------------------------------------------- the payslip (60)
+   Guile's answers, 2026-11-05 (TODO2 #7): the office picks From and To; a day counts when the
+   person has any time on it (their own, or a job's Start / Mark done); wage = days × their daily
+   rate; the share = the jobs done in the period with them on the crew, price × their share
+   (technicians only); SSS a fixed amount per person; a loan's balance carries over; damages a
+   typed line. Every line can be changed. Release lets the person see their own. The phone fills
+   it from what it holds; the server checks each line and works out the totals. */
+const PAY_HOURS = () => ({in: '08:00', out: '17:00', ...((db.settings || {}).checkin_hours || {})});
+const payslipsOf = uid => Object.values(db.payslips || {}).filter(k => !uid || k.uid === uid)
+  .sort((a, b) => a.period_to < b.period_to ? 1 : a.period_to > b.period_to ? -1 : (a.created_at || '') < (b.created_at || '') ? 1 : -1);
+function loanLeft(uid, except){
+  const lent = Object.values(db.loans || {}).filter(l => l.uid === uid && !l.removed_at).reduce((s, l) => s + Number(l.amount), 0);
+  const took = payslipsOf(uid).filter(k => k.status === 'released' && !k.removed_at && k.id !== except).reduce((s, k) => s + Number(k.loan || 0), 0);
+  return Math.round((lent - took) * 100) / 100;
+}
+// the days with any time on them, and the jobs done in the period with this person on the crew
+function payFill(uid, from, to){
+  const t = db.team[uid] || {}, tech = t.role === 'technician', pct = Number(t.share_pct ?? 10);
+  const days = [...new Set(Object.values(db.checkins || {}).filter(k => k.uid === uid && !k.removed_at && k.day >= from && k.day <= to).map(k => k.day))].sort();
+  const jobs = !tech ? [] : Object.values(db.jobs).filter(j => j.status === 'done' && j.done_at && crewOf(j).includes(uid)
+      && manilaDay(j.done_at) >= from && manilaDay(j.done_at) <= to).sort((a, b) => a.done_at < b.done_at ? -1 : 1)
+    .map(j => ({id: j.id, name: (jobCust(j).full_name || 'A job') + ' · ' + shortDate(manilaDay(j.done_at)) + (j.price == null ? ' · no price yet' : ''),
+                amount: j.price == null ? '0' : String(Math.round(Number(j.price) * pct) / 100)}));
+  return {days: String(days.length), day_list: days, rate: String(Number(t.daily_rate || 0)), jobs,
+    sss: String(Number(t.sss_amt || 0)), loan: String(Math.max(0, Math.min(Number(t.loan_part || 0), loanLeft(uid)))), damages: []};
+}
+const payStr = b => ({days: String(b.days), day_list: b.day_list || [], rate: String(b.rate), sss: String(b.sss), loan: String(b.loan),
+  jobs: (b.jobs || []).map(x => ({id: x.id, name: x.name, amount: String(x.amount)})),
+  damages: (b.damages || []).map(x => ({what: x.what, amount: String(x.amount)}))});
+// an empty box is ₱0; a box it cannot read is refused, never stripped (schema.md)
+const payNum = s => String(s == null ? '' : s).trim() === '' ? 0 : parsePrice(s);
+function payRead(b){
+  const n = {days: String(b.days).trim() === '' ? 0 : /^\d{1,2}$/.test(String(b.days).trim()) ? Number(b.days) : null,
+    rate: payNum(b.rate), sss: payNum(b.sss), loan: payNum(b.loan),
+    jobs: b.jobs.map(x => ({id: x.id || null, name: String(x.name || '').trim(), amount: payNum(x.amount)})),
+    damages: b.damages.map(x => ({what: String(x.what || '').trim(), amount: payNum(x.amount)})), day_list: b.day_list || []};
+  const bad = n.days == null || n.days > 62 ? 'The days' : n.rate == null ? 'The daily rate' : n.sss == null ? 'SSS' : n.loan == null ? 'The loan part'
+    : n.jobs.some(x => x.amount == null) ? 'A share' : n.jobs.some(x => !x.name) ? 'A share line’s name'
+    : n.damages.some(x => x.amount == null) ? 'A damage' : n.damages.some(x => !x.what) ? 'What a damage was' : null;
+  return {n, bad};
+}
+function payTotals(n){
+  const r2 = x => Math.round(x * 100) / 100, wage = r2((n.days || 0) * (n.rate || 0));
+  const share = r2(n.jobs.reduce((s, x) => s + (x.amount || 0), 0)), dmg = r2(n.damages.reduce((s, x) => s + (x.amount || 0), 0));
+  const deduct = r2((n.sss || 0) + (n.loan || 0) + dmg);
+  return {wage, share, dmg, deduct, net: r2(wage + share - deduct)};
+}
+const payPeriod = (f, t) => f === t ? qtLongDate(f) : shortDate(f) + ' – ' + qtLongDate(t);
+function payslipHtml(v){
+  const s = quoteShop(), n = v.n, row = (l, a, cls) => `<tr${cls ? ` class="${cls}"` : ''}><td>${l}</td><td>${a}</td></tr>`;
+  // a box it cannot read is "₱ ?", and so is every total it is in — never ₱0 (schema.md)
+  const m = x => x == null ? '₱ ?' : '₱' + qtMoney(x), t0 = payTotals(n), bad = v.bad;
+  const tot = bad ? {wage: n.days == null || n.rate == null ? null : t0.wage, share: null, deduct: null, net: null} : t0;
+  if (bad && !n.jobs.some(x => x.amount == null)) tot.share = t0.share;
+  if (bad && n.sss != null && n.loan != null && !n.damages.some(x => x.amount == null)) tot.deduct = t0.deduct;
+  const gross = tot.wage == null || tot.share == null ? null : tot.wage + tot.share;
+  return `<div class="quote payslip">
+    ${v.draft ? '<div class="rc-sample">DRAFT</div>' : ''}
+    ${qtHeadHtml(s)}
+    <div class="rp-top"><div class="rp-title">PAYSLIP</div></div>
+    <div class="rp-facts">
+      <div><div class="rp-f"><span>Name:</span><b>${esc(v.name)}</b></div><div class="rp-f"><span>Position:</span><b>${esc(v.role)}</b></div></div>
+      <div><div class="rp-f"><span>Period:</span><b>${esc(v.from && v.to ? payPeriod(v.from, v.to) : '')}</b></div>
+        <div class="rp-f"><span>Released:</span><b>${esc(v.released ? qtLongDate(v.released) : '')}</b></div></div>
+    </div>
+    <table class="ps-t">
+      <tr class="ps-h"><td>Earnings</td><td></td></tr>
+      ${row(`Daily wage: ${n.days == null ? '?' : esc(qtNum(n.days))} day${n.days === 1 ? '' : 's'} × ${esc(m(n.rate))}`, m(tot.wage))}
+      ${n.jobs.map(x => row('Share: ' + esc(x.name), m(x.amount))).join('')}
+      ${row('<b>Gross pay</b>', '<b>' + m(gross) + '</b>', 'ps-sum')}
+      <tr class="ps-h"><td>Deductions</td><td></td></tr>
+      ${row('SSS', m(n.sss))}
+      ${row('Loan / utang' + (v.left != null && !bad ? ` <span class="ps-s">(balance after this: ₱${esc(qtMoney(v.left))})</span>` : ''), m(n.loan))}
+      ${n.damages.map(x => row('Damage: ' + esc(x.what), m(x.amount))).join('')}
+      ${row('<b>Total deductions</b>', '<b>' + m(tot.deduct) + '</b>', 'ps-sum')}
+      ${row('<b>NET PAY</b>', `<b>${tot.net == null ? '₱ ?' : peso(tot.net)}</b>`, 'ps-net')}
+    </table>
+    ${n.day_list && n.day_list.length ? `<p class="ps-days">Days worked: ${esc(n.day_list.map(d => shortDate(d)).join(', '))}</p>` : ''}
+    <div class="rp-sign"><div></div><div><div class="qt-sigspace"></div><div class="bl-ln"><b>${esc(v.name)}</b><br>Received by</div></div></div>
+  </div>`;
+}
+function payView(p){
+  const k = db.payslips[p.id], uid = p.uid || (k && k.uid), t = db.team[uid] || (db.staff || []).find(x => x.id === uid) || {};
+  const {n, bad} = payRead(p.b), tot = payTotals(n), left = k && k.status === 'released' && !p.dirty ? Number(k.loan_left)
+    : db.role === 'admin' ? Math.round((loanLeft(uid, p.id) - (n.loan || 0)) * 100) / 100 : (k && k.loan_left != null ? Number(k.loan_left) : null);
+  return {n, tot, left, bad, name: t.display_name || t.name || (db.profile || {}).display_name || '', role: ROLE_NAME[t.role] || ROLE_NAME[db.role] || '',
+    from: p.from, to: p.to, draft: !k || k.status !== 'released', released: k && k.released_at ? manilaDay(k.released_at) : null};
+}
+function payStart(p){
+  if (p.b) return;
+  const k = db.payslips[p.id];
+  if (k){ p.uid = k.uid; p.from = k.period_from; p.to = k.period_to; p.b = payStr(k.body); return; }
+  p.to = manilaDate(0); p.from = addDays(p.to, -6); p.b = payFill(p.uid, p.from, p.to); p.dirty = true;
+}
+function panelPayslip(p){
+  const admin = db.role === 'admin';
+  // the field holds only released payslips: one taken off (or never theirs) is gone, not drawn from the screen's copy
+  if (!admin && !db.payslips[p.id]) return {title: 'Payslip', body: empty('This payslip is no longer on this phone.')};
+  payStart(p);
+  const k = db.payslips[p.id], t = db.team[p.uid] || {};
+  const who = t.display_name || (admin ? 'them' : (db.profile || {}).display_name || '');
+  const sub = who + ' · ' + payPeriod(p.from, p.to);
+  const btns = `<button type="button" class="b${admin ? '' : ' primary'} wide" data-act="printpayslip">🖨️ Print or save as PDF</button>
+    <button type="button" class="b wide" data-act="sharepayslip">📤 Send as PDF — Messenger, email…</button>`;
+  const v = payView(p);
+  if (!admin) return {title: 'Payslip', sub, body: `${paperBox(payslipHtml(v), 'payPreview')}<div class="stack">${btns}</div>`};
+  const said = !k ? 'Not saved yet' : (k.status === 'released' ? 'Released ' + timeAgo(k.released_at) + ' — ' + who + ' sees it' : 'Draft — only the office sees it')
+    + (k.removed_at ? ' · taken off' : '') + unsentPill(k.id);
+  const box = (key, label, hint, mode) => `<label>${label}${hint ? ` <span class="opt">— ${hint}</span>` : ''}
+    <input data-yf="${key}" inputmode="${mode || 'decimal'}" maxlength="12" value="${esc(p.b[key])}" autocomplete="off"></label>`;
+  const hist = k ? (k.history || []).map(h => `<div class="sms-note">${esc(h.by_name || 'The office')} ${h.what === 'released' ? 'released it'
+    : h.what === 'off' ? 'took it off' : h.what === 'back' ? 'brought it back' : 'changed it: ' + esc(peso(h.from)) + ' → ' + esc(peso(h.to))} · ${esc(niceDate(manilaDay(h.at)))}</div>`).join('') : '';
+  if (k && k.removed_at) return {title: 'Payslip', sub, info: 'payslip', body: `${paperBox(payslipHtml(v), 'payPreview')}
+    <p class="hint">${said}.</p>${hist}
+    <div class="stack"><button type="button" class="b primary wide" data-act="backpayslip" data-id="${esc(k.id)}">Bring it back</button></div>`};
+  const left = loanLeft(p.uid, p.id);
+  return {title: 'Payslip', sub, info: 'payslip', body: `
+    ${paperBox(payslipHtml(v), 'payPreview')}
+    <p class="hint">${said}. Tap the page to see it full size.</p>${hist}
+    <div class="row-gap ps-dates"><label>From <input type="date" data-yp="from" value="${esc(p.from)}"></label>
+      <label>To <input type="date" data-yp="to" value="${esc(p.to)}"></label></div>
+    <div class="stack"><button type="button" class="b wide" data-act="payrecount">↻ Count again for these dates</button></div>
+    <p class="hint">Fills the days and the jobs from the check-ins and the jobs done, and the rates from ${esc(who)}’s pay. What you typed in those boxes is replaced.</p>
+    <div class="row-gap ps-two">${box('days', 'Days worked', '', 'numeric')}${box('rate', 'Daily rate ₱')}</div>
+    ${p.b.day_list.length ? `<p class="hint">${esc(p.b.day_list.map(d => shortDate(d)).join(', '))}</p>` : ''}
+    <div class="fieldlabel">Share of jobs done${t.role === 'technician' ? ' — ' + esc(String(Number(t.share_pct ?? 10))) + '% of each price' : ' — helpers get none'}</div>
+    ${p.b.jobs.map((x, i) => `<div class="ps-line"><input data-yj="${i}:name" maxlength="160" value="${esc(x.name)}" aria-label="Job">
+      <input data-yj="${i}:amount" inputmode="decimal" maxlength="12" value="${esc(x.amount)}" aria-label="Amount">
+      <button type="button" class="b" data-act="payjobx" data-v="${i}" aria-label="Take this line off">✕</button></div>`).join('') || '<p class="hint">No jobs done in these dates.</p>'}
+    <div class="row-gap ps-two">${box('sss', 'SSS ₱')}${box('loan', 'Loan / utang ₱', '₱' + qtMoney(left) + ' left before this payslip')}</div>
+    <div class="fieldlabel">Damages</div>
+    ${p.b.damages.map((x, i) => `<div class="ps-line"><input data-yd="${i}:what" maxlength="160" value="${esc(x.what)}" placeholder="What, e.g. broken capacitor" aria-label="What">
+      <input data-yd="${i}:amount" inputmode="decimal" maxlength="12" value="${esc(x.amount)}" placeholder="₱" aria-label="Amount">
+      <button type="button" class="b" data-act="paydmgx" data-v="${i}" aria-label="Take this damage off">✕</button></div>`).join('')}
+    <div class="stack"><button type="button" class="b wide" data-act="paydmgadd">＋ Add a damage</button></div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="savepayslip">Save the payslip</button>
+      ${k && k.status !== 'released' ? `<button type="button" class="b primary wide" data-act="releasepayslip">✓ Release — ${esc(who)} sees it</button>` : ''}
+      ${btns}
+      ${k ? `<button type="button" class="b danger wide" data-act="delpayslip" data-id="${esc(k.id)}">Take this payslip off</button>` : ''}</div>`};
+}
+// typing redraws the page beside the boxes, never the box being typed in (ui.md)
+function drawPayPreview(p){
+  const w = $('#payPreview'); if (w) w.firstElementChild.innerHTML = payslipHtml(payView(p));
+  fitQuotes();
+}
+function savePayslip(){
+  const p = topPanel(); if (!p || p.kind !== 'payslip' || db.role !== 'admin') return false;
+  const {n, bad} = payRead(p.b);
+  if (bad){ toast(bad + ': type a number like 500 or 1,250.50. Nothing was saved.', true); return false; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(p.from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(p.to || '') || p.from > p.to || addDays(p.from, 62) < p.to){
+    toast('Pick From and To, at most two months apart. Nothing was saved.', true); return false; }
+  const left = loanLeft(p.uid, p.id);
+  if (n.loan > left){ toast('The loan part is more than what is left of the loans (₱' + qtMoney(Math.max(0, left)) + '). Nothing was saved.', true); return false; }
+  const k = db.payslips[p.id], id = p.id, uid = p.uid, tot = payTotals(n), who = (db.team[uid] || {}).display_name || '';
+  const body = {days: n.days, day_list: n.day_list, rate: n.rate, jobs: n.jobs, sss: n.sss, loan: n.loan, damages: n.damages};
+  write('save_payslip', {p_id: id, p_user: uid, p_from: p.from, p_to: p.to, p_body: body, p_based_on: k ? k.v : null},
+    'Payslip — ' + who, [id], (db, op) => {
+      const was = db.payslips[id];
+      db.payslips[id] = {...(was || {id, uid, status: 'draft', history: [], created_at: op.at, v: 0}), period_from: p.from, period_to: p.to,
+        body, wage: tot.wage, share: tot.share, deduct: tot.deduct, net: tot.net, loan: n.loan, loan_left: Math.round((left - n.loan) * 100) / 100,
+        v: ((was && was.v) || 0) + 1, by_name: (db.profile || {}).display_name || '', updated_at: op.at};
+    });
+  p.dirty = false;
+  toast('Payslip saved' + (k && k.status === 'released' ? ' — ' + who + ' sees the change.' : '. Only the office sees it until you release it.'));
+  render();
+  return true;
+}
+function payPaper(share){
+  const p = topPanel(); if (!p || p.kind !== 'payslip') return;
+  if (db.role === 'admin' && p.dirty && !savePayslip()) return;
+  const v = payView(p);
+  printHtml(payslipHtml(v), 'Payslip ' + v.name + ' ' + p.from + ' to ' + p.to, share);
+}
+// Users → a technician or helper: their pay, loan balance and payslips, below the check-ins
+function payCardHtml(t, p){
+  const val = (k, f) => esc(p[k] != null ? p[k] : String(Number(t[f] || 0)));
+  const slips = payslipsOf(t.id), left = loanLeft(t.id);
+  return `<div class="card">
+    <div class="menu-title">💰 Pay ${infoBtn('pay')}</div>
+    <div class="row-gap ps-three"><label>Daily rate ₱<input data-pf="payRate" inputmode="decimal" maxlength="12" value="${val('payRate', 'daily_rate')}"></label>
+      <label>SSS ₱<input data-pf="paySss" inputmode="decimal" maxlength="12" value="${val('paySss', 'sss_amt')}"></label>
+      <label>Loan part ₱<input data-pf="payLoan" inputmode="decimal" maxlength="12" value="${val('payLoan', 'loan_part')}"></label></div>
+    <div class="actions"><button type="button" class="b primary" data-act="setpay" data-id="${esc(t.id)}">Save</button></div>
+    <p class="hint">Each new payslip starts with these. SSS and the loan part are taken off each payslip; change them on one payslip if needed.</p>
+  </div>
+  <div class="menu">${menuRow('loans', t.id, '🤝', 'Loans / utang', 'Balance ₱' + qtMoney(left) + ' · lend, or see what was paid back')}</div>
+  <div class="sec">🧾 Payslips</div>
+  <div class="stack"><button type="button" class="b primary wide" data-act="newpayslip" data-id="${esc(t.id)}">＋ Make a payslip</button></div>
+  ${slips.length ? `<div class="list">${slips.map(payRow).join('')}</div>` : ''}`;
+}
+function payRow(k){
+  const t = db.team[k.uid] || {};
+  return `<div class="lrow${k.removed_at ? ' off' : ''}" role="button" tabindex="0" data-act="open" data-kind="payslip" data-id="${esc(k.id)}">
+    <div class="lrow-main"><div class="lrow-title">${db.role === 'admin' ? esc(t.display_name || '') + ' · ' : ''}${esc(payPeriod(k.period_from, k.period_to))}${unsentPill(k.id)}</div>
+      <div class="lrow-sub">${k.removed_at ? 'Taken off' : k.status === 'released' ? 'Released ' + esc(niceDate(manilaDay(k.released_at))) : 'Draft — only the office sees it'}</div></div>
+    <div class="lrow-side">${pill(k.status === 'released' ? 'done' : 'new', k.status === 'released' ? 'Released' : 'Draft')}<span class="lrow-price">${esc(peso(k.net))}</span></div>
+  </div>`;
+}
+// the loans: lent, and what each released payslip took off — one list, newest first
+function panelLoans(p){
+  const t = db.team[p.id]; if (!t) return {title: 'Loans', body: empty('This person is no longer on this phone.')};
+  const lines = Object.values(db.loans || {}).filter(l => l.uid === t.id).map(l => ({at: l.created_at || l.lent_on, l}))
+    .concat(payslipsOf(t.id).filter(k => k.status === 'released' && !k.removed_at && Number(k.loan) > 0).map(k => ({at: k.released_at, k})))
+    .sort((a, b) => a.at < b.at ? 1 : -1);
+  return {title: 'Loans / utang', sub: t.display_name || '', info: 'loans', body: `
+    <div class="card">${kv('Balance', '<b>₱' + esc(qtMoney(loanLeft(t.id))) + '</b>')}</div>
+    <div class="sec">Lend</div>
+    <div class="row-gap ps-two"><label>Amount ₱<input data-pf="lendAmt" inputmode="decimal" maxlength="12" value="${esc(p.lendAmt || '')}" placeholder="e.g. 5000"></label>
+      <label>Note <span class="opt">— optional</span><input data-pf="lendNote" maxlength="200" value="${esc(p.lendNote || '')}" placeholder="e.g. vale"></label></div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="addloan" data-id="${esc(t.id)}">＋ Lend</button></div>
+    <div class="list">${lines.map(({l, k}) => l ? `<div class="lrow flat${l.removed_at ? ' off' : ''}">
+        <div class="lrow-main"><div class="lrow-title">${l.removed_at ? '<s>' : ''}Lent ₱${esc(qtMoney(l.amount))}${l.removed_at ? '</s> — taken off' : ''}${unsentPill(l.id)}</div>
+          <div class="lrow-sub">${esc(niceDate(l.lent_on))}${l.by_name ? ' · by ' + esc(l.by_name) : ''}${l.note ? ' · ' + esc(l.note) : ''}${l.removed_by ? ' · taken off by ' + esc(l.removed_by) : ''}</div></div>
+        ${l.removed_at ? `<button type="button" class="b" data-act="backloan" data-id="${esc(l.id)}">Bring back</button>`
+          : `<button type="button" class="b danger" data-act="delloan" data-id="${esc(l.id)}">Take off</button>`}</div>`
+      : `<div class="lrow" role="button" tabindex="0" data-act="open" data-kind="payslip" data-id="${esc(k.id)}">
+        <div class="lrow-main"><div class="lrow-title">Paid back ₱${esc(qtMoney(k.loan))}</div>
+          <div class="lrow-sub">Payslip ${esc(payPeriod(k.period_from, k.period_to))} · released ${esc(niceDate(manilaDay(k.released_at)))}</div></div></div>`).join('') || empty('No loans yet.')}</div>`};
+}
+/* Admin → Payslip: every payslip, and a button per technician and helper to make one. */
+function drawPayslipAdmin(){
+  const people = Object.values(db.team).filter(t => inField(t.role) && t.active !== false)
+    .sort((a, b) => (a.display_name || '').localeCompare(b.display_name || ''));
+  const slips = payslipsOf().filter(k => !k.removed_at);
+  return `<p class="hint">Each person’s daily rate, SSS, loans and payslips are also on Users → that person. ${infoBtn('payslip')}</p>
+    <div class="fieldlabel">Make a payslip for</div>
+    <div class="actions">${people.map(t => `<button type="button" class="b" data-act="newpayslip" data-id="${esc(t.id)}">＋ ${esc(t.display_name || (t.email || '').split('@')[0])}</button>`).join('') || '<span class="muted">No technicians or helpers yet.</span>'}</div>
+    <div class="sec">Payslips</div>
+    ${slips.length ? `<div class="list">${slips.map(payRow).join('')}</div>` : empty('No payslips yet.')}`;
 }
 
 /* ---------------------------------------------------------------- the Admin tab */
@@ -3411,11 +3721,11 @@ function drawAdminTab(){
   // 54: one tab where Services & prices, Appliances and Specs were
   const secs = [['appliances', 'Appliances & services'], ['closed', 'Closed days'], ['shop', 'Shop'],
     ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['report', 'Service report'], ['texts', 'Texts'], ['job', 'Job'],
-    ['checkin', 'Check-in'], ['numbers', 'Numbers']];   // job: 41, checkin: 56, report: 57
+    ['payslip', 'Payslip'], ['checkin', 'Check-in'], ['numbers', 'Numbers']];   // job: 41, checkin: 56, report: 57, payslip: 60
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'appliances';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
     ({appliances: drawAppliances, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, billing: drawBillSample, quote: drawQuoteAdmin,
-      report: drawReportAdmin, texts: drawTexts, job: drawJobMover, checkin: drawCheckinAdmin, numbers: drawNumbers})[v]();
+      report: drawReportAdmin, payslip: drawPayslipAdmin, texts: drawTexts, job: drawJobMover, checkin: drawCheckinAdmin, numbers: drawNumbers})[v]();
 }
 /* Admin → Check-in (56): the office's switch. Off: a tap is enough and the phone never asks
    where it is. (The picture's switch comes with the picture.) */
@@ -3426,6 +3736,11 @@ function drawCheckinAdmin(){
         <div class="sms-note">${on ? 'Each time in and out sends where the phone is. No location, no time.' : 'A tap is enough. The phone never asks where it is.'}</div></div>
       <div class="segment mini">${[[false, 'Off'], [true, 'On']].map(([v, l]) =>
         `<button type="button" class="${on === v ? 'active' : ''}" data-act="ckrule" data-v="${v}">${l}</button>`).join('')}</div></div>
+    <div class="card"><div class="menu-title">The shop’s hours ${infoBtn('ckhours')}</div>
+      <div class="row-gap ps-two"><label>Time in <input type="time" data-k="ck_in" value="${esc(PAY_HOURS().in)}"></label>
+        <label>Time out <input type="time" data-k="ck_out" value="${esc(PAY_HOURS().out)}"></label></div>
+      <div class="actions"><button type="button" class="b primary" data-act="ckhours">Save</button></div>
+      <p class="hint">Full attendance, on a person’s day, puts these two times in.</p></div>
     <p class="hint">Each person’s times: Users → tap a technician or a helper.</p>`;
 }
 /* Idea 4 (Guile, 2026-09-27: "the admin marks his close days, maybe a calendar — improve
@@ -4190,15 +4505,37 @@ function reportFind(p){
   if (saved) p.unit = saved.unit;
   return {j, saved};
 }
-/* A new one starts from the job: its day, the customer, the appliance, the crew. */
-function reportStart(j, unit, saved){
-  if (saved) return {...saved, kind: saved.kind || '', call: saved.call || '', served_on: saved.served_on || '', ticks: [...(saved.ticks || [])]};
+/* What the job says now: its day, the customer, the appliance, the owner's own boxes, the crew. */
+// shortcut: the owner's boxes are matched by their label, so renaming "Work Done", "Findings/damage"
+// or "Recommendation" in Admin → Specs stops them filling; upgrade to a per-box "goes on the report as".
+const specLines = (u, re, label) => Object.entries(u.specs || {}).map(([k, v]) => [fieldLabel(k), String(v || '').trim()])
+  .filter(([l, v]) => v && re.test(l)).map(([l, v]) => label ? l + ': ' + v : v);
+function reportFromJob(j, unit){
   const c = jobCust(j), u = unitsOf(j)[unit] || {}, day = j.scheduled_on || manilaDate(0);
   const crew = (j.crew && j.crew.length ? j.crew : j.assigned_uid ? [j.assigned_uid] : []).map(staffName);
   return {date: day, client: c.full_name || '', location: c.address || '', kind: '', brand: u.brand || '',
     capacity: [(variantOf(u.type, u.variant) || {}).label, u.type ? typeLabel(u.type) : ''].filter(Boolean).join(' '),
-    model: u.model || '', serial: u.serial || '', ticks: [], others: '', call: '', findings: '',
+    model: u.model || '', serial: u.serial || '', ticks: [], call: '',
+    others: specLines(u, /work done/i).join('; ').slice(0, 200),
+    findings: specLines(u, /finding|damage/i, true).concat(specLines(u, /recommend/i, true)).join('\n').slice(0, 2000),
     served_by: crew.join(', '), served_on: j.done_at ? manilaDay(j.done_at) : day};
+}
+/* Guile's client, 2026-11-04: the model, serial and Work Done typed on the job's aircon after its
+   report was made never reached the report. So a saved report's EMPTY boxes take the job's values
+   each time it opens; a box someone typed stays. The appliance's boxes only while the job's aircon
+   in that place is still the same brand (taking one off shifts the ones after it, see reportName). */
+const REPORT_FILL = {client: 'Client’s name', location: 'Location', brand: 'Brand', capacity: 'Capacity and type', model: 'Model',
+  serial: 'Serial number', others: 'Others', findings: 'Findings', served_by: 'Serviced by', served_on: 'Serviced on'};
+const REPORT_UNIT = ['brand', 'capacity', 'model', 'serial', 'others', 'findings'];
+function reportFill(saved, now){
+  const r = {...saved, kind: saved.kind || '', call: saved.call || '', served_on: saved.served_on || '', ticks: [...(saved.ticks || [])]};
+  const low = s => String(s || '').trim().toLowerCase(), same = !low(r.brand) || !low(now.brand) || low(r.brand) === low(now.brand);
+  const filled = Object.keys(REPORT_FILL).filter(k => !String(r[k] || '').trim() && now[k] && (same || !REPORT_UNIT.includes(k)));
+  filled.forEach(k => { r[k] = now[k]; });
+  return {r, filled};
+}
+function reportStart(j, unit, saved){
+  return saved ? reportFill(saved, reportFromJob(j, unit)) : {r: reportFromJob(j, unit), filled: []};
 }
 const reportView = (j, p, saved) => ({...p.r, no: saved ? saved.no : null, csig: custSig(j, 'r:' + p.rid)});
 function reportHtml(r){
@@ -4240,8 +4577,9 @@ function reportSample(){
 function panelReport(p){
   const {j, saved} = reportFind(p);
   if (!j) return {title: 'Service report', body: empty('This job is no longer on this phone.')};
-  if (!p.r) p.r = reportStart(j, p.unit, saved);
-  const open = canReport(j), sub = (jobCust(j).full_name || '') + ' · ' + reportName(j, saved, p.unit);
+  const open = canReport(j);
+  if (!p.r){ const s = reportStart(j, p.unit, saved); p.r = s.r; p.filled = s.filled; if (open && s.filled.length) p.dirty = true; }
+  const sub = (jobCust(j).full_name || '') + ' · ' + reportName(j, saved, p.unit);
   const said = saved ? esc(reportNo(saved) + ' · saved ' + timeAgo(saved.saved_at) + (saved.saved_by_name ? ' by ' + saved.saved_by_name : '')) + unsentPill(j.id)
     : 'Not saved yet';
   const btns = `<button type="button" class="b${open ? '' : ' primary'} wide" data-act="printreport">🖨️ Print or save as PDF</button>
@@ -4269,6 +4607,7 @@ function panelReport(p){
   return {title: 'Service report', sub, info: 'report', body: `
     ${paperBox(reportHtml(reportView(j, p, saved)), 'reportPreview')}
     <p class="hint">${said}. Tap the page to see it full size.</p>
+    ${p.dirty && p.filled && p.filled.length ? `<div class="inline-note"><span>Filled in from the job: ${esc(p.filled.map(k => REPORT_FILL[k]).join(', '))}. Save to keep it.</span></div>` : ''}
     <label>Date <input type="date" data-rf="date" value="${esc(p.r.date || '')}"></label>
     ${f('client', 'Client’s name', 120)}
     <label>Location <textarea data-rf="location" rows="2" maxlength="300">${esc(p.r.location || '')}</textarea></label>
@@ -5602,19 +5941,23 @@ function drawNumbers(){
         <button type="button" class="b" data-act="exportmonth" data-v="-1">⬇ Last month</button></div></div>`;
 }
 
-/* Idea 5: what came in — the jobs marked paid, by the day they were paid. */
+/* Idea 5: what came in, by the day it came in. 59: each payment on its own day; a job marked
+   paid before 59 is one payment of its price on the day it was marked. */
+const moneyIn = jobs => jobs.flatMap(j => paysOf(j).length
+  ? paysOf(j).map(x => ({job: j.id, amount: Number(x.amount), method: x.method, day: manilaDay(x.at)}))
+  : j.paid_method && j.paid_at && j.price != null ? [{job: j.id, amount: Number(j.price), method: j.paid_method, day: manilaDay(j.paid_at)}] : []);
 function takingsHtml(jobs, weekStart, thisWeek){
-  const paid = jobs.filter(j => j.paid_method && j.paid_at && j.price != null);
-  const sum = list => list.reduce((a, j) => a + Number(j.price), 0);
-  const week = paid.filter(j => weekStart(manilaDay(j.paid_at)) === thisWeek);
-  const month = paid.filter(j => manilaDay(j.paid_at).slice(0, 7) === manilaDate(0).slice(0, 7));
+  const ins = moneyIn(jobs), sum = list => cents(list.reduce((a, x) => a + x.amount, 0));
+  const week = ins.filter(x => weekStart(x.day) === thisWeek);
+  const month = ins.filter(x => x.day.slice(0, 7) === manilaDate(0).slice(0, 7));
   const owed = jobs.filter(j => j.status === 'done' && !j.paid_method && j.price != null);
-  const by = m => sum(week.filter(j => j.paid_method === m));
+  const by = m => sum(week.filter(x => x.method === m)), n = new Set(week.map(x => x.job)).size;
+  const left = cents(owed.reduce((a, j) => a + Math.max(jobBalance(j), 0), 0));
   return `<div class="card"><div class="sec" style="margin-top:0">Paid this week</div>
       <div class="num">${esc(peso(sum(week)))}</div>
-      <p class="meta">${week.length} job${week.length === 1 ? '' : 's'} · cash ${esc(peso0(by('cash')))} · GCash ${esc(peso0(by('gcash')))} · other ${esc(peso0(by('other')))}.
+      <p class="meta">${n} job${n === 1 ? '' : 's'} · cash ${esc(peso0(by('cash')))} · GCash ${esc(peso0(by('gcash')))} · other ${esc(peso0(by('other')))}.
         This month ${esc(peso(sum(month)))}.</p>
-      ${owed.length ? `<p class="meta">Done but not marked paid: ${owed.length} job${owed.length === 1 ? '' : 's'}, ${esc(peso(sum(owed)))}.</p>` : ''}</div>`;
+      ${owed.length ? `<p class="meta">Done but not paid in full: ${owed.length} job${owed.length === 1 ? '' : 's'}, ${esc(peso(left))} still owed.</p>` : ''}</div>`;
 }
 /* Idea 10: a month of finished jobs as a spreadsheet — for the owner's books. */
 function exportMonth(delta){
@@ -5623,14 +5966,16 @@ function exportMonth(delta){
   const rows = Object.values(db.jobs).filter(j => j.status === 'done' && j.done_at && manilaDay(j.done_at).slice(0, 7) === month)
     .sort((a, b) => a.done_at < b.done_at ? -1 : 1);
   // what the public page typed must never run as a formula (=, +, -, @ first): a ' before it
-  const cell = (v, i) => { let t = String(v == null ? '' : v); if (i !== 3 && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  // a plain number (an overpaid balance, −500.00) is not a formula: no ' before it
+  const cell = (v, i) => { let t = String(v == null ? '' : v); if (i !== 3 && !/^-?\d+(\.\d+)?$/.test(t) && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
     return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
-  const lines = [['Done', 'Statement no.', 'Customer', 'Number', 'Address', 'Aircons', 'Services', 'Price', 'Paid', 'Paid on', 'Done by']]
+  const lines = [['Done', 'Statement no.', 'Customer', 'Number', 'Address', 'Aircons', 'Services', 'Price', 'Paid', 'Paid on', 'Done by', 'Amount paid', 'Balance']]
     .concat(rows.map(j => { const c = jobCust(j);
       // ="0917…": a number with its leading 0 kept — Excel and Sheets drop it otherwise
       return [manilaDay(j.done_at), receiptOf(j).no, c.full_name, c.contact ? '="' + digits(c.contact) + '"' : '', place(c),
         unitsLine(unitsOf(j)), svcList(j.services), j.price != null ? Number(j.price).toFixed(2) : '',
-        j.paid_method ? PAY[j.paid_method] : 'not yet', j.paid_at ? manilaDay(j.paid_at) : '', j.status_by_name || personName(j.status_by) || '']; }));
+        j.paid_method ? PAY[j.paid_method] : 'not yet', j.paid_at ? manilaDay(j.paid_at) : '', j.status_by_name || personName(j.status_by) || '',
+        paidSum(j).toFixed(2), j.price != null ? jobBalance(j).toFixed(2) : '']; }));   // 59: what came in, what is left
   const csv = '\ufeff' + lines.map(r => r.map(cell).join(',')).join('\r\n');
   const name = 'winter-air-jobs-' + month + '.csv';
   if (window.AndroidBridge && window.AndroidBridge.shareText){ window.AndroidBridge.shareText(name, csv); return; }
@@ -5717,6 +6062,10 @@ function panelSettings(){
     </div>` : ''}
 
     ${role === 'admin' ? smsCardHtml() : ''}
+
+    ${inField(role) ? `<div class="sec">🧾 My payslips</div>
+    ${payslipsOf(session.uid).filter(k => !k.removed_at).length ? `<div class="list">${payslipsOf(session.uid).filter(k => !k.removed_at).map(payRow).join('')}</div>`
+      : '<p class="hint">None yet. The office makes them; each one shows here once it is released.</p>'}` : ''}
 
     <div class="sec">This phone</div>
     <div class="card">
@@ -6219,9 +6568,11 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   variant: panelVariant,   // 54
   jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
   jobreport: panelReport,   // 57
+  payment: panelPayment,   // 59
+  payslip: panelPayslip, loans: panelLoans,   // 60
   askjob: panelAskJob, askanswer: panelAskAnswer,   // 49
   ...(window.FX_PANELS || {})};   // 50: name effects, web/namefx.js
-const SMALL = new Set(['reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
+const SMALL = new Set(['payment', 'reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
 // in the middle of the screen, like a message, at every width (Reschedule, Guile 2026-10-11)
@@ -6488,6 +6839,103 @@ const ACTIONS = {
       db.checkinRules = {...(db.checkinRules || {}), require_location: on};
     });
   },
+  // ---- the payslip (60)
+  ckhours: () => {
+    const a = val('ck_in') || '', b = val('ck_out') || '';
+    if (!isClock(a) || !isClock(b) || a >= b) return toast('The shop opens before it closes, like 8:00 AM and 5:00 PM.', true);
+    write('set_checkin_hours', {p_in: a, p_out: b}, 'The shop’s hours', ['ckhours'], db => { db.settings = {...(db.settings || {}), checkin_hours: {in: a, out: b}}; });
+    toast('Saved. Full attendance puts in ' + clockOf('2026-01-01T' + a + ':00+08:00') + ' and ' + clockOf('2026-01-01T' + b + ':00+08:00') + '.');
+  },
+  ckfull: (id, el) => {
+    const p = topPanel(), t = p && db.team[p.id], day = el.dataset.day; if (!t || !day) return;
+    const h = PAY_HOURS(), alive = ckRows(t.id, day).filter(k => !k.job_id && !k.removed_at);
+    const want = ['in', 'out'].filter(kind => !alive.some(k => k.kind === kind));
+    const at = kind => new Date(day + 'T' + h[kind] + ':00+08:00').toISOString();
+    if (want.some(kind => new Date(at(kind)) > new Date())) return toast('The shop’s closing time has not come yet today. Add the time in by hand, or wait.', true);
+    want.forEach(kind => {
+      const kid = uuid(), iso = at(kind);
+      write('edit_checkin', {p_id: kid, p_uid: t.id, p_kind: kind, p_day: day, p_at: iso, p_remove: false, p_decided_at: null},
+        'Full attendance ' + (kind === 'in' ? 'time in ' : 'time out ') + clockOf(iso) + ' — ' + (t.display_name || 'them'), [kid], (db, op) => {
+          db.checkins[kid] = {id: kid, uid: t.id, day, kind, job_id: null, by_uid: session.uid, at: iso, history: [{at: op.at, by: session.uid, from: null, to: iso}]};
+        });
+    });
+    p.ckEdit = null; render();
+  },
+  setpay: id => {
+    const t = db.team[id], p = topPanel(); if (!t || !p) return;
+    const pick = (k, f) => p[k] != null ? payNum(p[k]) : Number(t[f] || 0);
+    const rate = pick('payRate', 'daily_rate'), sss = pick('paySss', 'sss_amt'), part = pick('payLoan', 'loan_part');
+    if (rate == null || sss == null || part == null) return toast('Type amounts like 500 or 1,250.50. Nothing was saved.', true);
+    write('set_pay_rates', {p_user: id, p_rate: rate, p_sss: sss, p_loan_part: part}, 'Pay — ' + (t.display_name || t.email || ''), [id], () => {
+      t.daily_rate = rate; t.sss_amt = sss; t.loan_part = part; });
+    p.payRate = p.paySss = p.payLoan = null;
+    toast('Saved. New payslips start with ₱' + qtMoney(rate) + ' a day.');
+  },
+  newpayslip: id => { if (db.team[id]) openPanel({kind: 'payslip', id: uuid(), uid: id}); },
+  payrecount: () => {
+    const p = topPanel(); if (!p || !p.b) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(p.from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(p.to || '') || p.from > p.to) return toast('Pick From and To first.', true);
+    // shortcut: the office's phone keeps 100 days of times (pull, 56); fetch older ones if pay ever goes back further
+    if (p.from < manilaDate(-100)) toast('This phone keeps the last 100 days of check-ins: count the older days by hand.', true);
+    p.b = payFill(p.uid, p.from, p.to); p.dirty = true; render();
+  },
+  payjobx: (id, el) => { const p = topPanel(); if (p && p.b){ p.b.jobs.splice(Number(el.dataset.v), 1); p.dirty = true; render(); } },
+  paydmgadd: () => { const p = topPanel(); if (p && p.b){ p.b.damages.push({what: '', amount: ''}); p.dirty = true; render(); } },
+  paydmgx: (id, el) => { const p = topPanel(); if (p && p.b){ p.b.damages.splice(Number(el.dataset.v), 1); p.dirty = true; render(); } },
+  savepayslip: () => savePayslip(),
+  printpayslip: () => payPaper(false),
+  sharepayslip: () => payPaper(true),
+  releasepayslip: (id, el) => {
+    const p = topPanel(); if (!p || p.kind !== 'payslip') return;
+    const who = (db.team[p.uid] || {}).display_name || 'They';
+    if (!confirmTwice(el, 'Tap again — ' + who + ' will see it')) return;
+    if (p.dirty && !savePayslip()) return;
+    const k = db.payslips[p.id]; if (!k) return;
+    const left = loanLeft(k.uid, k.id);
+    if (Number(k.loan) > left) return toast('The loan part is more than what is left of the loans (₱' + qtMoney(Math.max(0, left)) + '). Change it, then release.', true);
+    write('release_payslip', {p_id: k.id}, 'Payslip released — ' + who, [k.id], (db, op) => {
+      db.payslips[k.id] = {...k, status: 'released', released_at: op.at, loan_left: Math.round((left - Number(k.loan)) * 100) / 100,
+        history: [...(k.history || []), {at: op.at, what: 'released', by_name: (db.profile || {}).display_name || ''}]};
+    });
+    toast('Released. ' + who + ' sees it on their phone (Settings → My payslips).');
+  },
+  delpayslip: (id, el) => {
+    const k = db.payslips[id]; if (!k || !confirmTwice(el, 'Tap again to take it off')) return;
+    write('remove_payslip', {p_id: id, p_back: false}, 'Payslip taken off — ' + ((db.team[k.uid] || {}).display_name || ''), [id], (db, op) => {
+      db.payslips[id] = {...k, removed_at: op.at, history: [...(k.history || []), {at: op.at, what: 'off', by_name: (db.profile || {}).display_name || ''}]};
+    });
+  },
+  backpayslip: id => {
+    const k = db.payslips[id]; if (!k) return;
+    write('remove_payslip', {p_id: id, p_back: true}, 'Payslip brought back — ' + ((db.team[k.uid] || {}).display_name || ''), [id], (db, op) => {
+      db.payslips[id] = {...k, removed_at: null, history: [...(k.history || []), {at: op.at, what: 'back', by_name: (db.profile || {}).display_name || ''}]};
+    });
+  },
+  addloan: id => {
+    const t = db.team[id], p = topPanel(); if (!t || !p) return;
+    const amt = parsePrice(p.lendAmt);
+    if (!amt) return toast('Type the amount lent, like 5000 or 5,000.', true);
+    const lid = uuid(), note = String(p.lendNote || '').trim();
+    write('add_pay_loan', {p_id: lid, p_user: id, p_amount: amt, p_note: note || null, p_on: manilaDate(0)}, 'Lent ₱' + qtMoney(amt) + ' — ' + (t.display_name || ''), [lid], (db, op) => {
+      db.loans[lid] = {id: lid, uid: id, amount: amt, lent_on: manilaDate(0), note: note || null, by_name: (db.profile || {}).display_name || '', created_at: op.at};
+    });
+    p.lendAmt = ''; p.lendNote = '';
+    toast('Lent ₱' + qtMoney(amt) + '. Balance ₱' + qtMoney(loanLeft(id)) + '.');
+  },
+  delloan: (id, el) => {
+    const l = db.loans[id]; if (!l) return;
+    if (loanLeft(l.uid) - Number(l.amount) < 0) return toast('Released payslips already took part of this loan off. Take those payslips off first, or keep the loan.', true);
+    if (!confirmTwice(el, 'Tap again to take it off')) return;
+    write('remove_pay_loan', {p_id: id, p_back: false}, 'Loan taken off — ' + ((db.team[l.uid] || {}).display_name || ''), [id], (db, op) => {
+      db.loans[id] = {...l, removed_at: op.at, removed_by: (db.profile || {}).display_name || ''};
+    });
+  },
+  backloan: id => {
+    const l = db.loans[id]; if (!l) return;
+    write('remove_pay_loan', {p_id: id, p_back: true}, 'Loan brought back — ' + ((db.team[l.uid] || {}).display_name || ''), [id], () => {
+      db.loans[id] = {...l, removed_at: null, removed_by: null};
+    });
+  },
   techrule: (id, el) => {   // 49
     const k = el.dataset.f, on = el.dataset.v === 'true', now = jobRules();
     if ({tech_edit_others: now.others, tech_request: now.ask, tech_reward: now.reward}[k] === on) return;
@@ -6627,7 +7075,7 @@ const ACTIONS = {
     // the billing statement goes through the quotation's own cleaner on the server (45)
     write(src.fn, {[src.arg]: row.id, [src.bill ? 'p_bill' : 'p_quote']: q, p_based_on: v}, Word + ' for ' + src.name, [row.id], () => {
       row[src.field] = {...q, v: v + 1, total, saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
-      if (src.job) row.price = total;   // a job's quotation — or billing statement — is its price (26, 45)
+      if (src.job){ row.price = total; payFollow(row); }   // a job's quotation — or billing statement — is its price (26, 45); 59: its paid mark follows
     });
     p.dirty = false;
     toast(src.job ? Word + ' saved — the job’s price is now ' + peso(total) + '.' : 'Quotation saved.');
@@ -7194,6 +7642,32 @@ const ACTIONS = {
     write('set_job_paid', {p_job: id, p_method: m}, m ? 'Paid by ' + PAY[m] + ' — ' + (jobCust(j).full_name || '') : 'Not paid — ' + (jobCust(j).full_name || ''),
       [id], () => { j.paid_method = m; j.paid_at = m ? new Date().toISOString() : null; });
   },
+  // 59: payments, the office only
+  paymethod: (id, el) => { const p = topPanel(); if (p && p.kind === 'payment'){ p.method = el.dataset.v; render(); } },
+  addpay: id => {
+    const j = db.jobs[id], p = topPanel(); if (!j || !p || p.kind !== 'payment') return;
+    const v = parsePrice(p.amount);
+    if (!v){ notice('Type the amount in numbers, like 1500 or 1,500.50. Nothing was saved.', true); return; }
+    const m = p.method || 'cash', note = (p.note || '').trim().slice(0, 200), pid = uuid();
+    // p_decided_at: write() stamps the tap's time, so a payment sent later keeps its day
+    write('add_job_payment', {p_job: id, p_id: pid, p_amount: v, p_method: m, p_note: note || null, p_decided_at: null},
+      peso(v) + ' ' + PAY[m] + ' — ' + (jobCust(j).full_name || 'job'), [id], (db, op) => {
+        j.payments = paysOf(j).concat([{id: pid, amount: v, method: m, at: op.at, by: session.uid,
+          by_name: (db.profile || {}).display_name || '', note: note || null}]);
+        payFollow(j, true);
+      });
+    closePanel();
+  },
+  payoff: (id, el) => { const p = topPanel(); if (p){ p.payAsk = el.dataset.v; render(); } },   // asks first
+  payoffno: () => { const p = topPanel(); if (p){ p.payAsk = null; render(); } },
+  payoffyes: (id, el) => {
+    const j = db.jobs[id], pid = el.dataset.v, x = paysOf(j).find(y => y.id === pid), p = topPanel();
+    if (p) p.payAsk = null;
+    if (!j || !x){ render(); return; }
+    write('remove_job_payment', {p_job: id, p_id: pid}, peso(x.amount) + ' taken off — ' + (jobCust(j).full_name || 'job'), [id], () => {
+      j.payments = paysOf(j).filter(y => y.id !== pid); payFollow(j, true);
+    });
+  },
   followup: (id, el) => {   // idea 11
     const j = db.jobs[id]; if (!j) return;
     const note = el.dataset.v || null;
@@ -7226,7 +7700,7 @@ const ACTIONS = {
     const j = db.jobs[id], p = topPanel(); if (!j || !p) return;
     const v = parsePrice(p.price != null ? p.price : j.price);
     if (v == null){ notice('Type the price in numbers, like 1500 or 1,500.50. Nothing was changed.', true); return; }
-    write('set_job_price', {p_job: id, p_price: v, p_decided_at: null}, 'Price ' + peso(v), [id], () => { j.price = v; });
+    write('set_job_price', {p_job: id, p_price: v, p_decided_at: null}, 'Price ' + peso(v), [id], () => { j.price = v; payFollow(j); });
     closePanel();
   },
   status: (id, el) => {
@@ -7465,6 +7939,16 @@ document.addEventListener('input', e => {
     else { const [i, k] = t.dataset.ql.split(':'); if (p.q.lines[i]) p.q.lines[i][k] = t.value; }
     p.dirty = true;
     drawQuotePreview(p);
+    return;
+  }
+  // the payslip (60): the same, for its boxes, its share lines and its damages
+  if (t.dataset && (t.dataset.yf || t.dataset.yj || t.dataset.yd || t.dataset.yp)){
+    const p = topPanel(); if (!p || !p.b) return;
+    if (t.dataset.yf) p.b[t.dataset.yf] = t.value;
+    else if (t.dataset.yp) p[t.dataset.yp] = t.value;
+    else { const [i, k] = (t.dataset.yj || t.dataset.yd).split(':'), list = t.dataset.yj ? p.b.jobs : p.b.damages; if (list[i]) list[i][k] = t.value; }
+    p.dirty = true;
+    drawPayPreview(p);
     return;
   }
   // the service report (57): the same, for its boxes and its ticks

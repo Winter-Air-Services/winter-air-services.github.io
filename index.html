@@ -608,6 +608,22 @@
   .rp-cert{font-style:italic;margin:0 0 4px;font-size:13.5px}
   .rp-checks .tick{align-items:flex-start;margin:6px 0}
   .rp-seg{margin:10px 0}
+  /* the payslip (60): the paper, then its boxes */
+  .quote.payslip{min-height:0;font-size:15px}
+  .ps-t{width:100%;border-collapse:collapse;margin-top:18px}
+  .ps-t td{padding:5px 6px;border-bottom:1px solid #ccc;vertical-align:top}
+  .ps-t td:last-child{text-align:right;white-space:nowrap;width:150px}
+  .ps-h td{font-weight:700;background:#eef3f8;border-bottom:1px solid #000}
+  .ps-sum td{border-top:1px solid #000}
+  .ps-net td{font-size:18px;border-top:2px solid #000;border-bottom:2px solid #000}
+  .ps-s{font-size:12.5px;color:#444}
+  .ps-days{font-size:12.5px;margin-top:10px}
+  .ps-line{display:flex;gap:6px;align-items:center;margin:6px 0}
+  .ps-line input:first-child{flex:1;min-width:0}
+  .ps-line input:nth-child(2){width:110px;flex:none;text-align:right}
+  .row-gap.ps-two,.row-gap.ps-three,.row-gap.ps-dates{display:grid;grid-template-columns:1fr 1fr;gap:0 10px;align-items:end}
+  .row-gap.ps-three{grid-template-columns:1fr 1fr 1fr}
+  @media (max-width:420px){.row-gap.ps-three{grid-template-columns:1fr 1fr}}
   .qt-line{border:1px solid var(--border);border-radius:var(--radius-md);padding:10px;margin-bottom:10px}
   .qt-line textarea{min-height:0}
   .qt-nums{display:flex;gap:8px;align-items:flex-end;margin-top:6px}
@@ -764,6 +780,17 @@
   .paid-row .b{min-height:40px;min-width:0;padding:6px 4px;justify-content:center}
   .paid-row > .muted{grid-column:1/-1}
   .paid-row > .pill{grid-column:span 2;justify-self:start}
+  /* 59: payments — what was paid, what is left, each payment */
+  .pays{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+  .pays-sum{font-weight:700;color:var(--bad)}
+  .pays-sum.is-paid{color:var(--good)}
+  .pay-row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14px;
+    padding:8px 0;border-top:1px solid var(--border)}
+  .pay-row{flex-wrap:wrap}
+  /* the question takes its own line under the payment — beside it, 375 px cut "Keep it" off */
+  .pay-ask{display:flex;gap:6px;flex-basis:100%;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .pay-ask .b{min-height:36px;padding:4px 10px}
+  .owes{color:var(--bad);font-weight:700}
   .rc-gcash{display:flex;gap:12px;align-items:center;margin-top:10px;font-size:12px}
   .rc-gcash img{width:90px;height:90px;object-fit:contain}
   .route-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;font-size:13px;color:var(--ink-soft)}
