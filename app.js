@@ -316,7 +316,8 @@ async function pull(){
     return pull();
   }
   // 49: the reward switch and this technician's share change every job's reward the same way
-  const priceKey = s => [!!s.show_prices_tech, s.tech_reward, s.my_pct].join('|');
+  // 61: and being ticked or unticked for a service report's prices brings them or takes them away
+  const priceKey = s => [!!s.show_prices_tech, s.tech_reward, s.my_pct, !!s.report_pricer].join('|');
   if (inField(db.role) && res.settings && 'show_prices_tech' in res.settings && db.cursor !== null
       && priceKey(db.settings || {}) !== priceKey(res.settings)){
     // L5: the office switched prices on or off — the jobs themselves did not change, so an
@@ -1011,8 +1012,8 @@ const INFO = {
   gap: ['Check-up gap', 'Counted from a customer’s last finished job. Every admin phone uses the same number.'],
   checkin: ['Check-ins', 'Their Time in and Time out for the day, and each job’s arrived and left — Start the job and Mark done count for the whole crew, at the time they were tapped (even with no signal).\n\nOnly the office changes a time: Edit, Remove, or add a forgotten time out. Each change shows under the time, with who changed it. The last 100 days are on this phone.'],
   ckloc: ['Require location', 'Off: Time in and Time out are one tap.\n\nOn: the phone sends where it is with each time; with location off, the time is not kept and the phone says why. You see it on the person’s times.'],
-  report: ['Service report', 'One for each appliance on the job, like the paper one: tick the work done, write the findings, Save. The number is given by the office’s server when it is first saved, counting up from the number set in Admin → Service report.\n\nThe office and technicians fill it in and change it; the customer signs it on the phone. Print it, or send it as a PDF.'],
-  reportadmin: ['Service report', 'The ticks, the line over the client’s signature, and the number the next report takes. Each job’s reports are on the job: one for each appliance.\n\nThe letterhead and the QR are the quotation’s (Admin → Quotation).'],
+  report: ['Service report', 'One for each appliance on the job, like the paper one: tick the work done, write the findings, Save. The number is given by the office’s server when it is first saved, counting up from the number set in Admin → Service report.\n\nThe office and technicians fill it in and change it; the customer signs it on the phone. Print it, or send it as a PDF.\n\nThe specs typed on the job’s aircon show on the report. Its prices are typed by the office, or by a technician the office allows, and they go on the billing statement.'],
+  reportadmin: ['Service report', 'The ticks, the line over the client’s signature, the number the next report takes, and who can edit the prices. Each job’s reports are on the job: one for each appliance.\n\nThe letterhead and the QR are the quotation’s (Admin → Quotation).'],
   pay: ['Pay', 'What each new payslip starts with: the daily rate (× the days with a time on them), SSS, and how much of the loan to take off each payslip.\n\nEvery box can still be changed on the payslip itself.'],
   payslip: ['Payslip', 'Made by the office: pick From and To, and it fills itself — the days with any time on them (their own Time in, or a job’s Start / Mark done), the jobs done with them on the crew (technicians: price × their share), SSS and the loan part. Change any box; add a damage.\n\nOnly the office sees a draft. Release it, and the person sees their own payslip on their phone (Settings → My payslips). A change after that shows under it, with who changed it. Print it, or send it as a PDF.'],
   loans: ['Loans / utang', 'Lend records money given to this person. Each released payslip takes its loan part off, and the balance carries over to the next payslip.\n\nA loan typed by mistake can be taken off, unless released payslips already took part of it.'],
@@ -2587,6 +2588,7 @@ function panelJob(p){
   const techPrice = tech && j.price != null && seesPrice();
   const billRow = menuRow('jobbill', j.id, '🧾', 'Billing statement', j.billing
     ? 'Saved ' + niceDate(manilaDay(j.billing.saved_at)) + ' · ' + peso(j.billing.total)
+    : reportLines(j).length ? 'From the service reports · ' + peso(qtTotal(reportLines(j)))
     : tech ? 'Print or send it to the customer' : j.status === 'cancelled' ? 'Nothing to bill' : 'From the quotation — add extra work, print or send');
   // the quotation and the billing statement side by side, the customer's signature under them
   // (Guile, 2026-10-11); a technician reads both while prices are shown and takes the signature
@@ -4518,7 +4520,45 @@ function reportFromJob(j, unit){
     model: u.model || '', serial: u.serial || '', ticks: [], call: '',
     others: specLines(u, /work done/i).join('; ').slice(0, 200),
     findings: specLines(u, /finding|damage/i, true).concat(specLines(u, /recommend/i, true)).join('\n').slice(0, 2000),
-    served_by: crew.join(', '), served_on: j.done_at ? manilaDay(j.done_at) : day};
+    served_by: crew.join(', '), served_on: j.done_at ? manilaDay(j.done_at) : day, specs: reportSpecs(u), charges: []};
+}
+/* Guile, 2026-11-05 (61): the boxes typed on the job's aircon show on its report, each by its name;
+   an empty box does not. Work Done, Findings and Recommendation already fill Others and Findings. */
+const reportSpecs = u => allFields().map(f => ({key: f.key, label: f.label, value: String((u.specs || {})[f.key] || '').trim()}))   // Admin's order
+  .filter(s => s.value && !/work done|finding|damage|recommend/i.test(s.label));
+/* A report's prices (61), typed by hand: the office, and the technicians it ticks. Only those
+   phones hold them unless prices are shown (the server's pull). */
+const canPriceReport = () => !!db && (db.role === 'admin' || (db.role === 'technician' && (db.settings || {}).report_pricer === true));
+const chargeTyped = c => (c.price == null ? '' : String(c.price));
+function reportChargesCheck(list){
+  const out = [];
+  for (let i = 0; i < list.length; i++){
+    const t = String(list[i].text || '').trim(), raw = chargeTyped(list[i]).trim(), n = 'Price ' + (i + 1);
+    if (!t && !raw) continue;
+    if (!t) return {bad: n + ' needs its words, like Cleaning.'};
+    const price = parsePrice(raw);
+    if (price == null) return {bad: n + ': type the price in numbers, like 1500 or 1,500.50.'};
+    out.push({text: t, price});
+  }
+  return out.reduce((s, c) => s + c.price, 0) > 99999999 ? {bad: 'The total is too big.'} : {list: out};
+}
+/* The statement's lines from the job's reports. Reports replace the quotation (Guile, 2026-11-05):
+   once a report has a price, these and what the office typed on the statement are the bill. */
+const reportLines = j => reportsOf(j).flatMap(r => (r.charges || []).map(c => ({
+  text: c.text + ' (Service report' + (r.no ? ' № ' + r.no : '') + ')', qty: 1, price: Number(c.price), r: r.id})));
+// the server's report_price_follow, here, so the phone is right before the next pull
+function billFollow(j, was){
+  const now = reportLines(j);
+  if (JSON.stringify(now) === JSON.stringify(was)) return;
+  const q = j.quote || (bookingOfJob(j) || {}).quote;
+  if (j.billing){
+    const fromQuote = l => !was.length && now.length && ((q && q.lines) || []).some(k => k.text === l.text && Number(k.qty) === Number(l.qty) && Number(k.price) === Number(l.price));
+    const lines = now.concat(j.billing.lines.filter(l => !l.r && !fromQuote(l)));
+    j.billing = lines.length ? {...j.billing, lines, total: qtTotal(lines)} : null;
+  }
+  if (db.role !== 'admin' && !seesPrice()) return;   // this phone holds no job price: it stays that way
+  j.price = j.billing ? j.billing.total : now.length ? qtTotal(now) : q ? q.total : null;
+  payFollow(j);
 }
 /* Guile's client, 2026-11-04: the model, serial and Work Done typed on the job's aircon after its
    report was made never reached the report. So a saved report's EMPTY boxes take the job's values
@@ -4528,10 +4568,19 @@ const REPORT_FILL = {client: 'Client’s name', location: 'Location', brand: 'Br
   serial: 'Serial number', others: 'Others', findings: 'Findings', served_by: 'Serviced by', served_on: 'Serviced on'};
 const REPORT_UNIT = ['brand', 'capacity', 'model', 'serial', 'others', 'findings'];
 function reportFill(saved, now){
-  const r = {...saved, kind: saved.kind || '', call: saved.call || '', served_on: saved.served_on || '', ticks: [...(saved.ticks || [])]};
+  const r = {...saved, kind: saved.kind || '', call: saved.call || '', served_on: saved.served_on || '', ticks: [...(saved.ticks || [])],
+    specs: (saved.specs || []).map(s => ({...s})), charges: (saved.charges || []).map(c => ({...c}))};
   const low = s => String(s || '').trim().toLowerCase(), same = !low(r.brand) || !low(now.brand) || low(r.brand) === low(now.brand);
   const filled = Object.keys(REPORT_FILL).filter(k => !String(r[k] || '').trim() && now[k] && (same || !REPORT_UNIT.includes(k)));
   filled.forEach(k => { r[k] = now[k]; });
+  // 61: a spec the job has and the report lacks, or left empty, joins it, the job's order first
+  const full = s => String(s.value || '').trim();
+  const add = same ? (now.specs || []).filter(s => !r.specs.some(x => x.key === s.key && full(x))) : [];
+  if (add.length){
+    r.specs = (now.specs || []).map(s => r.specs.find(x => x.key === s.key && full(x)) || s)
+      .concat(r.specs.filter(x => full(x) && !(now.specs || []).some(s => s.key === x.key)));
+    filled.push('specs');
+  }
   return {r, filled};
 }
 function reportStart(j, unit, saved){
@@ -4543,6 +4592,10 @@ function reportHtml(r){
   const s = quoteShop(), box = on => on ? '☑' : '☐', items = reportTicks(r), half = Math.ceil((items.length + 1) / 2);
   const tick = t => `<div class="rp-tick"><span>${box((r.ticks || []).includes(t))}</span><span>${esc(t)}</span></div>`;
   const ln = (label, v) => `<div class="rp-f"><span>${label}:</span><b>${esc(v || '')}</b></div>`;
+  const specs = (r.specs || []).filter(s => String(s.value || '').trim());   // 61: only what was typed
+  const prices = (r.charges || []).filter(c => String(c.text || '').trim() || chargeTyped(c).trim())
+    .map(c => ({text: c.text, price: parsePrice(chargeTyped(c))}));
+  const sum = prices.every(c => c.price != null) ? prices.reduce((s, c) => s + c.price, 0) : null;
   return `<div class="quote report">
     ${r.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
     ${qtHeadHtml(s)}
@@ -4552,12 +4605,15 @@ function reportHtml(r){
         <div class="rp-kind">${box(r.kind === 'res')} Residential <span class="rp-gap"></span>${box(r.kind === 'com')} Commercial</div></div>
       <div>${ln('Brand', r.brand)}${ln('Capacity and Type', r.capacity)}${ln('Model', r.model)}${ln('Serial Number', r.serial)}</div>
     </div>
+    ${specs.length ? `<div class="rp-specs">${specs.map(s => ln(esc(s.label), s.value)).join('')}</div>` : ''}
     <div class="rp-h">Detailed Scope of Service. <span>Tick all that apply:</span></div>
     <div class="rp-ticks"><div>${items.slice(0, half).map(tick).join('')}</div>
       <div>${items.slice(half).map(tick).join('')}<div class="rp-tick"><span>${box(!!r.others)}</span><span class="rp-other">Others, Specify: <u>${esc(r.others || '')}</u></span></div></div></div>
     <div class="rp-h">Technical Findings or General Remarks &amp; Recommendation:</div>
     <div class="rp-kind">${box(r.call === 'service')} Service Call <span class="rp-gap"></span>${box(r.call === 'maintenance')} Maintenance Call</div>
     <div class="rp-find">${esc(r.findings || '')}</div>
+    ${prices.length ? `<table class="qt-table rp-prices"><tbody>${prices.map(c => `<tr><td>${esc(c.text || '')}</td><td class="qt-r">${c.price != null ? esc(qtMoney(c.price)) : '—'}</td></tr>`).join('')}</tbody>
+      <tfoot><tr class="qt-tot"><td class="qt-r">TOTAL</td><td class="qt-r">${sum != null ? 'PHP ' + esc(qtMoney(sum)) : '—'}</td></tr></tfoot></table>` : ''}
     <div class="rp-sign">
       <div><div class="rp-f"><span>Serviced by:</span><b>${esc(r.served_by || '')}</b></div>
         <div class="rp-f"><span>Date:</span><b>${esc(r.served_on ? qtLongDate(r.served_on) : '')}</b></div></div>
@@ -4572,7 +4628,8 @@ function reportSample(){
   return {sample: true, no: Number((db.settings || {}).report_next) || 1, date: manilaDate(0), client: 'ZZ Sample Customer',
     location: 'ZZ Street 1, ZZ Barangay, Bacolod City', kind: 'res', brand: 'ZZ Brand', capacity: '1 hp Split', model: 'ZZ-25',
     serial: 'ZZ0000001', ticks: l.slice(0, 3), others: '', call: 'maintenance', findings: 'ZZ Cleaned and tested. Running well.',
-    served_by: 'ZZ Technician', served_on: manilaDate(0)};
+    served_by: 'ZZ Technician', served_on: manilaDate(0), specs: [{key: 'f_zzzz', label: 'ZZ Outdoor unit', value: 'ZZ-OUT-01'}],
+    charges: [{text: 'ZZ Cleaning', price: 1500}, {text: 'ZZ Transportation', price: 300}]};
 }
 function panelReport(p){
   const {j, saved} = reportFind(p);
@@ -4604,15 +4661,25 @@ function panelReport(p){
         <button type="button" class="b danger" data-act="sigoffyes" data-id="${sid}">Take it off</button>
         <button type="button" class="b" data-act="sigoffno">Keep it</button></div>` : ''}</div>`
     : '<p class="hint">Save it first; then the customer can sign it.</p>';
+  // 61: the specs typed on the job's aircon; the prices for those allowed
+  const specBox = (p.r.specs || []).map((s, i) => `<label>${esc(s.label)} <input data-rs="${i}" maxlength="1000" value="${esc(s.value || '')}" autocomplete="off"></label>`).join('');
+  const priceBox = !canPriceReport() ? '' : `<div class="fieldlabel">Prices — they go on the billing statement</div>
+    ${p.r.charges.map((c, i) => `<div class="qt-line">
+      <input data-rc="${i}:text" maxlength="150" value="${esc(c.text || '')}" placeholder="e.g. Cleaning" aria-label="Price ${i + 1}: what for" autocomplete="off">
+      <div class="qt-nums"><label>Price <span class="peso-in"><i>₱</i><input data-rc="${i}:price" inputmode="decimal" maxlength="14" value="${esc(chargeTyped(c))}" placeholder="—"></span></label>
+        <button type="button" class="b danger" data-act="rpcharge" data-v="del" data-i="${i}" aria-label="Remove price ${i + 1}">✕</button></div></div>`).join('')}
+    <div id="rpTotal" class="qt-total">${esc(reportTotalWord(p.r))}</div>
+    <div class="actions"><button type="button" class="b" data-act="rpcharge" data-v="add">+ Add a price</button></div>`;
   return {title: 'Service report', sub, info: 'report', body: `
     ${paperBox(reportHtml(reportView(j, p, saved)), 'reportPreview')}
     <p class="hint">${said}. Tap the page to see it full size.</p>
-    ${p.dirty && p.filled && p.filled.length ? `<div class="inline-note"><span>Filled in from the job: ${esc(p.filled.map(k => REPORT_FILL[k]).join(', '))}. Save to keep it.</span></div>` : ''}
+    ${p.dirty && p.filled && p.filled.length ? `<div class="inline-note"><span>Filled in from the job: ${esc(p.filled.map(k => REPORT_FILL[k] || 'Specs').join(', '))}. Save to keep it.</span></div>` : ''}
     <label>Date <input type="date" data-rf="date" value="${esc(p.r.date || '')}"></label>
     ${f('client', 'Client’s name', 120)}
     <label>Location <textarea data-rf="location" rows="2" maxlength="300">${esc(p.r.location || '')}</textarea></label>
     <div class="row-between rp-seg"><span class="fieldlabel">The place</span>${seg('kind', [['res', 'Residential'], ['com', 'Commercial']])}</div>
     ${f('brand', 'Brand', 80)}${f('capacity', 'Capacity and type', 80, 'e.g. 2 hp Split')}${f('model', 'Model', 80)}${f('serial', 'Serial number', 80)}
+    ${specBox}
     <div class="fieldlabel">Detailed scope of service — tick all that apply</div>
     <div class="rp-checks">${reportTicks(p.r).map(t => `<label class="tick"><input type="checkbox" data-rtick="${esc(t)}" ${p.r.ticks.includes(t) ? 'checked' : ''}> ${esc(t)}</label>`).join('')}</div>
     ${f('others', 'Others, specify', 200)}
@@ -4620,15 +4687,21 @@ function panelReport(p){
     <label>Findings, remarks and recommendation <textarea data-rf="findings" rows="4" maxlength="2000">${esc(p.r.findings || '')}</textarea></label>
     ${f('served_by', 'Serviced by', 160)}
     <label>Serviced on <input type="date" data-rf="served_on" value="${esc(p.r.served_on || '')}"></label>
+    ${priceBox}
     <div class="stack"><button type="button" class="b primary wide" data-act="savereport">Save the service report</button>
       ${btns}</div>
     ${sign}
     ${saved && db.role === 'admin' ? '<div class="stack"><button type="button" class="b danger wide" data-act="delreport">Take this service report off</button></div>' : ''}`};
 }
+function reportTotalWord(r){
+  const a = (r.charges || []).filter(c => chargeTyped(c).trim()).map(c => parsePrice(chargeTyped(c)));
+  return a.includes(null) ? 'TOTAL — a price cannot be read' : 'TOTAL ' + peso(a.reduce((s, x) => s + x, 0));
+}
 /* Typing redraws the page beside the boxes, never the box being typed in (ui.md). */
 function drawReportPreview(p){
-  const w = $('#reportPreview'), {j, saved} = reportFind(p);
+  const w = $('#reportPreview'), {j, saved} = reportFind(p), t = $('#rpTotal');
   if (w && j) w.firstElementChild.innerHTML = reportHtml(reportView(j, p, saved));
+  if (t) t.textContent = reportTotalWord(p.r);
   fitQuotes();
 }
 function saveReport(){
@@ -4636,15 +4709,22 @@ function saveReport(){
   const {j, saved} = reportFind(p);
   if (!canReport(j)){ toast('Only the office or a technician changes a service report.', true); return false; }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(p.r.date || '')){ toast('Choose the date. Nothing was saved.', true); return false; }
+  // 61: a phone not allowed sends no prices: the server keeps them as they are
+  const pricing = canPriceReport(), chk = pricing ? reportChargesCheck(p.r.charges || []) : {};
+  if (chk.bad){ toast(chk.bad + ' Nothing was saved.', true); return false; }
   const x = p.r, r = {id: p.rid, unit: p.unit, date: x.date, client: x.client || '', location: x.location || '', kind: x.kind || '',
     brand: x.brand || '', capacity: x.capacity || '', model: x.model || '', serial: x.serial || '', ticks: x.ticks.slice(),
-    others: x.others || '', call: x.call || '', findings: x.findings || '', served_by: x.served_by || '', served_on: x.served_on || ''};
+    others: x.others || '', call: x.call || '', findings: x.findings || '', served_by: x.served_by || '', served_on: x.served_on || '',
+    specs: (x.specs || []).filter(s => String(s.value || '').trim()).map(s => ({key: s.key, label: s.label, value: String(s.value).trim()})),
+    ...(pricing ? {charges: chk.list} : {})};
   const v = (saved && saved.v) || 0, jid = j.id;
   write('save_service_report', {p_job: jid, p_report: r, p_based_on: v}, 'Service report — ' + (jobCust(j).full_name || 'job'), [jid], db => {
     const jj = db.jobs[jid]; if (!jj) return;
-    const row = {...r, kind: r.kind || null, call: r.call || null, served_on: r.served_on || null, no: saved ? saved.no : null, v: v + 1,
+    const was = reportLines(jj);
+    const row = {...r, charges: pricing ? r.charges : (saved && saved.charges) || [], kind: r.kind || null, call: r.call || null, served_on: r.served_on || null, no: saved ? saved.no : null, v: v + 1,
       saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
     jj.reports = reportsOf(jj).some(y => y.id === r.id) ? reportsOf(jj).map(y => y.id === r.id ? row : y) : reportsOf(jj).concat([row]);
+    billFollow(jj, was);
   });
   p.dirty = false;
   toast(saved ? 'Service report saved.' : 'Service report saved. Its number comes from the office’s server when it is sent.');
@@ -4662,8 +4742,9 @@ function reportPaper(share){
 }
 /* Admin → Service report: the ticks, the certify line, where the numbers start, the sample. */
 function drawReportAdmin(){
-  const set = db.settings || {};
+  const set = db.settings || {}, n = pricerIds().length;
   return `<p class="hint">The letterhead and the QR are the quotation’s — change them in Admin → Quotation. ${infoBtn('reportadmin')}</p>
+    <div class="menu">${menuRow('reportpricers', '', '₱', 'Who can edit the price', n ? 'The office and ' + n + ' technician' + (n > 1 ? 's' : '') : 'Only the office')}</div>
     <div class="card"><div class="menu-title">The next number</div>
       <div class="share-row"><input data-k="rp_next" inputmode="numeric" maxlength="7" value="${esc(set.report_next != null ? String(set.report_next) : '')}" placeholder="e.g. 2013" aria-label="The next number">
         <button type="button" class="b primary" data-act="savereportset" data-id="report_next">Save</button></div>
@@ -4676,6 +4757,23 @@ function drawReportAdmin(){
       <div class="actions"><button type="button" class="b primary" data-act="savereportset" data-id="report_note">Save</button></div></div>
     ${paperBox(reportHtml(reportSample()))}
     <div class="stack"><button type="button" class="b primary wide" data-act="printreport">🖨️ Print the sample (A4)</button></div>`;
+}
+/* Admin → Service report → Who can edit the price (61): the crew picker's look, technicians only:
+   the office always can, and a helper fills in no report. The server checks it on every save. */
+const pricerIds = () => { const l = (db.settings || {}).report_pricers; return Array.isArray(l) ? l : []; };
+function panelReportPricers(p){
+  const people = (db.staff || []).filter(s => s.role === 'technician').sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  if (!p.sel) p.sel = pricerIds().filter(id => people.some(s => s.id === id));
+  const row = s => { const on = p.sel.includes(s.id);
+    return `<div class="crew-row${on ? ' on' : ''}"><button type="button" class="menu-row pick" data-act="rppick" data-v="${esc(s.id)}" aria-pressed="${on}">
+      <span class="crew-box">${on ? '✓' : ''}</span><span class="menu-main"><span class="menu-title">${nameFx(s.name || ROLE_NAME[s.role], s.id, 'jobs')}</span>
+      <span class="menu-sub">${esc(ROLE_NAME[s.role])}</span></span></button></div>`; };
+  const was = pricerIds().filter(id => people.some(s => s.id === id)).sort(), changed = JSON.stringify(p.sel.slice().sort()) !== JSON.stringify(was);
+  return {title: 'Who can edit the price', sub: 'Service reports', body: `
+    <p class="hint">The office always can. Tick a technician to let them type and change the prices on a service report, just like the office.</p>
+    <div class="menu crew">${people.map(row).join('') || '<p class="hint">There are no technicians on this phone yet.</p>'}</div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="rppricersave"${changed ? '' : ' disabled'}>Save${p.sel.length ? ' (' + p.sel.length + ')' : ' — only the office'}</button></div>
+    <p class="hint">Those prices change the job’s price, and so what each technician receives from it.</p>`};
 }
 
 /* The pen, as on Guile's Mi Canvas (measured on his Pad 6: the fountain pen at Stroke width 15,
@@ -4886,14 +4984,17 @@ function quoteSrc(p){
 }
 /* What the screen edits: strings, as typed. */
 function quoteStart(src){
-  const q = src.start;
+  const q = src.start, typed = l => ({text: l.text, qty: String(l.qty), price: String(l.price), ...(l.r ? {r: l.r} : {})});
   // a billing statement taken from the quotation is dated the day it is made (45)
   const date = q && !(src.bill && !src.saved) ? q.date : manilaDate(0);
+  // 61: reports replace the quotation: their lines, then what the office typed on the statement
+  const rl = src.bill ? reportLines(src.row) : [];
+  const own = rl.length ? rl.concat(((src.saved || {}).lines || []).filter(l => !l.r)) : null;
   if (q) return {date, to_address: q.to_address || '', salutation: q.salutation || '', subject: q.subject || '',
-    note: q.note || '', lines: (q.lines || []).map(l => ({text: l.text, qty: String(l.qty), price: String(l.price)}))};
-  const set = db.settings || {}, lines = quoteLinesFrom(src.units);
+    note: q.note || '', lines: (own || q.lines || []).map(typed)};
+  const set = db.settings || {}, lines = own ? own.map(typed) : quoteLinesFrom(src.units);
   // no quotation to start from: the price list's lines, and the job's own price where it differs
-  if (src.bill && src.row.price != null){
+  if (src.bill && !own && src.row.price != null){
     const sum = qtTotal(quoteView({lines}).lines), diff = sum != null ? Math.round((Number(src.row.price) - sum) * 100) / 100 : null;
     // (a price under the list's shows in the hint under the page: a line cannot be below zero)
     if (diff > 0) lines.push({text: 'Other charges', qty: '1', price: String(diff)});
@@ -4907,7 +5008,7 @@ const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMet
   csig: src && src.job ? custSig(src.row, src.bill ? 'bill' : 'quote') : null});   // the customer's signature (47)
 /* Typed → drawn: a price that cannot be read shows as — (and Save refuses it). */
 const quoteView = pq => ({...pq, lines: pq.lines.map(l => ({text: l.text,
-  qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price)}))});
+  qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price), ...(l.r ? {r: l.r} : {})}))});
 function quoteCheck(pq){
   const v = quoteView(pq);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(pq.date || '')) return {bad: 'Choose the date.'};
@@ -4921,7 +5022,7 @@ function quoteCheck(pq){
   }
   if (qtTotal(v.lines) > 99999999) return {bad: 'The total is too big.'};
   return {q: {date: pq.date, to_address: pq.to_address.trim(), salutation: pq.salutation.trim(), subject: pq.subject.trim(),
-    note: pq.note, lines: v.lines.map(l => ({text: l.text.trim(), qty: l.qty, price: l.price}))}};
+    note: pq.note, lines: v.lines.map(l => ({text: l.text.trim(), qty: l.qty, price: l.price, ...(l.r ? {r: l.r} : {})}))}};
 }
 function panelQuote(p){
   const src = quoteSrc(p), bill = p.kind === 'jobbill';
@@ -4942,7 +5043,9 @@ function panelQuote(p){
       : db.role !== 'admin' ? 'Only the office changes it.' : `The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.`}</p>
     <div class="stack">${printBtn}</div>`};
   const tot = qtTotal(quoteView(p.q).lines);
-  const priceHint = src.job ? `<p class="hint">Saving it makes the job’s price its TOTAL${src.row.price != null ? ' (now ' + esc(peso(src.row.price)) + ')' : ''}.</p>` : '';
+  const priceHint = !src.job ? '' : !bill && reportLines(src.row).length
+    ? '<p class="hint">The job’s price comes from its service reports now, so this quotation does not change it.</p>'
+    : `<p class="hint">Saving it makes the job’s price its TOTAL${src.row.price != null ? ' (now ' + esc(peso(src.row.price)) + ')' : ''}.</p>`;
   return {title: src.title, sub, info: bill ? 'bill' : 'quote', body: `
     ${quoteBox(docView(p, src), 'quotePreview')}
     <p class="hint">${said}. Tap the page to see it full size.</p>
@@ -4951,7 +5054,8 @@ function panelQuote(p){
     <label>Greeting <input data-qf="salutation" maxlength="160" value="${esc(p.q.salutation)}" autocomplete="off"></label>
     <label>Subject <input data-qf="subject" maxlength="150" value="${esc(p.q.subject)}" autocomplete="off"></label>
     <div class="fieldlabel">${bill ? 'Labor, materials and services — add the extra work: piping, wires, parts' : 'Supply of Labor, Materials and Services'}</div>
-    ${p.q.lines.map((l, i) => `<div class="qt-line">
+    ${p.q.lines.map((l, i) => l.r ? `<div class="qt-line rp-line"><span>${esc(l.text)}</span><b>${esc(peso(l.price))}</b>
+      <small>Change it on the service report.</small></div>` : `<div class="qt-line">
       <textarea data-ql="${i}:text" rows="2" maxlength="200" aria-label="Line ${i + 1}">${esc(l.text)}</textarea>
       <div class="qt-nums"><label class="qty">Qty <input data-ql="${i}:qty" inputmode="numeric" maxlength="3" value="${esc(l.qty)}"></label>
         <label>Unit price <span class="peso-in"><i>₱</i><input data-ql="${i}:price" inputmode="decimal" maxlength="14" value="${esc(l.price)}" placeholder="—"></span></label>
@@ -6567,12 +6671,12 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   assign: panelAssign, donephoto: panelDonePhoto, custunit: panelCustUnit, unitfield: panelUnitField,   // 39, 43, 44
   variant: panelVariant,   // 54
   jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
-  jobreport: panelReport,   // 57
+  jobreport: panelReport, reportpricers: panelReportPricers,   // 57, 61
   payment: panelPayment,   // 59
   payslip: panelPayslip, loans: panelLoans,   // 60
   askjob: panelAskJob, askanswer: panelAskAnswer,   // 49
   ...(window.FX_PANELS || {})};   // 50: name effects, web/namefx.js
-const SMALL = new Set(['payment', 'reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto']);
+const SMALL = new Set(['payment', 'reject', 'schedule', 'price', 'cancel', 'forget', 'tidy', 'deljob', 'delbooking', 'assign', 'donephoto', 'reportpricers']);
 // the customer's page's width, for the screens that ARE the customer's page (ui.md, Reuse)
 const WIDE = new Set(['book', 'editjob', 'editbooking']);
 // in the middle of the screen, like a message, at every width (Reschedule, Guile 2026-10-11)
@@ -7053,7 +7157,7 @@ const ACTIONS = {
   qtline: (id, el) => {
     const p = topPanel(); if (!p || !p.q) return;
     if (el.dataset.v === 'add'){
-      if (p.q.lines.length >= 30) return toast('A quotation has at most 30 lines.', true);
+      if (p.q.lines.filter(l => !l.r).length >= 30) return toast('A quotation has at most 30 lines.', true);
       p.q.lines.push({text: '', qty: '1', price: ''});
     } else p.q.lines.splice(Number(el.dataset.i), 1);
     p.dirty = true;
@@ -7061,7 +7165,7 @@ const ACTIONS = {
   },
   qtfill: () => {
     const p = topPanel(), src = p && p.q && quoteSrc(p); if (!src) return;
-    p.q.lines = quoteLinesFrom(src.units);
+    p.q.lines = p.q.lines.filter(l => l.r).concat(quoteLinesFrom(src.units));   // 61: a report's lines stay
     p.dirty = true;
     render(); toast('The lines are the ' + (src.bill ? 'job' : 'booking') + '’s aircons again, at the price list’s prices.');
   },
@@ -7072,13 +7176,14 @@ const ACTIONS = {
     const {q, bad} = quoteCheck(p.q);
     if (bad){ toast(bad + ' Nothing was saved.', true); return false; }
     const row = src.row, v = (row[src.field] && row[src.field].v) || 0, total = qtTotal(q.lines);
+    const sets = src.job && (src.bill || !reportLines(row).length);   // 61: with a priced report, a quotation sets no price
     // the billing statement goes through the quotation's own cleaner on the server (45)
     write(src.fn, {[src.arg]: row.id, [src.bill ? 'p_bill' : 'p_quote']: q, p_based_on: v}, Word + ' for ' + src.name, [row.id], () => {
       row[src.field] = {...q, v: v + 1, total, saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
-      if (src.job){ row.price = total; payFollow(row); }   // a job's quotation — or billing statement — is its price (26, 45); 59: its paid mark follows
+      if (sets){ row.price = total; payFollow(row); }   // a job's quotation — or billing statement — is its price (26, 45); 59: its paid mark follows
     });
     p.dirty = false;
-    toast(src.job ? Word + ' saved — the job’s price is now ' + peso(total) + '.' : 'Quotation saved.');
+    toast(sets ? Word + ' saved — the job’s price is now ' + peso(total) + '.' : Word + ' saved.');
     return true;
   },
   printquote: () => quotePaper(false),
@@ -7090,6 +7195,29 @@ const ACTIONS = {
     p.r[k] = p.r[k] === el.dataset.v ? '' : el.dataset.v; p.dirty = true; render();
   },
   savereport: () => saveReport(),
+  rpcharge: (id, el) => {   // 61: a report's prices: add a line, take one off
+    const p = topPanel(); if (!p || !p.r || !canPriceReport()) return;
+    if (el.dataset.v === 'add'){
+      if (p.r.charges.length >= 10) return toast('A service report has 10 prices at most.', true);
+      p.r.charges.push({text: '', price: ''});
+    } else p.r.charges.splice(Number(el.dataset.i), 1);
+    p.dirty = true;
+    render();
+  },
+  rppick: (id, el) => {   // 61: Who can edit the price
+    const p = topPanel(); if (!p || p.kind !== 'reportpricers' || !p.sel) return;
+    const v = el.dataset.v;
+    p.sel = p.sel.includes(v) ? p.sel.filter(x => x !== v) : p.sel.concat([v]);
+    render();
+  },
+  rppricersave: () => {
+    const p = topPanel(); if (!p || p.kind !== 'reportpricers' || !p.sel) return;
+    const v = p.sel.slice();
+    write('set_report_setting', {p_key: 'report_pricers', p_value: v}, 'Service report — who can edit the price', ['report_pricers'],
+      db => { db.settings = {...(db.settings || {}), report_pricers: v}; });
+    closePanel();
+    toast(v.length ? 'Saved: the office and ' + v.map(staffName).join(', ') + ' can edit the price.' : 'Saved: only the office can edit the price.');
+  },
   printreport: () => reportPaper(false),
   sharereport: () => reportPaper(true),
   delreport: (id, el) => {
@@ -7100,8 +7228,10 @@ const ACTIONS = {
     write('save_service_report', {p_job: jid, p_report: {id: rid}, p_based_on: saved.v || 0, p_remove: true},
       'Service report taken off — ' + (jobCust(j).full_name || 'job'), [jid], db => {
         const jj = db.jobs[jid]; if (!jj) return;
+        const was = reportLines(jj);
         jj.reports = reportsOf(jj).filter(y => y.id !== rid);
         const s = {...(jj.signed || {})}; delete s['r:' + rid]; jj.signed = s;
+        billFollow(jj, was);   // 61
       });
     closePanel();
     toast('Service report ' + reportNo(saved) + ' taken off.');
@@ -7952,9 +8082,11 @@ document.addEventListener('input', e => {
     return;
   }
   // the service report (57): the same, for its boxes and its ticks
-  if (t.dataset && (t.dataset.rf || t.dataset.rtick != null)){
+  if (t.dataset && (t.dataset.rf || t.dataset.rtick != null || t.dataset.rs != null || t.dataset.rc)){
     const p = topPanel(); if (!p || !p.r) return;
     if (t.dataset.rf) p.r[t.dataset.rf] = t.value;
+    else if (t.dataset.rs != null) p.r.specs[Number(t.dataset.rs)].value = t.value;   // 61
+    else if (t.dataset.rc){ const [i, k] = t.dataset.rc.split(':'); p.r.charges[Number(i)][k] = t.value; }   // 61
     else { const k = t.dataset.rtick; p.r.ticks = p.r.ticks.filter(x => x !== k).concat(t.checked ? [k] : []); }
     p.dirty = true;
     drawReportPreview(p);
