@@ -13,6 +13,7 @@
 <!-- the owner's photos inside the site, in the head: its class lands before the CSS fetches
      the built-in photo (at the end of the body, hero-1600.jpg was already on its way) -->
 <script src="page-photos.js"></script>
+<script src="boot.js"></script>
 <!--
   One app, three kinds of people; the role on the account decides what each sees
   (docs/scope.md). Signed out, it is the public booking page.
@@ -65,6 +66,7 @@
   body{margin:0;background:var(--bg);color:var(--ink);
        font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   .wrap{max-width:660px;margin:0 auto;padding:0 16px 60px}
+  .boot .wrap{visibility:hidden}   /* boot.js: signed in, nothing until the first render */
   /* ---------- the booking page's top: photo, words, card (Travelista's shape, 2026-09-27) ----------
      The photo is a layer of fixed height behind the top; the form card is taller and simply
      runs on past it, which is what makes it look laid over the picture. */

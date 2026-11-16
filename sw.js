@@ -8,8 +8,8 @@ const CACHE = 'ws-page-v6';
 // version.js: so Settings → About still knows the version with no signal. app.js: the page's
 // script, its own file since 2026-10-01 (the Content-Security-Policy runs no inline script).
 // page-photos.js: the list of the owner's photos inside the site (tools/page_photos.py)
-// namefx.js: the name effects (50), its own file
-const PAGE = ['./', './index.html', './app.js', './version.js', './page-photos.js', './namefx.js'];
+// namefx.js: the name effects (50), its own file. boot.js: hides the page until the first render.
+const PAGE = ['./', './index.html', './app.js', './version.js', './page-photos.js', './namefx.js', './boot.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PAGE)).then(() => self.skipWaiting()));
