@@ -4377,9 +4377,7 @@ function billHtml(q){
         <td class="qt-c">${l.price != null ? esc(qtNum(l.price)) : '—'}</td><td class="qt-r">${qtAmount(l) != null ? esc(qtMoney(qtAmount(l))) : '—'}</td></tr>`).join('')}</tbody>
       <tfoot><tr class="qt-tot"><td colspan="4" class="qt-r">TOTAL AMOUNT DUE</td><td class="qt-r">${total != null ? 'PHP ' + esc(qtMoney(total)) : '—'}</td></tr></tfoot>
     </table>
-    ${m.paid ? `<div class="bl-paid">PAID — ${esc(m.paid)}</div>`
-      : m.gcash ? `<div class="rc-gcash bl-gcash"><img src="img/gcash-qr.png" alt="" data-gone-if-missing>
-        <div>Pay by GCash: <b>${esc(m.gcash.number)}</b>${m.gcash.name ? '<br>' + esc(m.gcash.name) : ''}</div></div>` : ''}
+    ${blPayHtml(m)}
     ${qtNoteHtml(q)}
     <div class="bl-sign">
       <div><div>Prepared by:</div>
@@ -4389,9 +4387,14 @@ function billHtml(q){
         <div class="bl-ln">${q.csig && q.csig.name ? `<b>${esc(q.csig.name)}</b><br>` : ''}Signature over Printed Name</div>
         <div>Date: ${q.csig ? esc(qtLongDate(manilaDay(q.csig.at))) : '<span class="ln" style="width:150px"></span>'}</div></div>
     </div>
-    <div class="bl-foot">Thank you for choosing ${esc(SHOP_NAME)}. This is not an official receipt.</div>
+    ${blFootHtml()}
   </div>`;
 }
+// a billing statement's paid line or its GCash, and its last line — the job's and the group's (66)
+const blPayHtml = m => m.paid ? `<div class="bl-paid">PAID — ${esc(m.paid)}</div>`
+  : m.gcash ? `<div class="rc-gcash bl-gcash"><img src="img/gcash-qr.png" alt="" data-gone-if-missing>
+    <div>Pay by GCash: <b>${esc(m.gcash.number)}</b>${m.gcash.name ? '<br>' + esc(m.gcash.name) : ''}</div></div>` : '';
+const blFootHtml = () => `<div class="bl-foot">Thank you for choosing ${esc(SHOP_NAME)}. This is not an official receipt.</div>`;
 /* What the job says on its billing statement, at the moment it is drawn. */
 function billMeta(j){
   const c = jobCust(j), b = bookingOfJob(j), set = (db && db.settings) || {}, us = unitsOf(j), names = unitNames(us);
@@ -4405,15 +4408,14 @@ function billMeta(j){
     gcash: set.gcash_number ? {number: set.gcash_number, name: set.gcash_name || ''} : null};
 }
 
-/* ---------------------------------------------------------------- customer groups (63, 64)
+/* ---------------------------------------------------------------- customer groups (63, 64, 66)
    The owner via Guile, 2026-11-16: SH, DUNKIN… — the office puts customers in a group (Admin →
-   Groups), and the group's papers come in pairs: the Group service report, a row per appliance
-   serviced, made from the reports and finished jobs he ticks and then edited; and the Group
-   billing statement, the billing statement's own paper and editor (panelQuote), started from that
-   table. Both are their own copies (Guile's pick): editing them never changes a job's report or
-   statement. 64: a pair covers any From–To ("Oct 15 → Nov 15", "Nov 1 → X"); a new one starts as
-   the month. A job is in it by its service date. Paid as one: every job in the pair's report gets
-   what it still owes (pay_group_bill). Office only. */
+   Groups), and the group gets a Billing statement for any From–To ("Oct 15 → Nov 15", "Nov 1 →
+   X"): a line per appliance serviced, with its service report's number, made from the reports and
+   finished jobs he ticks and then edited. Its own copy (Guile's pick): editing it never changes a
+   job's report or statement. 66: one paper only — the owner never sees "group service report"
+   (in code it is still the group's `report`; its row is a "pair" from 64). A job is in it by its
+   service date. Paid as one: every job on it gets what it still owes (pay_group_bill). Office only. */
 const groupsAll = () => Object.values(db.groups || {}).sort((a, b) => a.name.localeCompare(b.name));
 const groupsLive = () => groupsAll().filter(g => !g.removed_at);
 const groupMembers = gid => Object.values(db.customers).filter(c => c.group_id === gid && c.full_name !== '(removed)')
@@ -4438,38 +4440,39 @@ function gpOf(p){
 }
 const groupJobs = gid => { const ids = new Set(groupMembers(gid).map(c => c.id));
   return Object.values(db.jobs).filter(j => ids.has(j.customer_id) && j.status !== 'cancelled'); };
-const byBranch = (a, b) => (jobCust(a.j).full_name || '').localeCompare(jobCust(b.j).full_name || '') || (a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+// by date, oldest first, then branch (Guile, 2026-11-17: "sort this by date") — every group list and the paper's lines
+const byDay = (a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0) || (jobCust(a.j).full_name || '').localeCompare(jobCust(b.j).full_name || '');
 // the period's service reports of the group's customers: a report's own date, else its job's day
 const groupReports = (gid, f, t) => groupJobs(gid).flatMap(j => reportsOf(j).map(r => ({j, r, day: r.date || jobDay(j)})))
-  .filter(x => inSpan(x.day, f, t)).sort(byBranch);
+  .filter(x => inSpan(x.day, f, t)).sort(byDay);
 // the period's jobs, for their billing statements
-const groupBills = (gid, f, t) => groupJobs(gid).map(j => ({j, day: jobDay(j)})).filter(x => inSpan(x.day, f, t)).sort(byBranch);
+const groupBills = (gid, f, t) => groupJobs(gid).map(j => ({j, day: jobDay(j)})).filter(x => inSpan(x.day, f, t)).sort(byDay);
 const reportSum = r => { const ps = (r.charges || []).map(c => parsePrice(chargeTyped(c)));
   return ps.length && ps.every(x => x != null) ? cents(ps.reduce((s, x) => s + x, 0)) : null; };
-// one line of the group report, from a job's report — typed values, as the screen edits them
+// one line of the billing statement, from a job's report — typed values, as the screen edits them;
+// 66: the report's number where Work done was (the owner, 2026-11-17)
 const groupRow = ({j, r, day}) => ({branch: jobCust(j).full_name || '', date: day,
   aircon: [r.capacity, r.brand, r.model].map(x => String(x || '').trim()).filter(Boolean).join(' '),
-  // the others box, and the ticks counted — every tick written out made one row 341 px tall (2026-11-16)
-  work: [String(r.others || '').trim(), (r.ticks || []).length > 2 ? r.ticks.length + ' checks'
-    : (r.ticks || []).map(t => String(t).trim().replace(/\.$/, '')).join('; ')].filter(Boolean).join(' — '),
-  price: reportSum(r) != null ? String(reportSum(r)) : '', job: j.id, r: r.id});
-// a finished job with no report: a line per aircon, from the job (r 'job')
+  no: r.no ? String(r.no) : '', price: reportSum(r) != null ? String(reportSum(r)) : '', job: j.id, r: r.id});
+// a finished job with no report: a line per aircon, from the job (r 'job'), with no number
 const groupRows = x => {
   if (x.r) return [groupRow(x)];
-  const base = {branch: jobCust(x.j).full_name || '', date: x.day, price: '', job: x.j.id, r: 'job'};
-  const us = unitsOf(x.j).map(u => ({...base, aircon: [typeLabel(u.type), u.brand, u.model].filter(Boolean).join(' '),
-    work: u.services.map(svcLabel).join(', ')}));
-  return us.length ? us : [{...base, aircon: '', work: ''}];
+  const base = {branch: jobCust(x.j).full_name || '', date: x.day, no: '', price: '', job: x.j.id, r: 'job'};
+  const us = unitsOf(x.j).map(u => ({...base, aircon: [typeLabel(u.type), u.brand, u.model].filter(Boolean).join(' ')}));
+  return us.length ? us : [{...base, aircon: ''}];
 };
+// a line saved before 66 has no number: its report's, if the report is still here
+const rowNo = x => { const j = x.job && db.jobs[x.job], r = j && reportsOf(j).find(y => y.id === x.r);
+  return r && r.no ? String(r.no) : ''; };
 // a job whose lines carry no price gets the job's price on its first line, once (2026-11-16: ₱0.00 on Shell's)
 const groupJobPrice = rows => { const seen = new Set();
   return rows.map(x => { if (!x.job || seen.has(x.job)) return x; seen.add(x.job);
     const j = db.jobs[x.job], none = rows.every(y => y.job !== x.job || String(y.price ?? '').trim() === '');
     return none && j && j.price != null ? {...x, price: String(j.price)} : x; }); };
-// what the group service report is made from: the period's reports, and each finished job without one
+// what the billing statement is made from: the period's reports, and each finished job without one
 const groupFound = (gid, f, t) => groupReports(gid, f, t).concat(groupJobs(gid)
   .filter(j => j.status === 'done' && !reportsOf(j).length && inSpan(jobDay(j), f, t))
-  .map(j => ({j, r: null, day: jobDay(j)}))).sort(byBranch);
+  .map(j => ({j, r: null, day: jobDay(j)}))).sort(byDay);
 const groupKey = x => x.j.id + '|' + (x.r ? x.r.id : 'job');
 // 64: what another pair of the group already has — key → its period ("already on Oct 15 – Nov 15")
 const groupTaken = (gid, pid) => { const m = new Map();
@@ -4484,6 +4487,18 @@ function groupFill(p){
   p.pick = found.map(groupKey).filter(k => !taken.has(k));
   p.t.rows = groupJobPrice(found.filter(x => p.pick.includes(groupKey(x))).flatMap(groupRows));
 }
+// 66: Manual select (Guile, 2026-11-17) — the group's last 3 months, ticked by hand; From–To follow
+// the first and last ticked day. shortcut: 3 months back only (Guile's pick); older is typed by dates.
+const manualSpan = p => { const today = manilaDate(0), d = new Date(today + 'T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() - 3);
+  return [d.toISOString().slice(0, 10), (p.t.to || '') > today ? p.t.to : today]; };
+function groupManualDates(p){
+  const picked = groupFound(p.gid, ...manualSpan(p)).filter(x => p.pick.includes(groupKey(x)));
+  if (!picked.length) return;
+  const days = picked.map(x => x.day).sort();
+  Object.assign(p.t, {from: days[0], to: days[days.length - 1]}); p.dirty = true;
+  // a new statement nobody edited follows its ticks, as it follows its dates
+  if (!(db.gpapers[p.id] && db.gpapers[p.id].report) && !p.edited) p.t.rows = groupJobPrice(picked.flatMap(groupRows));
+}
 // typed → drawn: an empty price is no price; one that cannot be read is null too (Save refuses it)
 const groupView = t => ({...t, rows: t.rows.map(x => ({...x, price: String(x.price ?? '').trim() === '' ? null : parsePrice(x.price)}))});
 const groupTotal = rows => cents(rows.reduce((s, x) => s + (x.price || 0), 0));
@@ -4494,25 +4509,28 @@ function groupCheck(t){
   if (t.rows.length > 300) return 'At most 300 lines.';
   for (let i = 0; i < t.rows.length; i++){
     const x = t.rows[i], n = 'Line ' + (i + 1);
-    if (!(x.branch + x.aircon + x.work).trim()) return n + ' is empty.';
+    if (!(x.branch + x.aircon + x.no).trim()) return n + ' is empty.';
     if (String(x.price ?? '').trim() && parsePrice(x.price) == null) return n + ': type the price in numbers, like 1500 or 1,500.50.';
   }
   return '';
 }
-function groupReportHtml(g, words, t){   // t: groupView's — prices are numbers or null
-  const s = quoteShop(), sig = quoteSig();
+// 66: the group's Billing statement — gp: its row, or {id} before it is saved; its number follows To
+function groupReportHtml(g, words, t, gp){   // t: groupView's — prices are numbers or null
+  const s = quoteShop(), sig = quoteSig(), m = groupBillMeta(g, {...gp, period_to: t.to || ''});
   return `<div class="quote bill">
     ${qtHeadHtml(s)}
-    <div class="bl-title">GROUP SERVICE REPORT</div>
-    <div class="bl-meta"><div><div class="bl-label">Client</div><b>${esc(g.name)}</b><div>${esc(words)}</div></div>
-      <table class="bl-facts"><tr><td>Date</td><td>${esc(qtLongDate(t.date))}</td></tr>
+    <div class="bl-title">BILLING STATEMENT</div>
+    <div class="bl-meta"><div><div class="bl-label">Bill to</div><b>${esc(g.name)}</b><div>${esc(words)}</div></div>
+      <table class="bl-facts"><tr><td>Statement No.</td><td><b>${esc(m.no)}</b></td></tr>
+        <tr><td>Date</td><td>${esc(qtLongDate(t.date))}</td></tr>
         <tr><td>Appliances</td><td>${t.rows.length}</td></tr></table></div>
     <table class="qt-table">
-      <thead><tr><th style="width:5%">#</th><th style="width:21%">Branch</th><th style="width:12%">Date</th><th style="width:20%">Aircon</th><th>Work done</th><th style="width:14%">Price</th></tr></thead>
+      <thead><tr><th style="width:5%">#</th><th style="width:23%">Branch</th><th style="width:13%">Date</th><th>Aircon</th><th style="width:13%">Service No.</th><th style="width:15%">Price</th></tr></thead>
       <tbody>${t.rows.map((x, i) => `<tr><td class="qt-c">${i + 1}</td><td>${esc(x.branch)}</td><td class="qt-c">${esc(x.date ? qtLongDate(x.date) : '')}</td>
-        <td>${esc(x.aircon)}</td><td>${esc(x.work)}</td><td class="qt-r">${x.price != null ? esc(qtMoney(x.price)) : '—'}</td></tr>`).join('')}</tbody>
-      <tfoot><tr class="qt-tot"><td colspan="5" class="qt-r">TOTAL</td><td class="qt-r">PHP ${esc(qtMoney(groupTotal(t.rows)))}</td></tr></tfoot>
+        <td>${esc(x.aircon)}</td><td class="qt-c">${esc(x.no || '—')}</td><td class="qt-r">${x.price != null ? esc(qtMoney(x.price)) : '—'}</td></tr>`).join('')}</tbody>
+      <tfoot><tr class="qt-tot"><td colspan="5" class="qt-r">TOTAL AMOUNT DUE</td><td class="qt-r">PHP ${esc(qtMoney(groupTotal(t.rows)))}</td></tr></tfoot>
     </table>
+    ${blPayHtml(m)}
     ${qtNoteHtml(t)}
     <div class="bl-sign">
       <div><div>Prepared by:</div>${sig ? `<img class="qt-sig" src="${esc(sig)}" alt="">` : '<div class="qt-sigspace"></div>'}
@@ -4520,50 +4538,17 @@ function groupReportHtml(g, words, t){   // t: groupView's — prices are number
       <div><div>Received by:</div><div class="qt-sigspace"></div><div class="bl-ln">Signature over Printed Name</div>
         <div>Date: <span class="ln" style="width:150px"></span></div></div>
     </div>
+    ${blFootHtml()}
   </div>`;
 }
-// the group billing statement's first lines: one per branch, its appliances and work, its total
-// shortcut: one line per branch keeps a group under the statement's 30 lines (quote_clean) up to 30
-// branches; a bigger group gets "a quotation has 1 to 30 lines" — upgrade by raising that limit.
-function groupBillStart(g, words, rep){
-  const by = new Map(), set = db.settings || {}, rows = (rep && rep.rows) || [];
-  // a job's price sits on its first line only: its other lines are not missing a price
-  const priced = new Set(rows.filter(x => x.job && x.price != null).map(x => x.job));
-  rows.forEach(x => {
-    const b = by.get(x.branch) || {n: 0, works: new Set(), sum: 0, all: true};
-    b.n++; if (x.work) b.works.add(x.work);
-    if (x.price != null) b.sum = cents(b.sum + Number(x.price)); else if (!priced.has(x.job)) b.all = false;
-    by.set(x.branch, b);
-  });
-  return {date: manilaDate(0), to_address: '', salutation: 'Dear ' + g.name + ',',
-    subject: 'ACU SERVICES — ' + words.toUpperCase(), note: set.quote_note != null ? set.quote_note : QUOTE_NOTE,
-    lines: [...by].map(([branch, b]) => ({qty: 1, price: b.all ? b.sum : '',
-      text: cutWords(branch + ' — ' + b.n + ' appliance' + (b.n === 1 ? '' : 's') + (b.works.size ? ': ' + [...b.works].join('; ') : ''), 200)}))};
-}
-// at most n letters, cut at a whole word with "…" (a statement line holds 200)
-const cutWords = (s, n) => s.length <= n ? s : s.slice(0, Math.max(s.lastIndexOf(' ', n - 1), 1)).replace(/[;,:—\s]+$/, '') + '…';
+// the billing statement's number, paid or how to pay: G-<To>-<name>-<id>, outside the shop's running numbers
 function groupBillMeta(g, gp){
   const set = db.settings || {};
-  return {no: 'G-' + gp.period_to.replace(/-/g, '') + '-' + (g.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase() || 'GROUP') + '-' + gp.id.slice(0, 4).toUpperCase(),
-    name: g.name, contact: '', units: '', aircons: [], service: periodWords(gp.period_from, gp.period_to),
+  return {no: 'G-' + String(gp.period_to || '').replace(/-/g, '') + '-' + (g.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase() || 'GROUP') + '-' + String(gp.id || '').slice(0, 4).toUpperCase(),
     paid: gp.paid_at ? PAY[gp.paid_method] + ', ' + qtLongDate(manilaDay(gp.paid_at)) : '',
     gcash: set.gcash_number ? {number: set.gcash_number, name: set.gcash_name || ''} : null};
 }
-// quoteSrc's group billing statement: the billing statement's editor, saved on the pair
-function groupBillSrc(p){
-  const {gp, g} = gpOf(p); if (!gp || !g) return null;
-  const rep = gp.report, word = periodWords(gp.period_from, gp.period_to);
-  return {row: gp, job: false, bill: true, name: g.name, ref: word, open: db.role === 'admin' && !!rep,
-    closedWhy: db.role !== 'admin' ? 'Only the office changes it.' : 'Save the group service report first: this starts from it.',
-    saved: gp.bill, start: gp.bill || groupBillStart(g, word, rep), address: '', units: [],
-    meta: groupBillMeta(g, gp), from: 'group service report', fill: () => groupBillStart(g, word, rep).lines,
-    top: `<div class="actions"><button type="button" class="b" data-act="gall" data-v="groupbls">📚 View all BL</button></div>`,
-    fn: 'save_group_paper', touch: gp.id,
-    args: (q, v) => ({p_id: gp.id, p_group: g.id, p_from: null, p_to: null, p_kind: 'bill', p_paper: q, p_based_on: v}),
-    field: 'bill', word: 'group billing statement', title: 'Group billing statement'};
-}
-const pairSub = x => (x.report ? 'GSR ' + peso(x.report.total || 0) : 'GSR not saved')
-  + ' · ' + (x.bill ? 'GBS ' + peso(x.bill.total) + (x.paid_at ? ' · paid' : '') : 'GBS not made yet');
+const pairSub = x => x.report ? 'Saved · ' + peso(x.report.total || 0) + (x.paid_at ? ' · paid' : '') : 'Not saved yet';
 
 /* Customers → a group: its pairs of papers, newest first, and its customers. */
 function panelGroup(p){
@@ -4571,66 +4556,68 @@ function panelGroup(p){
   if (!g) return {title: 'Group', body: empty('This group is no longer on this phone.')};
   const mem = groupMembers(g.id), pairs = groupPairs(g.id);
   return {title: g.name, sub: mem.length + ' customer' + (mem.length === 1 ? '' : 's'), body: `
-    <div class="actions"><button type="button" class="b primary" data-act="gnew" data-id="${esc(g.id)}">＋ New GSR + GBS</button></div>
-    ${pairs.length ? `<div class="menu">${pairs.map(x => menuRow('groupperiod', x.id, '🗂️', periodWords(x.period_from, x.period_to), pairSub(x))).join('')}</div>`
-      : `<p class="hint">No group service report yet. ＋ New GSR + GBS starts one for ${esc(monthWords(thisMonth()))} — change its From and To for any dates, like Oct 15 – Nov 15.</p>`}
+    <div class="actions"><button type="button" class="b primary" data-act="gnew" data-id="${esc(g.id)}">＋ New billing statement</button></div>
+    ${pairs.length ? `<div class="menu">${pairs.map(x => menuRow('groupperiod', x.id, '🧾', periodWords(x.period_from, x.period_to), pairSub(x))).join('')}</div>`
+      : `<p class="hint">No billing statement yet. ＋ New billing statement starts one for ${esc(monthWords(thisMonth()))} — change its From and To for any dates, like Oct 15 – Nov 15.</p>`}
     <div class="sec">Customers</div>
     <div class="list">${mem.map(c => custRow(c)).join('') || empty('No customers in it yet.')}</div>
     <div class="actions"><button type="button" class="b" data-act="open" data-kind="groupedit" data-id="${esc(g.id)}">✏️ Edit the group</button></div>`};
 }
-/* A pair: its two papers, every report and statement in its dates, paid as one. */
+/* A billing statement's dates: the paper, every report and job statement in them, paid as one. */
 function panelGroupPeriod(p){
   const {gp, g} = gpOf(p);
-  if (!gp || !g) return {title: 'Group papers', body: empty('These papers are no longer on this phone.')};
-  const f = gp.period_from, t = gp.period_to, rep = gp.report, bill = gp.bill;
+  if (!gp || !g) return {title: 'Billing statement', body: empty('This billing statement is no longer on this phone.')};
+  const f = gp.period_from, t = gp.period_to, rep = gp.report;
   const reps = groupReports(g.id, f, t), bills = groupBills(g.id, f, t);
   const owed = !rep ? [] : [...new Set(rep.rows.map(x => x.job).filter(Boolean))].map(id => db.jobs[id]).filter(j => j && j.status !== 'cancelled');
   const owe = cents(owed.reduce((s, j) => s + Math.max(jobBalance(j) || 0, 0), 0));
   // what the statement asks for and the jobs do not owe lands on no job: say it before, not after
-  const gap = bill ? cents((bill.total || 0) - owe) : 0;
-  const gapSaid = gap > 0 ? ` The statement says ${esc(peso(bill.total))}: ${esc(peso(gap))} of it is on no job and is not recorded as paid anywhere.` : '';
-  const pay = !bill ? '' : gp.paid_at ? `<div class="card">${kv('Paid', esc(groupBillMeta(g, gp).paid))}</div>`
+  const gap = rep ? cents((rep.total || 0) - owe) : 0;
+  const gapSaid = gap > 0 ? ` The statement says ${esc(peso(rep.total))}: ${esc(peso(gap))} of it is on no job and is not recorded as paid anywhere.` : '';
+  const pay = !rep ? '' : gp.paid_at ? `<div class="card">${kv('Paid', esc(groupBillMeta(g, gp).paid))}</div>`
     : p.payAsk ? `<div class="card"><div class="menu-title">Mark it paid — ${esc(PAY[p.payAsk])}?</div>
-        <p class="hint">Each job in the group service report gets a payment of what it still owes: ${esc(peso(owe))} across
+        <p class="hint">Each job on the billing statement gets a payment of what it still owes: ${esc(peso(owe))} across
           ${owed.length} job${owed.length === 1 ? '' : 's'}, each in its own history. A job with no price yet is left as it is.${gapSaid}</p>
         <div class="actions"><button type="button" class="b primary" data-act="gpayyes" data-id="${esc(gp.id)}">Yes, mark it paid</button>
           <button type="button" class="b" data-act="gpayno">Cancel</button></div></div>`
     : `<div class="card"><div class="menu-title">Paid as one</div>
-        <p class="hint">Marks every job in the group service report paid — ${esc(peso(owe))} still owed.${gapSaid}</p>
+        <p class="hint">Marks every job on the billing statement paid — ${esc(peso(owe))} still owed.${gapSaid}</p>
         <div class="actions">${['cash', 'gcash', 'other'].map(m => `<button type="button" class="b" data-act="gpay" data-v="${m}">Paid — ${esc(PAY[m])}</button>`).join('')}</div></div>`;
   return {title: periodWords(f, t), sub: g.name, body: `
     <div class="menu">
-      ${menuRow('groupreport', gp.id, '📋', 'Group service report', rep
-        ? 'Saved · ' + rep.rows.length + ' line' + (rep.rows.length === 1 ? '' : 's') + ' · ' + peso(rep.total || 0) : 'Not saved yet')}
-      ${menuRow('groupbill', gp.id, '🧾', 'Group billing statement', bill
-        ? 'Saved · ' + peso(bill.total) + (gp.paid_at ? ' · paid' : '') : 'Not made yet — it starts from the group service report')}
+      ${menuRow('groupreport', gp.id, '🧾', 'Billing statement', rep
+        ? 'Saved · ' + rep.rows.length + ' line' + (rep.rows.length === 1 ? '' : 's') + ' · ' + peso(rep.total || 0) + (gp.paid_at ? ' · paid' : '') : 'Not saved yet')}
       ${menuRow('groupsrs', gp.id, '📚', 'View all SR', reps.length + ' in these dates')}
       ${menuRow('groupbls', gp.id, '📚', 'View all BL', bills.length + ' job' + (bills.length === 1 ? '' : 's') + ' in these dates')}
     </div>
     ${pay}`};
 }
-/* The Group service report: its From–To, tick the reports and jobs, unite them, edit the lines, save. */
+/* The Billing statement: its From–To, tick the reports and jobs, unite them, edit the lines, save. */
 function panelGroupReport(p){
   const {gp, g} = gpOf(p);
-  if (!g) return {title: 'Group service report', body: empty('This group is no longer on this phone.')};
+  if (!g) return {title: 'Billing statement', body: empty('This group is no longer on this phone.')};
   const saved = gp && gp.report;
-  const typed = x => ({...x, date: x.date || '', price: x.price != null ? String(x.price) : ''});
+  const typed = x => ({...x, date: x.date || '', no: x.no != null ? x.no : rowNo(x), price: x.price != null ? String(x.price) : ''});
   if (!p.t){
     p.t = {from: p.from, to: p.to, date: saved ? saved.date : manilaDate(0), note: saved ? saved.note || '' : '', rows: saved ? saved.rows.map(typed) : []};
     if (saved) p.pick = p.t.rows.filter(x => x.r && x.job).map(x => x.job + '|' + x.r); else groupFill(p);
   }
   const f = p.t.from, t = p.t.to, ok = spanOk(f, t), word = ok ? periodWords(f, t) : 'these dates';
-  const found = ok ? groupFound(g.id, f, t) : [], taken = groupTaken(g.id, p.id);
+  const found = p.manual ? groupFound(g.id, ...manualSpan(p)) : ok ? groupFound(g.id, f, t) : [], taken = groupTaken(g.id, p.id);
   const said = saved ? 'Saved ' + timeAgo(saved.saved_at) + (saved.saved_by_name ? ' by ' + saved.saved_by_name : '') : 'Not saved yet';
   const box = (i, k, label, attrs) => `<label>${label} <input data-gr="${i}:${k}" value="${esc(p.t.rows[i][k] || '')}" ${attrs || ''}></label>`;
-  return {title: 'Group service report', sub: g.name + ' · ' + word, body: `
+  return {title: 'Billing statement', sub: g.name + ' · ' + word, body: `
     <div class="actions"><button type="button" class="b" data-act="gall" data-v="groupsrs">📚 View all SR</button></div>
-    ${paperBox(groupReportHtml(g, word, groupView(p.t)), 'grPreview')}
+    ${paperBox(groupReportHtml(g, word, groupView(p.t), gp || {id: p.id}), 'grPreview')}
     <p class="hint">${esc(said)}${unsentPill(p.id)}. Tap the page to see it full size. Editing it never changes a job’s own report.</p>
-    <div class="row-between"><label>From <input type="date" data-gf="from" value="${esc(f || '')}"></label>
-      <label>To <input type="date" data-gf="to" value="${esc(t || '')}"></label></div>
+    <div class="row-between" style="margin-top:14px"><label for="gfFrom" style="margin:0">From</label>
+      <button type="button" class="b${p.manual ? ' primary' : ''}" data-act="gmanual" aria-pressed="${!!p.manual}">${p.manual ? '📅 By dates' : '☑ Manual select'}</button>
+      <label for="gfTo" style="margin:0">To</label></div>
+    <div class="row-between" style="margin-top:5px"><input id="gfFrom" type="date" data-gf="from" value="${esc(f || '')}">
+      <input id="gfTo" type="date" data-gf="to" value="${esc(t || '')}"></div>
     ${ok ? '' : '<p class="hint" style="color:var(--bad)">Choose the From and To dates, From first, at most a year apart.</p>'}
-    <div class="fieldlabel">Service reports and finished jobs in ${esc(word)} — tick the ones to put in</div>
+    <div class="fieldlabel">${p.manual ? 'Every service report and finished job of the last 3 months — tick them; From and To follow the first and last'
+      : 'Service reports and finished jobs in ' + esc(word) + ' — tick the ones to put in'}</div>
     <div class="menu">${found.map(x => { const {j, r, day} = x, k = groupKey(x), on = p.pick.includes(k), on2 = taken.get(k);   // the crew picker's look
       const what = (r ? reportName(j, r, r.unit) + (reportSum(r) != null ? ' · ' + peso(reportSum(r)) : '')
         : unitsOf(j).length + ' appliance' + (unitsOf(j).length === 1 ? '' : 's') + (j.price != null ? ' · ' + peso(j.price) : ''))
@@ -4647,31 +4634,58 @@ function panelGroupReport(p){
       ${box(i, 'branch', 'Branch', 'maxlength="120"')}
       <label>Date <input type="date" data-gr="${i}:date" value="${esc(x.date || '')}"></label>
       ${box(i, 'aircon', 'Aircon', 'maxlength="200"')}
-      <label>Work done <textarea data-gr="${i}:work" rows="2" maxlength="500">${esc(x.work || '')}</textarea></label>
+      ${box(i, 'no', 'Service No.', 'maxlength="40"')}
       <label>Price <span class="peso-in"><i>₱</i><input data-gr="${i}:price" inputmode="decimal" maxlength="14" value="${esc(x.price || '')}" placeholder="—"></span></label>
     </div>`).join('')}
     <div class="actions"><button type="button" class="b" data-act="grow" data-v="add">+ Add a line</button></div>
     <label>Note <span class="opt">— one point per line</span><textarea data-gf="note" rows="4" maxlength="3000">${esc(p.t.note)}</textarea></label>
-    <div class="stack"><button type="button" class="b primary wide" data-act="gsave">Save the group service report</button>
+    <div class="stack"><button type="button" class="b primary wide" data-act="gsave">Save the billing statement</button>
       <button type="button" class="b wide" data-act="gprint">🖨️ Print or save as PDF</button>
-      <button type="button" class="b wide" data-act="gshare">📤 Send as PDF — Messenger, email…</button>
-      ${saved ? menuRow('groupbill', gp.id, '🧾', 'Group billing statement', gp.bill ? 'Saved · ' + peso(gp.bill.total) : 'Make it from this report') : ''}</div>`};
+      <button type="button" class="b wide" data-act="gshare">📤 Send as PDF — Messenger, email…</button></div>`};
 }
 // typing redraws the page only, never the box being typed in (ui.md)
 function drawGroupPreview(p){
   const w = $('#grPreview'), g = db.groups[p.gid];
-  if (w && g) w.firstElementChild.innerHTML = groupReportHtml(g, spanOk(p.t.from, p.t.to) ? periodWords(p.t.from, p.t.to) : 'these dates', groupView(p.t));
+  if (w && g) w.firstElementChild.innerHTML = groupReportHtml(g, spanOk(p.t.from, p.t.to) ? periodWords(p.t.from, p.t.to) : 'these dates', groupView(p.t), db.gpapers[p.id] || {id: p.id});
   fitQuotes();
 }
-/* View all SR / View all BL: every paper in the pair's dates, one under the other, each with its Edit. */
+/* View all SR (66, the owner via Guile, 2026-11-17): every report in its own From–To (the statement's
+   at first), one under the other, each with Edit, Print and Send; tick some — or all — to print or
+   send them as one PDF, a page each. New dates tick everything in them. */
+const srPaper = (j, r) => reportHtml({...r, csig: custSig(j, 'r:' + r.id)});
+const srsShown = p => spanOk(p.sf, p.st) ? groupReports(p.gid, p.sf, p.st) : [];
 function panelGroupSrs(p){
   const {g} = gpOf(p);
-  if (!g || !spanOk(p.from, p.to)) return {title: 'All service reports', body: empty('This group is no longer on this phone.')};
-  const reps = groupReports(g.id, p.from, p.to), word = periodWords(p.from, p.to);
-  return {title: 'All service reports', sub: g.name + ' · ' + word, body: reps.length ? reps.map(({j, r}) => `
-    <div class="row-between"><div class="sec">${esc(jobCust(j).full_name || '')} · ${esc(reportNo(r))}</div>${editBtn('jobreport', j.id + '|' + r.id)}</div>
-    ${paperBox(reportHtml({...r, csig: custSig(j, 'r:' + r.id)}))}`).join('') + '<p class="hint">Tap a paper to see it full size.</p>'
-    : empty('No service reports in ' + word + '.')};
+  if (!g) return {title: 'All service reports', body: empty('This group is no longer on this phone.')};
+  if (!p.sf){ p.sf = p.from; p.st = p.to; }
+  const ok = spanOk(p.sf, p.st), reps = srsShown(p), word = ok ? periodWords(p.sf, p.st) : 'these dates', keys = reps.map(groupKey);
+  if (p.pickFor !== p.sf + p.st){ p.pick = keys; p.pickFor = p.sf + p.st; }
+  const n = keys.filter(k => p.pick.includes(k)).length, all = n === keys.length;
+  const what = (all ? 'all' : 'the ticked') + ' (' + n + ')';
+  return {title: 'All service reports', sub: g.name + ' · ' + word, body: `
+    <div class="row-between"><label>From <input type="date" data-sf="sf" value="${esc(p.sf || '')}"></label>
+      <label>To <input type="date" data-sf="st" value="${esc(p.st || '')}"></label></div>
+    ${ok ? '' : '<p class="hint" style="color:var(--bad)">Choose the From and To dates, From first, at most a year apart.</p>'}
+    ${keys.length ? `<div class="stack"><button type="button" class="b primary wide" data-act="srsmany">🖨️ Print ${what}</button>
+      <button type="button" class="b wide" data-act="srsmany" data-share="1">📤 Send ${what} as one PDF</button>
+      <button type="button" class="b wide" data-act="srsall">${all ? 'Untick all' : 'Tick all (' + keys.length + ')'}</button></div>` : ''}
+    ${reps.map(x => { const {j, r, day} = x, k = groupKey(x), on = p.pick.includes(k);   // the crew picker's look
+      return `<div class="crew-row${on ? ' on' : ''}" style="margin-top:14px"><button type="button" class="menu-row pick" data-act="gpick" data-v="${esc(k)}" aria-pressed="${on}">
+        <span class="crew-box">${on ? '✓' : ''}</span><span class="menu-main"><span class="menu-title">${esc(jobCust(j).full_name || '')} · ${esc(reportNo(r))}</span>
+        <span class="menu-sub">${esc(niceDate(day))}</span></span></button></div>
+      <div class="actions">${editBtn('jobreport', j.id + '|' + r.id)}<button type="button" class="b" data-act="srsone" data-v="${esc(k)}">🖨️ Print</button>
+        <button type="button" class="b" data-act="srsone" data-v="${esc(k)}" data-share="1">📤 Send</button></div>
+      ${paperBox(srPaper(j, r))}`; }).join('')}
+    ${reps.length ? '<p class="hint">Tap a paper to see it full size.</p>' : ok ? empty('No service reports in ' + word + '.') : ''}`};
+}
+// the ticked reports — or one — on paper or as one PDF, a page each
+function srsPaper(keys, share){
+  const p = topPanel(), g = p && p.kind === 'groupsrs' && db.groups[p.gid]; if (!g) return;
+  const reps = srsShown(p).filter(x => keys.includes(groupKey(x)));
+  if (!reps.length) return toast('Tick at least one service report.', true);
+  const one = reps.length === 1 && reps[0];
+  printHtml(reps.map(x => srPaper(x.j, x.r)).join(''), one ? 'Service report ' + (one.r.no ? one.r.no + ' ' : '') + (jobCust(one.j).full_name || '')
+    : 'Service reports ' + g.name + ' ' + periodWords(p.sf, p.st), share);
 }
 function panelGroupBls(p){
   const {g} = gpOf(p);
@@ -4687,8 +4701,8 @@ function panelGroupBls(p){
 function drawGroupsAdmin(){
   const live = groupsLive(), off = groupsAll().filter(g => g.removed_at);
   const row = g => menuRow('groupedit', g.id, '🏢', g.name, g.removed_at ? 'Taken off — open it to bring it back or delete it' : groupMembers(g.id).length + ' customers');
-  return `<p class="hint">Customers billed together — SH, DUNKIN. Each month the group gets one group service report and one
-      group billing statement: Customers → the group.</p>
+  return `<p class="hint">Customers billed together — SH, DUNKIN. The group gets one billing statement for any dates:
+      Customers → the group.</p>
     <div class="actions"><button type="button" class="b primary" data-act="open" data-kind="groupedit" data-id="">＋ New group</button></div>
     ${live.length ? `<div class="menu">${live.map(row).join('')}</div>` : empty('No groups yet.')}
     ${off.length ? `<div class="sec">Taken off</div><div class="menu">${off.map(row).join('')}</div>` : ''}`;
@@ -4714,7 +4728,7 @@ function panelGroupEdit(p){
 function groupDeleteHtml(g, p){
   const n = groupPairs(g.id).length;
   return `<div class="sec">Delete for good</div>
-    <p class="hint" style="font-size:14px"><b>${esc(g.name)}</b> is deleted with its ${n} GSR + GBS pair${n === 1 ? '' : 's'}, from every
+    <p class="hint" style="font-size:14px"><b>${esc(g.name)}</b> is deleted with its ${n} billing statement${n === 1 ? '' : 's'}, from every
       phone. Its customers, their jobs, service reports, billing statements and payments stay. <b>This cannot be undone.</b></p>
     <label class="tick"><input type="checkbox" data-pf="ok" ${p.ok ? 'checked' : ''}> Yes, delete ${esc(g.name)}</label>
     <div class="stack"><button type="button" class="b danger wide" data-act="gdelete">Delete for good</button></div>`;
@@ -5296,7 +5310,6 @@ function quoteLinesFrom(units){
 /* Where a quotation lives: a New booking (the Inbox), or a job until it is Done (26). A
    job's starts from its booking's, when it had one. Saving a job's sets its price. */
 function quoteSrc(p){
-  if (p.kind === 'groupbill') return groupBillSrc(p);   // 63
   // the billing statement (45): the job's, saved on it; it starts from the job's quotation
   if (p.kind === 'jobbill'){
     const j = db.jobs[p.id]; if (!j) return null;
@@ -5342,7 +5355,7 @@ function quoteStart(src){
     note: set.quote_note != null ? set.quote_note : QUOTE_NOTE, lines};
 }
 /* The page as drawn: the typed copy, and for a billing statement what the job says. */
-const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? src.meta || billMeta(src.row) : null,
+const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMeta(src.row) : null,
   csig: src && src.job ? custSig(src.row, src.bill ? 'bill' : 'quote') : null});   // the customer's signature (47)
 /* Typed → drawn: a price that cannot be read shows as — (and Save refuses it). */
 const quoteView = pq => ({...pq, lines: pq.lines.map(l => ({text: l.text,
@@ -5368,7 +5381,7 @@ function panelQuote(p){
   if (!p.q) p.q = quoteStart(src);
   const open = src.open, saved = src.saved, sub = src.name + ' · ' + src.ref;
   const said = saved ? esc('Saved ' + timeAgo(saved.saved_at) + (saved.saved_by_name ? ' by ' + saved.saved_by_name : '')) + unsentPill(src.row.id)
-    : bill || src.bill ? (src.start ? 'From the ' + (src.from || 'quotation') + ' — add any extra work, then save' : 'Not saved yet')
+    : bill ? (src.start ? 'From the quotation — add any extra work, then save' : 'Not saved yet')
     : src.start ? 'From the booking’s quotation — not saved on the job yet' : 'Not saved yet';
   // Send as PDF (TODO 13): in the app, the paper as a file straight to the share sheet; on the
   // website there is no file maker, so it opens the print screen like the button above it
@@ -5376,8 +5389,8 @@ function panelQuote(p){
     <button type="button" class="b wide" data-act="sharequote">📤 Send as PDF — Messenger, email…</button>
     ${src.ref ? '<button type="button" class="b wide" data-act="wordquote">📝 Send as Word (.docx)</button>' : ''}`;   // 39
   if (!open) return {title: src.title, sub, info: bill ? 'bill' : 'quote', body: `
-    ${src.top || ''}${quoteBox(docView(p, src), 'quotePreview')}
-    <p class="hint">${said}. ${src.closedWhy ? esc(src.closedWhy) : bill ? (db.role === 'admin' ? 'The job is cancelled: nothing to bill.' : 'Only the office changes it.')
+    ${quoteBox(docView(p, src), 'quotePreview')}
+    <p class="hint">${said}. ${bill ? (db.role === 'admin' ? 'The job is cancelled: nothing to bill.' : 'Only the office changes it.')
       : db.role !== 'admin' ? 'Only the office changes it.' : `The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.`}</p>
     <div class="stack">${printBtn}</div>`};
   const tot = qtTotal(quoteView(p.q).lines);
@@ -5385,7 +5398,7 @@ function panelQuote(p){
     ? '<p class="hint">The job’s price comes from its service reports now, so this quotation does not change it.</p>'
     : `<p class="hint">Saving it makes the job’s price its TOTAL${src.row.price != null ? ' (now ' + esc(peso(src.row.price)) + ')' : ''}.</p>`;
   return {title: src.title, sub, info: bill ? 'bill' : 'quote', body: `
-    ${src.top || ''}${quoteBox(docView(p, src), 'quotePreview')}
+    ${quoteBox(docView(p, src), 'quotePreview')}
     <p class="hint">${said}. Tap the page to see it full size.</p>
     <label>Date <input type="date" data-qf="date" value="${esc(p.q.date)}"></label>
     <label>Address <textarea data-qf="to_address" rows="2" maxlength="300">${esc(p.q.to_address)}</textarea></label>
@@ -5401,7 +5414,7 @@ function panelQuote(p){
     </div>`).join('')}
     <div id="qtTotal" class="qt-total">${tot != null ? 'TOTAL ' + esc(peso(tot)) : 'TOTAL — a price is missing'}</div>
     <div class="actions"><button type="button" class="b" data-act="qtline" data-v="add">+ Add a line</button>
-      <button type="button" class="b" data-act="qtfill">↺ Lines from the ${src.from || (bill ? 'job' : 'booking')}</button></div>
+      <button type="button" class="b" data-act="qtfill">↺ Lines from the ${bill ? 'job' : 'booking'}</button></div>
     <label>Note <span class="opt">— one point per line; start a line with a space to indent it</span>
       <textarea data-qf="note" rows="6" maxlength="3000">${esc(p.q.note)}</textarea></label>
     ${priceHint}
@@ -5556,13 +5569,13 @@ document.addEventListener('change', async e => {
 /* The printer, or Android's print screen (Save as PDF) — the job name becomes the PDF's
    file name. Waits for the pictures, or the logo can be missing from the paper. */
 // The quotation on paper (print) or as a PDF file (share). Admin's sample has no booking.
-/* 63: the group service report on paper — what is saved, so a changed one saves first */
+/* 63: the group's billing statement on paper — what is saved, so a changed one saves first */
 function groupPaper(share){
   const p = topPanel(), g = p && db.groups[p.gid]; if (!g || !p.t) return;
   const gp = db.gpapers[p.id];
   if ((p.dirty || !(gp && gp.report)) && !ACTIONS.gsave()) return;
   const word = periodWords(p.t.from, p.t.to);
-  printHtml(groupReportHtml(g, word, groupView(p.t)), 'Group service report ' + g.name + ' ' + word, share);
+  printHtml(groupReportHtml(g, word, groupView(p.t), db.gpapers[p.id] || {id: p.id}), 'Billing statement ' + g.name + ' ' + word, share);
 }
 /* 63: a group's name, its customers, taken off or not — one write; the moved customers follow at once */
 function groupWrite(gid, name, members, removed){
@@ -7029,7 +7042,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   jobsign: panelJobSign, sigdraw: panelSigDraw,   // 47
   jobreport: panelReport, reportpricers: panelReportPricers,   // 57, 61
   payment: panelPayment,   // 59
-  group: panelGroup, groupedit: panelGroupEdit, groupreport: panelGroupReport, groupbill: panelQuote,   // 63
+  group: panelGroup, groupedit: panelGroupEdit, groupreport: panelGroupReport,   // 63
   groupperiod: panelGroupPeriod,   // 64
   groupsrs: panelGroupSrs, groupbls: panelGroupBls,
   payslip: panelPayslip, loans: panelLoans,   // 60
@@ -7524,23 +7537,20 @@ const ACTIONS = {
   },
   qtfill: () => {
     const p = topPanel(), src = p && p.q && quoteSrc(p); if (!src) return;
-    // 61: a report's lines stay; 63: a group's come from its group service report
-    p.q.lines = p.q.lines.filter(l => l.r).concat(src.fill ? src.fill().map(l => ({...l, qty: String(l.qty), price: String(l.price)})) : quoteLinesFrom(src.units));
+    p.q.lines = p.q.lines.filter(l => l.r).concat(quoteLinesFrom(src.units));   // 61: a report's lines stay
     p.dirty = true;
-    render(); toast(src.fill ? 'The lines are the group service report’s again, one per branch.'
-      : 'The lines are the ' + (src.bill ? 'job' : 'booking') + '’s aircons again, at the price list’s prices.');
+    render(); toast('The lines are the ' + (src.bill ? 'job' : 'booking') + '’s aircons again, at the price list’s prices.');
   },
   savequote: () => {
     const p = topPanel(), src = p && p.q && quoteSrc(p); if (!src) return false;
     const Word = src.word[0].toUpperCase() + src.word.slice(1);
-    if (!src.open){ toast(src.closedWhy || (src.bill ? 'Only the office changes the billing statement.' : 'This ' + (src.job ? 'job' : 'booking') + ' is ' + src.state + ': the quotation stays as it was.'), true); return false; }
+    if (!src.open){ toast(src.bill ? 'Only the office changes the billing statement.' : 'This ' + (src.job ? 'job' : 'booking') + ' is ' + src.state + ': the quotation stays as it was.', true); return false; }
     const {q, bad} = quoteCheck(p.q);
     if (bad){ toast(bad + ' Nothing was saved.', true); return false; }
     const row = src.row, v = (row[src.field] && row[src.field].v) || 0, total = qtTotal(q.lines);
     const sets = src.job && (src.bill || !reportLines(row).length);   // 61: with a priced report, a quotation sets no price
     // the billing statement goes through the quotation's own cleaner on the server (45)
-    const args = src.args ? src.args(q, v) : {[src.arg]: row.id, [src.bill ? 'p_bill' : 'p_quote']: q, p_based_on: v};   // 63: a group's month
-    write(src.fn, args, Word + ' for ' + src.name, [src.touch || row.id], () => {
+    write(src.fn, {[src.arg]: row.id, [src.bill ? 'p_bill' : 'p_quote']: q, p_based_on: v}, Word + ' for ' + src.name, [row.id], () => {
       row[src.field] = {...q, v: v + 1, total, saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
       if (sets){ row.price = total; payFollow(row); }   // a job's quotation — or billing statement — is its price (26, 45); 59: its paid mark follows
     });
@@ -7556,7 +7566,10 @@ const ACTIONS = {
     if (!spanOk(from, to)) return toast('Choose the From and To dates first.', true);
     openPanel({kind: el.dataset.v, id: p.id, gid: p.gid, from, to}); },
   gpick: (id, el) => { const p = topPanel(); if (!p || !p.pick) return; const k = el.dataset.v;
-    p.pick = p.pick.includes(k) ? p.pick.filter(x => x !== k) : p.pick.concat([k]); render(); },
+    p.pick = p.pick.includes(k) ? p.pick.filter(x => x !== k) : p.pick.concat([k]);
+    if (p.kind === 'groupreport' && p.manual) groupManualDates(p);
+    render(); },
+  gmanual: () => { const p = topPanel(); if (!p || p.kind !== 'groupreport' || !p.t) return; p.manual = !p.manual; render(); },
   gunite: () => {
     const p = topPanel(); if (!p || p.kind !== 'groupreport' || !p.t || !spanOk(p.t.from, p.t.to)) return;
     const picked = groupFound(p.gid, p.t.from, p.t.to).filter(x => p.pick.includes(groupKey(x)));
@@ -7569,7 +7582,7 @@ const ACTIONS = {
     const p = topPanel(); if (!p || !p.t) return;
     if (el.dataset.v === 'add'){
       if (p.t.rows.length >= 300) return toast('At most 300 lines.', true);
-      p.t.rows.push({branch: '', date: '', aircon: '', work: '', price: ''});
+      p.t.rows.push({branch: '', date: '', aircon: '', no: '', price: ''});
     } else p.t.rows.splice(Number(el.dataset.i), 1);
     p.dirty = p.edited = true; render();
   },
@@ -7580,20 +7593,25 @@ const ACTIONS = {
     if (bad){ toast(bad + ' Nothing was saved.', true); return false; }
     const t = groupView(p.t), v = (gp && gp.report && gp.report.v) || 0, word = periodWords(t.from, t.to);
     const paper = {date: t.date, note: t.note || '', rows: t.rows.map(x => ({branch: (x.branch || '').trim(), date: x.date || '',
-      aircon: (x.aircon || '').trim(), work: (x.work || '').trim(), price: x.price, ...(x.job ? {job: x.job} : {}), ...(x.r ? {r: x.r} : {})}))};
+      aircon: (x.aircon || '').trim(), no: (x.no || '').trim(), price: x.price, ...(x.job ? {job: x.job} : {}), ...(x.r ? {r: x.r} : {})}))};
     write('save_group_paper', {p_id: p.id, p_group: g.id, p_from: t.from, p_to: t.to, p_kind: 'report', p_paper: paper, p_based_on: v},
-      'Group service report — ' + g.name + ', ' + word, [p.id], () => {
+      'Billing statement — ' + g.name + ', ' + word, [p.id], () => {
         const row = db.gpapers[p.id] || (db.gpapers[p.id] = {id: p.id, group_id: g.id, report: null, bill: null, paid_at: null});
         Object.assign(row, {period_from: t.from, period_to: t.to});
         row.report = {...paper, total: groupTotal(paper.rows), v: v + 1, saved_at: new Date().toISOString(),
           saved_by_name: (db.profile || {}).display_name || ''};
       });
     Object.assign(p, {from: t.from, to: t.to, dirty: false}); render();
-    toast('Group service report saved — ' + word + '.');
+    toast('Billing statement saved — ' + word + '.');
     return true;
   },
   gprint: () => groupPaper(false),
   gshare: () => groupPaper(true),
+  // 66: View all SR — one, the ticked, all
+  srsone: (id, el) => srsPaper([el.dataset.v], !!el.dataset.share),
+  srsmany: (id, el) => { const p = topPanel(); if (p && p.pick) srsPaper(p.pick, !!el.dataset.share); },
+  srsall: () => { const p = topPanel(); if (!p || p.kind !== 'groupsrs') return;
+    const keys = srsShown(p).map(groupKey); p.pick = keys.every(k => p.pick.includes(k)) ? [] : keys; render(); },
   gtick: id => {
     const p = topPanel(); if (!p || p.kind !== 'groupedit') return;
     p.members = p.members.includes(id) ? p.members.filter(x => x !== id) : p.members.concat([id]);
@@ -7633,10 +7651,10 @@ const ACTIONS = {
   gpayno: () => { const p = topPanel(); if (p){ p.payAsk = null; render(); } },
   gpayyes: pid => {
     const p = topPanel(), gp = db.gpapers[pid], g = gp && db.groups[gp.group_id], m = p && p.payAsk;
-    if (!g || !gp.bill || !gp.report || !PAY[m]) return;
+    if (!g || !gp.report || !PAY[m]) return;
     const jobs = [...new Set(gp.report.rows.map(x => x.job).filter(Boolean))].map(id => db.jobs[id]).filter(j => j && j.status !== 'cancelled');
     const left = jobs.filter(j => j.price == null).map(j => jobCust(j).full_name || 'a job');
-    const word = periodWords(gp.period_from, gp.period_to), note = 'Group billing statement — ' + g.name + ', ' + word;
+    const word = periodWords(gp.period_from, gp.period_to), note = 'Billing statement — ' + g.name + ', ' + word;
     // the server's pay_group_bill, here: each job what it still owes, so the phone is right before the next pull
     write('pay_group_bill', {p_id: pid, p_method: m}, 'Paid as one — ' + g.name + ', ' + word,
       [pid, ...jobs.map(j => j.id)], (d, op) => {
@@ -8534,13 +8552,17 @@ document.addEventListener('input', e => {
     drawQuotePreview(p);
     return;
   }
-  // the group service report (63): the same, for its date, its note and its lines
+  // 66: View all SR's own From–To — the list follows, every report in it ticked
+  if (t.dataset && t.dataset.sf){ const p = topPanel(); if (!p || p.kind !== 'groupsrs') return;
+    p[t.dataset.sf] = t.value; t.blur(); render(); return; }
+  // the group's billing statement (63): the same, for its date, its note and its lines
   if (t.dataset && (t.dataset.gr || t.dataset.gf)){
     const p = topPanel(); if (!p || !p.t) return;
     if (t.dataset.gf) p.t[t.dataset.gf] = t.value;
     else { const [i, k] = t.dataset.gr.split(':'); if (p.t.rows[i]) p.t.rows[i][k] = t.value; p.edited = true; }
     p.dirty = true;
     if (t.dataset.gf === 'from' || t.dataset.gf === 'to'){   // 64: the picker answers the dates
+      p.manual = false;   // 66: a typed date is back to dates
       if (!(db.gpapers[p.id] && db.gpapers[p.id].report) && !p.edited) groupFill(p);
       t.blur(); render(); return;
     }

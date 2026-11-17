@@ -839,6 +839,7 @@
     body > *:not(#printArea){display:none !important}
     #printArea{display:block}
     #printArea .quote{width:auto;min-height:0;padding:0}
+    #printArea > * + *{break-before:page}   /* 66: several service reports, a page each */
   }
   /* the time on ONE line, "12:59PM" the widest: 63 px at 13 px bold, + 10 padding + 1 border */
   .lrow-when{flex:none;width:74px;text-align:center;border-right:1px solid var(--border);padding-right:10px;line-height:1.2}
