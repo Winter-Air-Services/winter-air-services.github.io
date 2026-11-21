@@ -169,7 +169,7 @@ const dbKey = () => 'ws_db_' + session.uid;
 const qKey  = () => 'ws_queue_' + session.uid;
 const nKey  = () => 'ws_notices_' + session.uid;
 const DB_SHAPE = 60;   // the last migration that added a column the phone keeps (45: jobs.billing, 46: jobs.crew, 53: customers.photos, bookings.photo_count, 56: checkins, 60: the pay)
-function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}, checkins: {}, payslips: {}, loans: {}, groups: {}, gpapers: {}}; }
+function emptyDb(){ return {cursor: null, role: null, repair: REPAIR_ID, bookings: {}, customers: {}, jobs: {}, team: {}, settings: {}, checkins: {}, payslips: {}, loans: {}, groups: {}, gpapers: {}, mats: {}}; }
 /* docs/rules/sync.md: when what the server sends changes shape, bump this, so every phone
    takes one full fresh copy instead of keeping rows that predate the change. 2026-09-26:
    Team gained joined / last seen / on-off, and the owner's phone kept showing "never"
@@ -191,7 +191,8 @@ function loadLocal(){
   if (!db.loans) db.loans = {};
   if (!db.groups) db.groups = {};   // 63: and before the groups
   if (!db.gpapers) db.gpapers = {};
-  queue = lsGet(qKey(), []);
+  if (!db.mats) db.mats = {};   // 68: and before the material receipts
+  queue =lsGet(qKey(), []);
   notices = lsGet(nKey(), []);
 }
 function saveLocal(){
@@ -336,7 +337,7 @@ async function pull(){
   const busy = new Set(queue.flatMap(o => o.touches));
   const before = {bookings: {...db.bookings}, customers: {...db.customers}, jobs: {...db.jobs}};
   if (db.cursor === null){           // a full copy: anything not in it is gone
-    for (const k of ['bookings', 'customers', 'jobs', 'team', 'checkins', 'payslips', 'loans', 'groups', 'gpapers'])
+    for (const k of ['bookings', 'customers', 'jobs', 'team', 'checkins', 'payslips', 'loans', 'groups', 'gpapers', 'mats'])
       for (const id of Object.keys(db[k])) if (!busy.has(id)) delete db[k][id];
   }
   // 46: a work photo taken off a job, or a deleted job's photos, leave this phone too
@@ -375,6 +376,9 @@ async function pull(){
   for (const row of res.group_papers || []) if (!busy.has(row.id)) db.gpapers[row.id] = row;   // 64: by the pair's id
   for (const id of res.removed_group_papers || []) if (!busy.has(id)) delete db.gpapers[id];   // 65
   for (const id of res.removed_groups || []) if (!busy.has(id)) delete db.groups[id];
+  // 68: the material receipts (the office only). shortcut: a deleted job's receipts stay on this
+  // phone, on no paper and in no list, until the next full copy — no tombstone for them
+  for (const row of res.material_receipts || []) if (!busy.has(row.id)) db.mats[row.id] = row;
   if (res.checkin_rules && !queue.some(o => o.fn === 'set_checkin_rule')) db.checkinRules = res.checkin_rules;
   if (res.seen) db.seen = res.seen;   // 56: everybody's last heartbeat (admin only)
   if (res.places) db.places = res.places;   // 58: the users map, and who was asked (admin only)
@@ -385,8 +389,10 @@ async function pull(){
   if (res.settings){   // the shop's own settings (admin only)
     // the page photos: not while a change to them is still on its way (the appliance race, 27)
     const keep = queue.some(o => o.fn === 'set_page_photos') && db.settings ? db.settings.page_photos : undefined;
+    const mkeep = queue.some(o => o.fn === 'save_materials') && db.settings ? db.settings.materials : undefined;   // 68: the same
     db.settings = res.settings;
     if (keep !== undefined) db.settings.page_photos = keep;
+    if (mkeep !== undefined) db.settings.materials = mkeep;
   }
   // the price list, sent whole (admin only) — not while a change or a new order is on its way (54)
   if (res.services && !queue.some(o => o.fn === 'save_service' || (o.fn === 'set_order' && o.args.p_what === 'services'))) db.services = res.services;
@@ -2144,6 +2150,7 @@ function panelBooking(p){
       ${b.status === 'new' || b.quote ? menuRow('quote', b.id, '📄', 'Quotation', b.quote
         ? 'Saved ' + niceDate(manilaDay(b.quote.saved_at)) + ' · ' + peso(b.quote.total)
         : 'Make one to send — print it or save it as a PDF') : ''}
+      ${db.role !== 'admin' ? '' : b.status === 'new' ? matRows(null, b.id) : matsOf(null, b.id).map(matRow).join('')}
       ${menuRow('bookingstatus', b.id, ico('status'), 'Full status', 'As the customer sees it · Copy summary')}
       ${db.role === 'admin' ? menuRow('delbooking', b.id, '🗑️', 'Delete this booking', (job ? 'With its job. ' : '') + 'You will be warned first.', 'is-danger') : ''}
     </div>
@@ -2609,6 +2616,7 @@ function panelJob(p){
       ${menuRow('price', j.id, '₱', j.price != null ? 'Change the price' : 'Set the price', j.price != null ? peso(j.price) : 'Not set yet')}
       ${quoteRow}
       ${billRow}
+      ${matRows(j.id, j.booking_id)}
       ${reportRow}
       ${signRow}
       ${custOf(j.customer_id) ? menuRow('customer', j.customer_id, '👤', 'History & Checkup', c.full_name) : ''}
@@ -3734,12 +3742,12 @@ function drawAdminTab(){
   // 54: one tab where Services & prices, Appliances and Specs were
   const secs = [['appliances', 'Appliances & services'], ['closed', 'Closed days'], ['shop', 'Shop'],
     ['photos', 'Page photos'], ['quote', 'Quotation'], ['billing', 'Billing statement'], ['report', 'Service report'], ['texts', 'Texts'], ['job', 'Job'],
-    ['payslip', 'Payslip'], ['checkin', 'Check-in'], ['groups', 'Groups'], ['numbers', 'Numbers']];   // job: 41, checkin: 56, report: 57, payslip: 60, groups: 63
+    ['payslip', 'Payslip'], ['checkin', 'Check-in'], ['groups', 'Groups'], ['materials', 'Materials'], ['numbers', 'Numbers']];   // job: 41, checkin: 56, report: 57, payslip: 60, groups: 63, materials: 68
   const v = secs.some(x => x[0] === ui.adminSec) ? ui.adminSec : 'appliances';
   return chips('adminsec', secs.map(([k, t]) => [k, t]), v) +
     ({appliances: drawAppliances, closed: drawClosed, shop: drawShop, photos: drawPagePhotos, billing: drawBillSample, quote: drawQuoteAdmin,
       report: drawReportAdmin, payslip: drawPayslipAdmin, texts: drawTexts, job: drawJobMover, checkin: drawCheckinAdmin, numbers: drawNumbers,
-      groups: drawGroupsAdmin})[v]();
+      groups: drawGroupsAdmin, materials: drawMaterialsAdmin})[v]();
 }
 /* Admin → Check-in (56): the office's switch. Off: a tap is enough and the phone never asks
    where it is. (The picture's switch comes with the picture.) */
@@ -4298,6 +4306,20 @@ function qtTotal(lines){
   const a = lines.map(qtAmount);
   return a.length && a.every(x => x != null) ? Math.round(a.reduce((s, x) => s + x, 0) * 100) / 100 : null;
 }
+/* The discount (67): {pct} or {amount}, as the server's quote_less — a percent rounded to the
+   centavo in whole numbers (no float drift), an amount never more than there is. */
+const qtLess = (sub, d) => sub == null || !d ? 0 : d.pct != null
+  ? Math.round(Math.round(sub * 100) * Math.round(d.pct * 100) / 10000) / 100 : Math.min(Number(d.amount) || 0, sub);
+// what is due: the lines' total, less the discount
+const qtDue = q => { const s = qtTotal(q.lines); return s == null ? null : Math.round((s - qtLess(s, q.discount)) * 100) / 100; };
+const qtLessWord = d => 'Less: Discount' + (d.pct != null ? ' (' + qtNum(d.pct) + '%)' : '');
+// the paper's Subtotal and Less: Discount rows, above its TOTAL — none without a discount
+function qtLessRows(q, span){
+  const s = qtTotal(q.lines);
+  if (!q.discount || s == null) return '';
+  return `<tr><td colspan="${span}" class="qt-r">Subtotal</td><td class="qt-r">PHP ${esc(qtMoney(s))}</td></tr>
+    <tr><td colspan="${span}" class="qt-r">${esc(qtLessWord(q.discount))}</td><td class="qt-r">− PHP ${esc(qtMoney(qtLess(s, q.discount)))}</td></tr>`;
+}
 /* q: {date, to_address, salutation, subject, lines: [{text, qty, price}], note, sample} with
    numbers (or null) in qty and price. */
 const qtLongDate = ymd => ymd ? new Date(ymd + 'T00:00:00').toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}) : '';
@@ -4316,7 +4338,7 @@ function qtHeadHtml(s){
 }
 function quoteHtml(q){
   if (q.bill) return billHtml(q);
-  const s = quoteShop(), sig = quoteSig(), total = qtTotal(q.lines);
+  const s = quoteShop(), sig = quoteSig(), total = qtDue(q);
   const longDate = qtLongDate;
   const note = String(q.note || '').split('\n').filter(x => x.trim());
   return `<div class="quote">
@@ -4333,7 +4355,7 @@ function quoteHtml(q){
       <thead><tr><th>Supply of Labor, Materials and Services</th><th style="width:9%">Qty.</th><th style="width:14%">Unit Price</th><th style="width:19%">Amount</th></tr></thead>
       <tbody>${q.lines.map(l => `<tr><td>${esc(l.text || '')}</td><td class="qt-c">${l.qty != null ? esc(String(l.qty)) : '—'}</td>
         <td class="qt-c">${l.price != null ? esc(qtNum(l.price)) : '—'}</td><td class="qt-r">${qtAmount(l) != null ? esc(qtMoney(qtAmount(l))) : '—'}</td></tr>`).join('')}</tbody>
-      <tfoot><tr class="qt-tot"><td colspan="3" class="qt-c">TOTAL</td><td class="qt-r">${total != null ? 'PHP ' + esc(qtMoney(total)) : '—'}</td></tr></tfoot>
+      <tfoot>${qtLessRows(q, 3)}<tr class="qt-tot"><td colspan="3" class="qt-c">TOTAL</td><td class="qt-r">${total != null ? 'PHP ' + esc(qtMoney(total)) : '—'}</td></tr></tfoot>
     </table>
     ${note.length ? `<div class="qt-note">Note:<ul>${note.map(x => `<li${/^\s/.test(x) ? ' class="qt-in"' : ''}>${esc(x.trim())}</li>`).join('')}</ul></div>` : ''}
     <p class="qt-p">We strive to satisfy our clients to the best of our abilities and we hope you'll find our proposal suitable to your
@@ -4353,7 +4375,7 @@ function quoteHtml(q){
    letterhead, table, note and signature; q.bill carries what the job says (billMeta). Not an
    official receipt until the BIR question is answered. */
 function billHtml(q){
-  const s = quoteShop(), sig = quoteSig(), total = qtTotal(q.lines), m = q.bill;
+  const s = quoteShop(), sig = quoteSig(), total = qtDue(q), m = q.bill;
   return `<div class="quote bill">
     ${q.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
     ${qtHeadHtml(s)}
@@ -4375,7 +4397,7 @@ function billHtml(q){
       <thead><tr><th style="width:6%">#</th><th>Description of Labor, Materials and Services</th><th style="width:9%">Qty.</th><th style="width:14%">Unit Price</th><th style="width:19%">Amount</th></tr></thead>
       <tbody>${q.lines.map((l, i) => `<tr><td class="qt-c">${i + 1}</td><td>${esc(l.text || '')}</td><td class="qt-c">${l.qty != null ? esc(String(l.qty)) : '—'}</td>
         <td class="qt-c">${l.price != null ? esc(qtNum(l.price)) : '—'}</td><td class="qt-r">${qtAmount(l) != null ? esc(qtMoney(qtAmount(l))) : '—'}</td></tr>`).join('')}</tbody>
-      <tfoot><tr class="qt-tot"><td colspan="4" class="qt-r">TOTAL AMOUNT DUE</td><td class="qt-r">${total != null ? 'PHP ' + esc(qtMoney(total)) : '—'}</td></tr></tfoot>
+      <tfoot>${qtLessRows(q, 4)}<tr class="qt-tot"><td colspan="4" class="qt-r">TOTAL AMOUNT DUE</td><td class="qt-r">${total != null ? 'PHP ' + esc(qtMoney(total)) : '—'}</td></tr></tfoot>
     </table>
     ${blPayHtml(m)}
     ${qtNoteHtml(q)}
@@ -4744,6 +4766,185 @@ function groupPickHtml(p){
     || empty('No customer found.');
 }
 
+/* ---------------------------------------------------------------- the material receipt (68)
+   The owner, 2026-11-19: the materials of a job — a solar setup, an aircon's parts — each at his
+   cost with his own % and + on top, never shown; the paper shows the price, rounded UP to the
+   peso. A receipt on a job or a booking is one line on its papers: its title and its total. One
+   with no customer is his calculator. The office only: pull sends neither to anyone else. */
+// cost × (1 + % / 100) + add, in whole centavos × 100 so a float never tips 110.00 to 111
+const matUnit = it => Math.ceil((Math.round(it.cost * 100) * (10000 + Math.round((it.pct || 0) * 100)) + Math.round((it.add || 0) * 100) * 10000) / 1e6);
+/* Typed → numbers: null where a box cannot be read; an empty % or + is 0. */
+function matView(pm){
+  const items = pm.items.map(it => {
+    const qty = /^\d{1,4}$/.test(String(it.qty).trim()) && Number(it.qty) >= 1 ? Number(it.qty) : null;
+    const t = String(it.pct || '').trim().replace(/%$/, ''), pct = !t ? 0 : /^\d{1,4}(\.\d{1,2})?$/.test(t) && Number(t) <= 1000 ? Number(t) : null;
+    const cost = parsePrice(it.cost), add = String(it.add || '').trim() ? parsePrice(it.add) : 0;
+    const v = {name: String(it.name || '').trim(), qty, cost, pct, add};
+    return {...v, unit: cost != null && pct != null && add != null ? matUnit(v) : null};
+  });
+  const total = items.every(it => it.unit != null && it.qty != null) ? items.reduce((s, it) => s + it.unit * it.qty, 0) : null;
+  return {title: String(pm.title || '').trim(), items, total};
+}
+// the server's material_clean, with its words, so a refused save never sits as "Not sent"
+function matCheck(pm, list){
+  const v = matView(list ? {items: pm.items.map(it => ({...it, qty: '1'}))} : pm);
+  if (!list && !v.title) return {bad: 'Give the receipt a title.'};
+  if (!list && !v.items.length) return {bad: 'Add at least one item.'};
+  for (let i = 0; i < v.items.length; i++){
+    const it = v.items[i], n = 'Item ' + (i + 1);
+    if (!it.name) return {bad: n + ' needs its name.'};
+    if (it.qty == null) return {bad: n + ': Qty is a whole number, 1 to 9999.'};
+    if (it.cost == null) return {bad: n + ': type the cost in numbers, like 1000 or 1,000.50.'};
+    if (it.pct == null) return {bad: n + ': the % is a number from 0 to 1000, like 25.'};
+    if (it.add == null) return {bad: n + ': type the + in numbers, like 250.'};
+  }
+  if (v.total > 99999999) return {bad: 'The total is too big.'};
+  return {v};
+}
+const matsAll = () => Object.values(db.mats || {}).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+// a job's own receipts and its booking's — they go on the job's papers too
+const matsOf = (jid, bid) => matsAll().filter(m => (jid && m.job_id === jid) || (bid && m.booking_id === bid));
+const matLines = (jid, bid) => matsOf(jid, bid).filter(m => !m.removed_at)
+  .map(m => ({text: m.title, qty: 1, price: Number(m.total), m: m.id}));
+// a quotation's receipt lines as the office's phone knows them; null elsewhere (a technician keeps the saved ones)
+const matLinesFor = src => db.role !== 'admin' ? null : src.job ? matLines(src.row.id, src.row.booking_id) : matLines(null, src.row.id);
+/* The server's material_follow, here, so the papers are right before the next pull. */
+function matFollow(jid, bid){
+  const j = (jid && db.jobs[jid]) || (bid && Object.values(db.jobs).find(x => x.booking_id === bid)) || null;
+  const bk = bid || (j && j.booking_id), m = matLines(j && j.id, bk), b = bk && db.bookings[bk];
+  const put = (q, before) => { const lines = (before || []).concat(q.lines.filter(l => !l.r && !l.m), m);
+    return {...q, lines, total: qtDue({lines, discount: q.discount}) ?? 0}; };
+  if (b && b.quote) b.quote = put(b.quote);
+  if (!j) return;
+  if (j.quote && ['booked', 'scheduled', 'in_progress'].includes(j.status)) j.quote = put(j.quote);
+  const r = reportLines(j);
+  if (j.billing && j.status !== 'cancelled') j.billing = put(j.billing, r);
+  const q = j.quote || (bookingOfJob(j) || {}).quote;
+  j.price = j.billing ? j.billing.total : r.length ? qtTotal(r.concat(m)) : q ? q.total : j.price;
+  payFollow(j);
+}
+const matSub = m => (m.job_id || m.booking_id ? 'Material receipt · ' : '') + (m.removed_at ? 'Taken off — open it to bring it back'
+  : peso(m.total) + ' · ' + m.items.length + ' item' + (m.items.length === 1 ? '' : 's'));
+const matRow = m => menuRow('matrec', m.id, '🧱', m.title, matSub(m));
+// the job's (or the booking's) receipts on its menu, and a new one: "job:<id>" / "booking:<id>"
+const matRows = (jid, bid) => matsOf(jid, bid).map(matRow).join('')
+  + menuRow('matrec', jid ? 'job:' + jid : 'booking:' + bid, '＋', 'Material receipt', 'Materials and their prices — the total goes on the quotation');
+const matList = () => ((db.settings || {}).materials || {}).items || [];
+/* Admin → Materials: his list to pick from, and the receipts with no customer. */
+function drawMaterialsAdmin(){
+  const n = matList().length, blank = matsAll().filter(m => !m.job_id && !m.booking_id);
+  const live = blank.filter(m => !m.removed_at), off = blank.filter(m => m.removed_at);
+  return `<p class="hint">Only the office sees the cost, the % and the +. The paper shows the price, rounded up to the peso.</p>
+    <div class="menu">${menuRow('matlist', '', '📋', 'Materials list', n ? n + ' item' + (n === 1 ? '' : 's') + ' to pick from' : 'Empty — add what you buy often')}</div>
+    <div class="sec">Receipts with no customer</div>
+    <div class="actions"><button type="button" class="b primary" data-act="open" data-kind="matrec" data-id="">＋ New receipt</button></div>
+    ${live.length ? `<div class="menu">${live.map(matRow).join('')}</div>` : empty('None yet. A receipt for a job is made on the job.')}
+    ${off.length ? `<div class="sec">Taken off</div><div class="menu">${off.map(matRow).join('')}</div>` : ''}`;
+}
+/* One item's boxes: the receipt's (Qty) and the list's (no Qty). */
+function matItemHtml(it, i, list){
+  const box = (k, label, unit, ph) => `<label>${label} <span class="peso-in">${unit === '₱' ? '<i>₱</i>' : ''}<input data-mi="${i}:${k}" inputmode="decimal" maxlength="14" value="${esc(it[k] || '')}" placeholder="${ph}">${unit === '%' ? '<i>%</i>' : ''}</span></label>`;
+  return `<div class="qt-line">
+    <div class="mt-name"><label>Item <input data-mi="${i}:name" maxlength="80" value="${esc(it.name)}" placeholder="Battery 100Ah" autocomplete="off"></label>
+      <button type="button" class="b danger" data-act="matitem" data-v="del" data-i="${i}" aria-label="Remove item ${i + 1}">✕</button></div>
+    <div class="mt-nums">${list ? '' : `<label>Qty <input data-mi="${i}:qty" inputmode="numeric" maxlength="4" value="${esc(it.qty)}"></label>`}
+      ${box('cost', 'Cost', '₱', '—')}${box('pct', 'Add', '%', '0')}${box('add', 'Plus', '₱', '0')}</div>
+    <div class="mt-price" id="mtP${i}">${esc(matPriceWords(it, list))}</div></div>`;
+}
+function matPriceWords(it, list){
+  const [v] = matView({items: [{...it, qty: list ? '1' : it.qty}]}).items;
+  if (v.unit == null) return 'Price —';
+  return 'Price ' + peso(v.unit) + (list || v.qty == null ? '' : ' × ' + v.qty + ' = ' + peso(v.unit * v.qty));
+}
+function panelMatList(p){
+  if (!p._init) Object.assign(p, {_init: true, m: {items: matList().map(it => ({id: it.id, name: it.name, cost: String(it.cost),
+    pct: Number(it.pct) ? String(it.pct) : '', add: Number(it.add) ? String(it.add) : ''}))}});
+  return {title: 'Materials list', sub: 'Picked from on a material receipt', body: `
+    <p class="hint">The cost, the % and the + on top: a receipt takes them when an item is picked, and they can still be changed there.</p>
+    ${p.m.items.map((it, i) => matItemHtml(it, i, true)).join('') || empty('No items yet.')}
+    <div class="actions"><button type="button" class="b" data-act="matitem" data-v="add">+ Add an item</button></div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="matsavelist">Save the list</button></div>`};
+}
+/* The receipt: p.id is its id, or "job:<id>" / "booking:<id>" / "" for a new one there. */
+function panelMatRec(p){
+  if (!p._init){
+    const m = db.mats[p.id], [k, pid] = m ? [] : String(p.id || '').split(':');
+    Object.assign(p, {_init: true, mid: m ? m.id : uuid(), job: m ? m.job_id : k === 'job' ? pid : null, booking: m ? m.booking_id : k === 'booking' ? pid : null,
+      m: m ? {title: m.title, items: m.items.map(it => ({name: it.name, qty: String(it.qty), cost: String(it.cost),
+        pct: Number(it.pct) ? String(it.pct) : '', add: Number(it.add) ? String(it.add) : ''}))}
+        : {title: '', items: [{name: '', qty: '1', cost: '', pct: '', add: ''}]}});
+  }
+  const m = db.mats[p.mid], list = matList(), to = matTo(p);
+  return {title: 'Material receipt', sub: to || 'No customer — a calculator', body: `
+    ${paperBox(matHtml(p), 'matPreview')}
+    <p class="hint">${m ? esc('Saved ' + timeAgo(m.updated_at || m.created_at)) + unsentPill(m.id) : 'Not saved yet'}. ${p.job || p.booking
+      ? 'Its title and total are one line on the ' + (p.job ? 'job’s quotation and billing statement' : 'booking’s quotation') + '.' : 'It is on no paper.'}</p>
+    <label>Title <input data-mf="title" maxlength="80" value="${esc(p.m.title)}" placeholder="Solar setup — 5 kW" autocomplete="off"></label>
+    ${p.m.items.map((it, i) => matItemHtml(it, i, false)).join('')}
+    <div id="matTotal" class="qt-total">${esc(matTotalWords(p))}</div>
+    <div class="actions"><button type="button" class="b" data-act="matitem" data-v="add">+ Add an item</button>
+      ${list.length ? `<select data-matpick aria-label="Add an item from the materials list"><option value="">＋ From the list…</option>${list.map(it =>
+        `<option value="${esc(it.id)}">${esc(it.name)} — ${esc(peso(matUnit(it)))}</option>`).join('')}</select>` : ''}</div>
+    <div class="stack"><button type="button" class="b primary wide" data-act="matsave">Save the receipt</button>
+      <button type="button" class="b wide" data-act="matprint">🖨️ Print or save as PDF</button>
+      <button type="button" class="b wide" data-act="matshare">📤 Send as PDF — Messenger, email…</button>
+      ${!m ? '' : m.removed_at ? '<button type="button" class="b wide" data-act="matoff" data-v="back">Bring it back</button>'
+        : `<button type="button" class="b danger wide" data-act="matoff" data-v="off">Take it off${p.job || p.booking ? ' — its line leaves the papers' : ''}</button>`}</div>`};
+}
+const matTo = p => { const j = p.job && db.jobs[p.job], b = p.booking && db.bookings[p.booking];
+  return j ? jobCust(j).full_name || 'Job' : b ? b.full_name + ' · ' + b.ref : ''; };
+function matTotalWords(p){
+  const v = matView(p.m);
+  if (v.total != null) return 'TOTAL ' + peso(v.total);
+  return p.m.items.some(it => !String(it.cost).trim()) ? 'TOTAL — type each item’s cost' : 'TOTAL — a box cannot be read';
+}
+/* The paper: the quotation's letterhead; the item, Qty, price and amount — never the cost. */
+function matHtml(p){
+  const v = matView(p.m), m = db.mats[p.mid], to = matTo(p);
+  return `<div class="quote bill">
+    ${qtHeadHtml(quoteShop())}
+    <div class="bl-title">MATERIAL RECEIPT</div>
+    <div class="bl-meta"><div>${to ? `<div class="bl-label">For</div><b>${esc(to)}</b>` : ''}</div>
+      <table class="bl-facts"><tr><td>Date</td><td>${esc(qtLongDate(m ? manilaDay(m.updated_at || m.created_at) : manilaDate(0)))}</td></tr></table></div>
+    <div class="qt-subj">${esc(v.title)}</div>
+    <table class="qt-table">
+      <thead><tr><th style="width:6%">#</th><th>Item</th><th style="width:9%">Qty.</th><th style="width:14%">Unit Price</th><th style="width:19%">Amount</th></tr></thead>
+      <tbody>${v.items.map((it, i) => `<tr><td class="qt-c">${i + 1}</td><td>${esc(it.name)}</td><td class="qt-c">${it.qty != null ? esc(qtNum(it.qty)) : '—'}</td>
+        <td class="qt-c">${it.unit != null ? esc(qtNum(it.unit)) : '—'}</td><td class="qt-r">${it.unit != null && it.qty != null ? esc(qtMoney(it.unit * it.qty)) : '—'}</td></tr>`).join('')}</tbody>
+      <tfoot><tr class="qt-tot"><td colspan="4" class="qt-r">TOTAL</td><td class="qt-r">${v.total != null ? 'PHP ' + esc(qtMoney(v.total)) : '—'}</td></tr></tfoot>
+    </table></div>`;
+}
+function drawMatPreview(p){
+  const w = $('#matPreview');
+  if (w) w.firstElementChild.innerHTML = matHtml(p);
+  const t = $('#matTotal'); if (t) t.textContent = matTotalWords(p);
+  p.m.items.forEach((it, i) => { const e = $('#mtP' + i); if (e) e.textContent = matPriceWords(it, p.kind === 'matlist'); });
+  fitQuotes();
+}
+// Save, Take off, Bring back: the server checks again and moves its line on the papers
+function matWrite(p, title, items, removed, word){
+  const m = db.mats[p.mid], v = m ? m.v : 0, total = items.reduce((s, it) => s + matUnit(it) * it.qty, 0);
+  // matFollow changes the job's booking and the booking's job too: a pull must not put them back
+  const bj = p.booking && Object.values(db.jobs).find(x => x.booking_id === p.booking);
+  const touches = [p.mid, p.job, p.booking, p.job && (db.jobs[p.job] || {}).booking_id, bj && bj.id].filter(Boolean);
+  write('save_material_receipt', {p_id: p.mid, p_job: p.job, p_booking: p.booking, p_title: title,
+    p_items: items.map(({name, qty, cost, pct, add}) => ({name, qty, cost, pct, add})), p_based_on: v, p_removed: removed},
+    'Material receipt — ' + title, touches, () => {
+      const now = new Date().toISOString();
+      db.mats[p.mid] = {...(m || {id: p.mid, job_id: p.job, booking_id: p.booking, created_at: now}), title, total, v: v + 1, updated_at: now,
+        items: items.map(it => ({...it, unit: matUnit(it)})), removed_at: removed ? (m && m.removed_at) || now : null};
+      if (p.job || p.booking) matFollow(p.job, p.booking);
+    });
+  toast(word + (p.job || p.booking ? removed ? ' Its line left the papers.' : ' Its line on the papers: ' + peso(total) + '.' : ''));
+}
+
+// what is on the paper is what is saved, as the quotation's: a changed one saves first
+function matPaper(share){
+  const p = topPanel(); if (!p || p.kind !== 'matrec') return;
+  if ((p.dirty || !db.mats[p.mid]) && !ACTIONS.matsave()) return;
+  printHtml(matHtml(p), 'Material receipt ' + matView(p.m).title + (matTo(p) ? ' ' + matTo(p) : ''), share);
+}
+
 /* ---------------------------------------------------------------- the customer's signature (47)
    Guile, 2026-10-11: the customer signs the job's billing statement and its quotation — drawn
    on the phone, or a picture of it on white paper, cropped. The office or a technician takes
@@ -4905,10 +5106,12 @@ function billFollow(j, was){
   if (j.billing){
     const fromQuote = l => !was.length && now.length && ((q && q.lines) || []).some(k => k.text === l.text && Number(k.qty) === Number(l.qty) && Number(k.price) === Number(l.price));
     const lines = now.concat(j.billing.lines.filter(l => !l.r && !fromQuote(l)));
-    j.billing = lines.length ? {...j.billing, lines, total: qtTotal(lines)} : null;
+    j.billing = lines.length ? {...j.billing, lines, total: qtDue({lines, discount: j.billing.discount})} : null;   // 67
   }
   if (db.role !== 'admin' && !seesPrice()) return;   // this phone holds no job price: it stays that way
-  j.price = j.billing ? j.billing.total : now.length ? qtTotal(now) : q ? q.total : null;
+  // 68: with the receipts' lines. shortcut: a technician's phone has no receipts, so its price
+  // leaves them out until the next pull brings the server's
+  j.price = j.billing ? j.billing.total : now.length ? qtTotal(now.concat(matLines(j.id, j.booking_id))) : q ? q.total : null;
   payFollow(j);
 }
 /* Guile's client, 2026-11-04: the model, serial and Work Done typed on the job's aircon after its
@@ -5335,14 +5538,18 @@ function quoteSrc(p){
 }
 /* What the screen edits: strings, as typed. */
 function quoteStart(src){
-  const q = src.start, typed = l => ({text: l.text, qty: String(l.qty), price: String(l.price), ...(l.r ? {r: l.r} : {})});
+  const q = src.start, typed = l => ({text: l.text, qty: String(l.qty), price: String(l.price), ...(l.r ? {r: l.r} : {}), ...(l.m ? {m: l.m} : {})});
+  // 68: the material receipts' lines as they are now, last (the office's phone; elsewhere the saved ones)
+  const ml = matLinesFor(src), withMat = ls => ml ? ls.filter(l => !l.m).concat(ml.map(typed)) : ls;
+  // the discount (67) as typed: the number, and whether it is a percent
+  const d = (q && q.discount) || {}, disc = {disc: d.pct != null ? String(d.pct) : d.amount != null ? String(d.amount) : '', disc_pct: d.pct != null};
   // a billing statement taken from the quotation is dated the day it is made (45)
   const date = q && !(src.bill && !src.saved) ? q.date : manilaDate(0);
   // 61: reports replace the quotation: their lines, then what the office typed on the statement
   const rl = src.bill ? reportLines(src.row) : [];
   const own = rl.length ? rl.concat(((src.saved || {}).lines || []).filter(l => !l.r)) : null;
   if (q) return {date, to_address: q.to_address || '', salutation: q.salutation || '', subject: q.subject || '',
-    note: q.note || '', lines: (own || q.lines || []).map(typed)};
+    note: q.note || '', lines: withMat((own || q.lines || []).map(typed)), ...disc};
   const set = db.settings || {}, lines = own ? own.map(typed) : quoteLinesFrom(src.units);
   // no quotation to start from: the price list's lines, and the job's own price where it differs
   if (src.bill && !own && src.row.price != null){
@@ -5352,14 +5559,24 @@ function quoteStart(src){
   }
   return {date, to_address: src.address, salutation: 'Dear ' + src.name + ',',
     subject: 'ACU ' + unionServices(src.units).map(svcLabel).join(' & ').toUpperCase(),
-    note: set.quote_note != null ? set.quote_note : QUOTE_NOTE, lines};
+    note: set.quote_note != null ? set.quote_note : QUOTE_NOTE, lines: withMat(lines), ...disc};
 }
 /* The page as drawn: the typed copy, and for a billing statement what the job says. */
 const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMeta(src.row) : null,
   csig: src && src.job ? custSig(src.row, src.bill ? 'bill' : 'quote') : null});   // the customer's signature (47)
 /* Typed → drawn: a price that cannot be read shows as — (and Save refuses it). */
 const quoteView = pq => ({...pq, lines: pq.lines.map(l => ({text: l.text,
-  qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price), ...(l.r ? {r: l.r} : {})}))});
+  qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price), ...(l.r ? {r: l.r} : {}), ...(l.m ? {m: l.m} : {})})),
+  ...qtDiscOf(pq)});
+/* The typed discount (67): {discount} when it reads, {discBad} when it does not, nothing when empty.
+   A percent is above 0, up to 100, two decimals at most; an amount is a price above 0. */
+function qtDiscOf(pq){
+  const raw = String(pq.disc || '').trim(), t = raw.replace(/%$/, '');
+  if (!t) return {discount: null};
+  if (!pq.disc_pct && t !== raw) return {discount: null, discBad: true};   // "10%" with ₱ picked: never ₱10
+  const n = pq.disc_pct ? (/^\d{1,3}(\.\d{1,2})?$/.test(t) ? Number(t) : null) : parsePrice(t);
+  return n > 0 && (!pq.disc_pct || n <= 100) ? {discount: pq.disc_pct ? {pct: n} : {amount: n}} : {discount: null, discBad: true};
+}
 function quoteCheck(pq){
   const v = quoteView(pq);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(pq.date || '')) return {bad: 'Choose the date.'};
@@ -5372,8 +5589,11 @@ function quoteCheck(pq){
     if (l.price == null) return {bad: n + ': type the unit price in numbers, like 9500 or 9,500.50.'};
   }
   if (qtTotal(v.lines) > 99999999) return {bad: 'The total is too big.'};
+  if (v.discBad) return {bad: pq.disc_pct ? 'The discount is a percent from 0.01 to 100, like 10.' : 'Type the discount in numbers, like 500 or 1,500.50 — or tap % for a percent.'};
+  if (v.discount && v.discount.amount > qtTotal(v.lines)) return {bad: 'The discount is more than the total.'};
   return {q: {date: pq.date, to_address: pq.to_address.trim(), salutation: pq.salutation.trim(), subject: pq.subject.trim(),
-    note: pq.note, lines: v.lines.map(l => ({text: l.text.trim(), qty: l.qty, price: l.price, ...(l.r ? {r: l.r} : {})}))}};
+    note: pq.note, lines: v.lines.map(l => ({text: l.text.trim(), qty: l.qty, price: l.price, ...(l.r ? {r: l.r} : {}), ...(l.m ? {m: l.m} : {})})),
+    ...(v.discount ? {discount: v.discount} : {})}};
 }
 function panelQuote(p){
   const src = quoteSrc(p), bill = p.kind === 'jobbill';
@@ -5393,7 +5613,6 @@ function panelQuote(p){
     <p class="hint">${said}. ${bill ? (db.role === 'admin' ? 'The job is cancelled: nothing to bill.' : 'Only the office changes it.')
       : db.role !== 'admin' ? 'Only the office changes it.' : `The ${src.job ? 'job' : 'booking'} is ${esc(src.state)}, so the quotation stays as it was.`}</p>
     <div class="stack">${printBtn}</div>`};
-  const tot = qtTotal(quoteView(p.q).lines);
   const priceHint = !src.job ? '' : !bill && reportLines(src.row).length
     ? '<p class="hint">The job’s price comes from its service reports now, so this quotation does not change it.</p>'
     : `<p class="hint">Saving it makes the job’s price its TOTAL${src.row.price != null ? ' (now ' + esc(peso(src.row.price)) + ')' : ''}.</p>`;
@@ -5405,14 +5624,18 @@ function panelQuote(p){
     <label>Greeting <input data-qf="salutation" maxlength="160" value="${esc(p.q.salutation)}" autocomplete="off"></label>
     <label>Subject <input data-qf="subject" maxlength="150" value="${esc(p.q.subject)}" autocomplete="off"></label>
     <div class="fieldlabel">${bill ? 'Labor, materials and services — add the extra work: piping, wires, parts' : 'Supply of Labor, Materials and Services'}</div>
-    ${p.q.lines.map((l, i) => l.r ? `<div class="qt-line rp-line"><span>${esc(l.text)}</span><b>${esc(peso(l.price))}</b>
-      <small>Change it on the service report.</small></div>` : `<div class="qt-line">
+    ${p.q.lines.map((l, i) => l.r || l.m ? `<div class="qt-line rp-line"><span>${esc(l.text)}</span><b>${esc(peso(l.price))}</b>
+      <small>Change it on the ${l.r ? 'service report' : 'material receipt'}.</small></div>` : `<div class="qt-line">
       <textarea data-ql="${i}:text" rows="2" maxlength="200" aria-label="Line ${i + 1}">${esc(l.text)}</textarea>
       <div class="qt-nums"><label class="qty">Qty <input data-ql="${i}:qty" inputmode="numeric" maxlength="3" value="${esc(l.qty)}"></label>
         <label>Unit price <span class="peso-in"><i>₱</i><input data-ql="${i}:price" inputmode="decimal" maxlength="14" value="${esc(l.price)}" placeholder="—"></span></label>
         <button type="button" class="b danger" data-act="qtline" data-v="del" data-i="${i}" aria-label="Remove line ${i + 1}">✕</button></div>
     </div>`).join('')}
-    <div id="qtTotal" class="qt-total">${tot != null ? 'TOTAL ' + esc(peso(tot)) : 'TOTAL — a price is missing'}</div>
+    <div class="qt-disc"><label>Discount <span class="opt">— optional</span>
+        <span class="peso-in"><i>${p.q.disc_pct ? '%' : '₱'}</i><input data-qf="disc" inputmode="decimal" maxlength="14" value="${esc(p.q.disc || '')}" placeholder="none"></span></label>
+      <div class="segment mini" role="group" aria-label="Discount in pesos or percent">${[['0', '₱'], ['1', '%']].map(([v, l]) =>
+        `<button type="button" class="${!!p.q.disc_pct === (v === '1') ? 'active' : ''}" data-act="qtdisc" data-v="${v}" aria-pressed="${!!p.q.disc_pct === (v === '1')}">${l}</button>`).join('')}</div></div>
+    <div id="qtTotal" class="qt-total">${esc(qtTotalWords(quoteView(p.q)))}</div>
     <div class="actions"><button type="button" class="b" data-act="qtline" data-v="add">+ Add a line</button>
       <button type="button" class="b" data-act="qtfill">↺ Lines from the ${bill ? 'job' : 'booking'}</button></div>
     <label>Note <span class="opt">— one point per line; start a line with a space to indent it</span>
@@ -5425,9 +5648,17 @@ function panelQuote(p){
 function drawQuotePreview(p){
   const w = $('#quotePreview');
   if (w) w.firstElementChild.innerHTML = quoteHtml(docView(p, quoteSrc(p)));
-  const t = $('#qtTotal'), tot = qtTotal(quoteView(p.q).lines);
-  if (t) t.textContent = tot != null ? 'TOTAL ' + peso(tot) : 'TOTAL — a price is missing';
+  const t = $('#qtTotal');
+  if (t) t.textContent = qtTotalWords(quoteView(p.q));
   fitQuotes();
+}
+// the line under the editor's lines: the TOTAL, and with a discount what it came from (67)
+function qtTotalWords(v){
+  const s = qtTotal(v.lines);
+  if (s == null) return 'TOTAL — a price is missing';
+  if (v.discBad) return 'TOTAL ' + peso(s) + ' — the discount cannot be read';
+  if (v.discount && v.discount.amount > s) return 'TOTAL ' + peso(s) + ' — the discount is more than the total';
+  return (v.discount ? peso(s) + ' − ' + peso(qtLess(s, v.discount)) + ' discount = ' : '') + 'TOTAL ' + peso(qtDue(v));
 }
 function quoteSample(){
   const set = db.settings || {}, ks = activeServiceKeys().slice(0, 2);
@@ -5633,7 +5864,7 @@ async function docxPic(src){   // {data, w, h} or null — a missing picture lea
   } catch (e) { return null; }
 }
 async function quoteDocx(q){
-  const s = quoteShop(), sigSrc = quoteSig(), total = qtTotal(q.lines);
+  const s = quoteShop(), sigSrc = quoteSig(), total = qtDue(q), sub = qtTotal(q.lines);
   const [logo, qr, sig, csig] = await Promise.all([docxPic('img/winter-air-logo.png'), docxPic('img/quote-qr.png'), sigSrc ? docxPic(sigSrc) : null,
     q.csig ? docxPic(q.csig.png) : null]);   // the customer's (47)
   const signedOn = q.csig ? qtLongDate(manilaDay(q.csig.at)) : '';
@@ -5669,6 +5900,10 @@ async function quoteDocx(q){
     ${cell(para(pic(qr, 0.95, 1.2), {after: 0, jc: 'right'}), 1800)}</w:tr></w:tbl>`;
   const W = [5900, 900, 1300, 1800];
   const tr = cells => `<w:tr>${cells.join('')}</w:tr>`;
+  // 67: Subtotal and Less: Discount above the TOTAL, as on the paper
+  const lessRows = (span, w) => !q.discount || sub == null ? '' : [['Subtotal', 'PHP ' + qtMoney(sub)],
+    [qtLessWord(q.discount), '− PHP ' + qtMoney(qtLess(sub, q.discount))]].map(([a, b]) =>
+    tr([cell(P(a, {jc: 'right', after: 0}), w, {span}), cell(P(b, {jc: 'right', after: 0}), 1800)])).join('');
   const items = `<w:tbl><w:tblPr><w:tblW w:w="9900" w:type="dxa"/>${lines}<w:tblLayout w:type="fixed"/></w:tblPr>
     <w:tblGrid>${W.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>
     ${tr([cell(P('Supply of Labor, Materials and Services', {b: true, after: 0}), W[0], {fill: 'D9E2F3'}), cell(P('Qty.', {b: true, jc: 'center', after: 0}), W[1], {fill: 'D9E2F3'}),
@@ -5676,6 +5911,7 @@ async function quoteDocx(q){
     ${q.lines.map(l => tr([cell(P(l.text || '', {after: 0}), W[0]), cell(P(l.qty != null ? String(l.qty) : '—', {jc: 'center', after: 0}), W[1]),
           cell(P(l.price != null ? qtNum(l.price) : '—', {jc: 'center', after: 0}), W[2]),
           cell(P(qtAmount(l) != null ? qtMoney(qtAmount(l)) : '—', {jc: 'right', after: 0}), W[3])])).join('')}
+    ${lessRows(3, W[0] + W[1] + W[2])}
     ${tr([cell(P('TOTAL', {b: true, jc: 'center', after: 0}), W[0] + W[1] + W[2], {span: 3}), cell(P(total != null ? 'PHP ' + qtMoney(total) : '—', {b: true, jc: 'right', after: 0}), W[3])])}
     </w:tbl>`;
   // the billing statement (45): the same letterhead, table and signature; its own words
@@ -5689,6 +5925,7 @@ async function quoteDocx(q){
     ${q.lines.map((l, i) => tr([cell(P(String(i + 1), {jc: 'center', after: 0}), 600), cell(P(l.text || '', {after: 0}), 5300),
           cell(P(l.qty != null ? String(l.qty) : '—', {jc: 'center', after: 0}), 900), cell(P(l.price != null ? qtNum(l.price) : '—', {jc: 'center', after: 0}), 1300),
           cell(P(qtAmount(l) != null ? qtMoney(qtAmount(l)) : '—', {jc: 'right', after: 0}), 1800)])).join('')}
+    ${lessRows(4, 8100)}
     ${tr([cell(P('TOTAL AMOUNT DUE', {b: true, jc: 'right', after: 0}), 8100, {span: 4}), cell(P(total != null ? 'PHP ' + qtMoney(total) : '—', {b: true, jc: 'right', after: 0}), 1800)])}
     </w:tbl>`;
   const body = m ? [head, P(''), P('BILLING STATEMENT', {b: true, sz: 30, jc: 'center', after: 200}),
@@ -7045,6 +7282,7 @@ const PANELS = {booking: panelBooking, reject: panelReject, job: panelJob, sched
   group: panelGroup, groupedit: panelGroupEdit, groupreport: panelGroupReport,   // 63
   groupperiod: panelGroupPeriod,   // 64
   groupsrs: panelGroupSrs, groupbls: panelGroupBls,
+  matrec: panelMatRec, matlist: panelMatList,   // 68
   payslip: panelPayslip, loans: panelLoans,   // 60
   askjob: panelAskJob, askanswer: panelAskAnswer,   // 49
   ...(window.FX_PANELS || {})};   // 50: name effects, web/namefx.js
@@ -7529,15 +7767,23 @@ const ACTIONS = {
   qtline: (id, el) => {
     const p = topPanel(); if (!p || !p.q) return;
     if (el.dataset.v === 'add'){
-      if (p.q.lines.filter(l => !l.r).length >= 30) return toast('A quotation has at most 30 lines.', true);
-      p.q.lines.push({text: '', qty: '1', price: ''});
+      if (p.q.lines.filter(l => !l.r && !l.m).length >= 30) return toast('A quotation has at most 30 lines.', true);
+      const at = p.q.lines.findIndex(l => l.m);   // 68: above the receipts' lines, where the server keeps it
+      p.q.lines.splice(at < 0 ? p.q.lines.length : at, 0, {text: '', qty: '1', price: ''});
     } else p.q.lines.splice(Number(el.dataset.i), 1);
+    p.dirty = true;
+    render();
+  },
+  // 67: the discount in pesos or percent; the number typed stays
+  qtdisc: (id, el) => {
+    const p = topPanel(); if (!p || !p.q) return;
+    p.q.disc_pct = el.dataset.v === '1';
     p.dirty = true;
     render();
   },
   qtfill: () => {
     const p = topPanel(), src = p && p.q && quoteSrc(p); if (!src) return;
-    p.q.lines = p.q.lines.filter(l => l.r).concat(quoteLinesFrom(src.units));   // 61: a report's lines stay
+    p.q.lines = p.q.lines.filter(l => l.r).concat(quoteLinesFrom(src.units), p.q.lines.filter(l => l.m));   // 61: a report's lines stay; 68: a receipt's
     p.dirty = true;
     render(); toast('The lines are the ' + (src.bill ? 'job' : 'booking') + '’s aircons again, at the price list’s prices.');
   },
@@ -7547,7 +7793,7 @@ const ACTIONS = {
     if (!src.open){ toast(src.bill ? 'Only the office changes the billing statement.' : 'This ' + (src.job ? 'job' : 'booking') + ' is ' + src.state + ': the quotation stays as it was.', true); return false; }
     const {q, bad} = quoteCheck(p.q);
     if (bad){ toast(bad + ' Nothing was saved.', true); return false; }
-    const row = src.row, v = (row[src.field] && row[src.field].v) || 0, total = qtTotal(q.lines);
+    const row = src.row, v = (row[src.field] && row[src.field].v) || 0, total = qtDue(q);   // 67: after the discount
     const sets = src.job && (src.bill || !reportLines(row).length);   // 61: with a priced report, a quotation sets no price
     // the billing statement goes through the quotation's own cleaner on the server (45)
     write(src.fn, {[src.arg]: row.id, [src.bill ? 'p_bill' : 'p_quote']: q, p_based_on: v}, Word + ' for ' + src.name, [row.id], () => {
@@ -7666,6 +7912,42 @@ const ACTIONS = {
       });
     p.payAsk = null; render();
     toast('Marked paid — ' + g.name + ', ' + word + '.' + (left.length ? ' Left unpaid, no price yet: ' + left.join(', ') + '.' : ''), !!left.length);
+  },
+  // ---- the material receipt (68)
+  matitem: (id, el) => {
+    const p = topPanel(); if (!p || !p.m) return;
+    if (el.dataset.v === 'add'){
+      if (p.m.items.length >= (p.kind === 'matlist' ? 500 : 100)) return toast('That is the most items it holds.', true);
+      p.m.items.push(p.kind === 'matlist' ? {id: uuid(), name: '', cost: '', pct: '', add: ''} : {name: '', qty: '1', cost: '', pct: '', add: ''});
+    } else p.m.items.splice(Number(el.dataset.i), 1);
+    p.dirty = true; render();
+  },
+  matsave: () => {
+    const p = topPanel(); if (!p || p.kind !== 'matrec') return false;
+    const {v, bad} = matCheck(p.m);
+    if (bad){ toast(bad + ' Nothing was saved.', true); return false; }
+    const m = db.mats[p.mid];
+    matWrite(p, v.title, v.items.map(({name, qty, cost, pct, add}) => ({name, qty, cost, pct, add})), false, m && m.removed_at ? 'Saved and brought back.' : 'Saved.');
+    p.dirty = false; render();
+    return true;
+  },
+  matoff: (id, el) => {
+    const p = topPanel(), m = p && db.mats[p.mid]; if (!m) return;
+    if (p.dirty) return toast('Save the changes first, or go Back to leave them.', true);
+    const off = el.dataset.v === 'off';
+    matWrite(p, m.title, m.items, off, off ? 'Taken off — open it to bring it back.' : 'Brought back.');
+    closePanel();
+  },
+  matprint: () => matPaper(false),
+  matshare: () => matPaper(true),
+  matsavelist: () => {
+    const p = topPanel(); if (!p || p.kind !== 'matlist') return;
+    const {v, bad} = matCheck(p.m, true);
+    if (bad) return toast(bad + ' Nothing was saved.', true);
+    const items = v.items.map(({name, cost, pct, add}, i) => ({id: p.m.items[i].id, name, cost, pct, add}));
+    const was = (db.settings || {}).materials || {}, n = was.v || 0;
+    write('save_materials', {p_items: items, p_based_on: n}, 'Materials list', [], () => { db.settings.materials = {v: n + 1, items}; });
+    closePanel(); toast('Saved — ' + items.length + ' item' + (items.length === 1 ? '' : 's') + '.');
   },
   printquote: () => quotePaper(false),
   sharequote: () => quotePaper(true),
@@ -8551,6 +8833,24 @@ document.addEventListener('input', e => {
     p.dirty = true;
     drawQuotePreview(p);
     return;
+  }
+  // 68: the material receipt and the materials list: the same, for the title and the items' boxes
+  if (t.dataset && (t.dataset.mf || t.dataset.mi)){
+    const p = topPanel(); if (!p || !p.m) return;
+    if (t.dataset.mf) p.m[t.dataset.mf] = t.value;
+    else { const [i, k] = t.dataset.mi.split(':'); if (p.m.items[i]) p.m.items[i][k] = t.value; }
+    p.dirty = true;
+    drawMatPreview(p);
+    return;
+  }
+  // 68: an item picked from the list comes in with its cost, % and +
+  if (t.dataset && 'matpick' in t.dataset){
+    const p = topPanel(), it = matList().find(x => x.id === t.value); t.value = ''; if (!p || !p.m || !it) return;
+    if (p.m.items.length >= 100) return toast('That is the most items it holds.', true);
+    const blank = p.m.items.length === 1 && !p.m.items[0].name.trim() && !String(p.m.items[0].cost).trim();
+    const row = {name: it.name, qty: '1', cost: String(it.cost), pct: Number(it.pct) ? String(it.pct) : '', add: Number(it.add) ? String(it.add) : ''};
+    if (blank) p.m.items[0] = row; else p.m.items.push(row);
+    p.dirty = true; t.blur(); render(); return;
   }
   // 66: View all SR's own From–To — the list follows, every report in it ticked
   if (t.dataset && t.dataset.sf){ const p = topPanel(); if (!p || p.kind !== 'groupsrs') return;

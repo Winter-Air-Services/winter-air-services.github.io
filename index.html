@@ -640,6 +640,15 @@
   .qt-nums label{flex:1;margin:0}
   .qt-nums .qty{flex:0 0 72px}
   .qt-total{text-align:right;font-weight:700;margin:4px 0 12px}
+  .qt-disc{display:flex;gap:8px;align-items:flex-end;margin:4px 0 8px}   /* 67: the discount, ₱ | % beside it */
+  .qt-disc label{flex:1;margin:0}
+  /* 68: a material receipt's item — its name and ✕, then Qty, Cost, Add %, Plus ₱; two by two on a phone */
+  .mt-name{display:flex;gap:8px;align-items:flex-end}
+  .mt-name label{flex:1;margin:0}
+  .mt-nums{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px}
+  .mt-nums label{margin:0}
+  @media (max-width:420px){.mt-nums{grid-template-columns:1fr 1fr}}
+  .mt-price{text-align:right;color:var(--ink-soft);margin-top:6px}
   /* the appliance list (27) */
   .type-ico{flex:none;width:36px;height:36px;object-fit:contain}
   /* 54: hold ⠿ and drag a row into order; touch-action none, so holding it does not scroll */
