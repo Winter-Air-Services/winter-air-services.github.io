@@ -4470,7 +4470,9 @@ const groupReports = (gid, f, t) => groupJobs(gid).flatMap(j => reportsOf(j).map
 // the period's jobs, for their billing statements
 const groupBills = (gid, f, t) => groupJobs(gid).map(j => ({j, day: jobDay(j)})).filter(x => inSpan(x.day, f, t)).sort(byDay);
 const reportSum = r => { const ps = (r.charges || []).map(c => parsePrice(chargeTyped(c)));
-  return ps.length && ps.every(x => x != null) ? cents(ps.reduce((s, x) => s + x, 0)) : null; };
+  if (!ps.length || !ps.every(x => x != null)) return null;
+  const s = cents(ps.reduce((s, x) => s + x, 0));
+  return cents(s - qtLess(s, r.discount)); };   // 69: after the report's discount
 // one line of the billing statement, from a job's report — typed values, as the screen edits them;
 // 66: the report's number where Work done was (the owner, 2026-11-17)
 const groupRow = ({j, r, day}) => ({branch: jobCust(j).full_name || '', date: day,
@@ -5096,8 +5098,10 @@ function reportChargesCheck(list){
 }
 /* The statement's lines from the job's reports. Reports replace the quotation (Guile, 2026-11-05):
    once a report has a price, these and what the office typed on the statement are the bill. */
-const reportLines = j => reportsOf(j).flatMap(r => (r.charges || []).map(c => ({
-  text: c.text + ' (Service report' + (r.no ? ' № ' + r.no : '') + ')', qty: 1, price: Number(c.price), r: r.id})));
+const reportLines = j => reportsOf(j).flatMap(r => { const tag = ' (Service report' + (r.no ? ' № ' + r.no : '') + ')';
+  const ls = (r.charges || []).map(c => ({text: c.text + tag, qty: 1, price: Number(c.price), r: r.id}));
+  const less = ls.length ? qtLess(qtTotal(ls), r.discount) : 0;   // 69: its discount, a line under its prices
+  return less > 0 ? ls.concat([{text: qtLessWord(r.discount) + tag, qty: 1, price: -less, r: r.id}]) : ls; });
 // the server's report_price_follow, here, so the phone is right before the next pull
 function billFollow(j, was){
   const now = reportLines(j);
@@ -5121,9 +5125,13 @@ function billFollow(j, was){
 const REPORT_FILL = {client: 'Client’s name', location: 'Location', brand: 'Brand', capacity: 'Capacity and type', model: 'Model',
   serial: 'Serial number', others: 'Others', findings: 'Findings', served_by: 'Serviced by', served_on: 'Serviced on'};
 const REPORT_UNIT = ['brand', 'capacity', 'model', 'serial', 'others', 'findings'];
+/* A report's discount (69), as a statement's (67): typed on the screen (disc, disc_pct), saved as
+   {discount}. repDisc reads either into {discount, discBad}. */
+const repDiscTyped = d => ({disc: d && d.pct != null ? String(d.pct) : d && d.amount != null ? String(d.amount) : '', disc_pct: !!d && d.pct != null});
+const repDisc = r => 'disc' in r ? qtDiscOf(r) : {discount: r.discount || null};
 function reportFill(saved, now){
   const r = {...saved, kind: saved.kind || '', call: saved.call || '', served_on: saved.served_on || '', ticks: [...(saved.ticks || [])],
-    specs: (saved.specs || []).map(s => ({...s})), charges: (saved.charges || []).map(c => ({...c}))};
+    specs: (saved.specs || []).map(s => ({...s})), charges: (saved.charges || []).map(c => ({...c})), ...repDiscTyped(saved.discount)};
   const low = s => String(s || '').trim().toLowerCase(), same = !low(r.brand) || !low(now.brand) || low(r.brand) === low(now.brand);
   const filled = Object.keys(REPORT_FILL).filter(k => !String(r[k] || '').trim() && now[k] && (same || !REPORT_UNIT.includes(k)));
   filled.forEach(k => { r[k] = now[k]; });
@@ -5149,7 +5157,8 @@ function reportHtml(r){
   const specs = (r.specs || []).filter(s => String(s.value || '').trim());   // 61: only what was typed
   const prices = (r.charges || []).filter(c => String(c.text || '').trim() || chargeTyped(c).trim())
     .map(c => ({text: c.text, price: parsePrice(chargeTyped(c))}));
-  const sum = prices.every(c => c.price != null) ? prices.reduce((s, c) => s + c.price, 0) : null;
+  const q = {lines: prices.map(c => ({qty: 1, price: c.price})), discount: repDisc(r).discount};   // 69
+  const sum = prices.every(c => c.price != null) ? qtDue(q) : null;
   return `<div class="quote report">
     ${r.sample ? '<div class="rc-sample">SAMPLE</div>' : ''}
     ${qtHeadHtml(s)}
@@ -5167,7 +5176,7 @@ function reportHtml(r){
     <div class="rp-kind">${box(r.call === 'service')} Service Call <span class="rp-gap"></span>${box(r.call === 'maintenance')} Maintenance Call</div>
     <div class="rp-find">${esc(r.findings || '')}</div>
     ${prices.length ? `<table class="qt-table rp-prices"><tbody>${prices.map(c => `<tr><td>${esc(c.text || '')}</td><td class="qt-r">${c.price != null ? esc(qtMoney(c.price)) : '—'}</td></tr>`).join('')}</tbody>
-      <tfoot><tr class="qt-tot"><td class="qt-r">TOTAL</td><td class="qt-r">${sum != null ? 'PHP ' + esc(qtMoney(sum)) : '—'}</td></tr></tfoot></table>` : ''}
+      <tfoot>${qtLessRows(q, 1)}<tr class="qt-tot"><td class="qt-r">TOTAL</td><td class="qt-r">${sum != null ? 'PHP ' + esc(qtMoney(sum)) : '—'}</td></tr></tfoot></table>` : ''}
     <div class="rp-sign">
       <div><div class="rp-f"><span>Serviced by:</span><b>${esc(r.served_by || '')}</b></div>
         <div class="rp-f"><span>Date:</span><b>${esc(r.served_on ? qtLongDate(r.served_on) : '')}</b></div></div>
@@ -5222,6 +5231,7 @@ function panelReport(p){
       <input data-rc="${i}:text" maxlength="150" value="${esc(c.text || '')}" placeholder="e.g. Cleaning" aria-label="Price ${i + 1}: what for" autocomplete="off">
       <div class="qt-nums"><label>Price <span class="peso-in"><i>₱</i><input data-rc="${i}:price" inputmode="decimal" maxlength="14" value="${esc(chargeTyped(c))}" placeholder="—"></span></label>
         <button type="button" class="b danger" data-act="rpcharge" data-v="del" data-i="${i}" aria-label="Remove price ${i + 1}">✕</button></div></div>`).join('')}
+    ${discBox(p.r, 'rf')}
     <div id="rpTotal" class="qt-total">${esc(reportTotalWord(p.r))}</div>
     <div class="actions"><button type="button" class="b" data-act="rpcharge" data-v="add">+ Add a price</button></div>`;
   return {title: 'Service report', sub, info: 'report', body: `
@@ -5249,7 +5259,8 @@ function panelReport(p){
 }
 function reportTotalWord(r){
   const a = (r.charges || []).filter(c => chargeTyped(c).trim()).map(c => parsePrice(chargeTyped(c)));
-  return a.includes(null) ? 'TOTAL — a price cannot be read' : 'TOTAL ' + peso(a.reduce((s, x) => s + x, 0));
+  if (a.includes(null)) return 'TOTAL — a price cannot be read';
+  return a.length ? qtTotalWords({lines: a.map(price => ({qty: 1, price})), ...repDisc(r)}) : 'TOTAL ' + peso(0);   // 69: with its discount
 }
 /* Typing redraws the page beside the boxes, never the box being typed in (ui.md). */
 function drawReportPreview(p){
@@ -5266,16 +5277,20 @@ function saveReport(){
   // 61: a phone not allowed sends no prices: the server keeps them as they are
   const pricing = canPriceReport(), chk = pricing ? reportChargesCheck(p.r.charges || []) : {};
   if (chk.bad){ toast(chk.bad + ' Nothing was saved.', true); return false; }
+  // 69: the discount, checked as the statement's; a phone not allowed sends none and the server keeps it
+  const dv = pricing ? repDisc(p.r) : {};
+  if (dv.discBad){ toast((p.r.disc_pct ? 'The discount is a percent from 0.01 to 100, like 10.' : 'Type the discount in numbers, like 500 or 1,500.50 — or tap % for a percent.') + ' Nothing was saved.', true); return false; }
+  if (dv.discount && dv.discount.amount > chk.list.reduce((s, c) => s + c.price, 0)){ toast('The discount is more than the total. Nothing was saved.', true); return false; }
   const x = p.r, r = {id: p.rid, unit: p.unit, date: x.date, client: x.client || '', location: x.location || '', kind: x.kind || '',
     brand: x.brand || '', capacity: x.capacity || '', model: x.model || '', serial: x.serial || '', ticks: x.ticks.slice(),
     others: x.others || '', call: x.call || '', findings: x.findings || '', served_by: x.served_by || '', served_on: x.served_on || '',
     specs: (x.specs || []).filter(s => String(s.value || '').trim()).map(s => ({key: s.key, label: s.label, value: String(s.value).trim()})),
-    ...(pricing ? {charges: chk.list} : {})};
+    ...(pricing ? {charges: chk.list, discount: dv.discount} : {})};
   const v = (saved && saved.v) || 0, jid = j.id;
   write('save_service_report', {p_job: jid, p_report: r, p_based_on: v}, 'Service report — ' + (jobCust(j).full_name || 'job'), [jid], db => {
     const jj = db.jobs[jid]; if (!jj) return;
     const was = reportLines(jj);
-    const row = {...r, charges: pricing ? r.charges : (saved && saved.charges) || [], kind: r.kind || null, call: r.call || null, served_on: r.served_on || null, no: saved ? saved.no : null, v: v + 1,
+    const row = {...r, charges: pricing ? r.charges : (saved && saved.charges) || [], discount: pricing ? r.discount : (saved && saved.discount) || null, kind: r.kind || null, call: r.call || null, served_on: r.served_on || null, no: saved ? saved.no : null, v: v + 1,
       saved_at: new Date().toISOString(), saved_by_name: (db.profile || {}).display_name || ''};
     jj.reports = reportsOf(jj).some(y => y.id === r.id) ? reportsOf(jj).map(y => y.id === r.id ? row : y) : reportsOf(jj).concat([row]);
     billFollow(jj, was);
@@ -5566,7 +5581,8 @@ const docView = (p, src) => ({...quoteView(p.q), bill: src && src.bill ? billMet
   csig: src && src.job ? custSig(src.row, src.bill ? 'bill' : 'quote') : null});   // the customer's signature (47)
 /* Typed → drawn: a price that cannot be read shows as — (and Save refuses it). */
 const quoteView = pq => ({...pq, lines: pq.lines.map(l => ({text: l.text,
-  qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null, price: parsePrice(l.price), ...(l.r ? {r: l.r} : {}), ...(l.m ? {m: l.m} : {})})),
+  qty: /^\d{1,3}$/.test(String(l.qty).trim()) && Number(l.qty) >= 1 ? Number(l.qty) : null,
+  price: l.r ? Number(l.price) : parsePrice(l.price), ...(l.r ? {r: l.r} : {}), ...(l.m ? {m: l.m} : {})})),   // 69: a report's discount line is below zero
   ...qtDiscOf(pq)});
 /* The typed discount (67): {discount} when it reads, {discBad} when it does not, nothing when empty.
    A percent is above 0, up to 100, two decimals at most; an amount is a price above 0. */
@@ -5631,10 +5647,7 @@ function panelQuote(p){
         <label>Unit price <span class="peso-in"><i>₱</i><input data-ql="${i}:price" inputmode="decimal" maxlength="14" value="${esc(l.price)}" placeholder="—"></span></label>
         <button type="button" class="b danger" data-act="qtline" data-v="del" data-i="${i}" aria-label="Remove line ${i + 1}">✕</button></div>
     </div>`).join('')}
-    <div class="qt-disc"><label>Discount <span class="opt">— optional</span>
-        <span class="peso-in"><i>${p.q.disc_pct ? '%' : '₱'}</i><input data-qf="disc" inputmode="decimal" maxlength="14" value="${esc(p.q.disc || '')}" placeholder="none"></span></label>
-      <div class="segment mini" role="group" aria-label="Discount in pesos or percent">${[['0', '₱'], ['1', '%']].map(([v, l]) =>
-        `<button type="button" class="${!!p.q.disc_pct === (v === '1') ? 'active' : ''}" data-act="qtdisc" data-v="${v}" aria-pressed="${!!p.q.disc_pct === (v === '1')}">${l}</button>`).join('')}</div></div>
+    ${discBox(p.q, 'qf')}
     <div id="qtTotal" class="qt-total">${esc(qtTotalWords(quoteView(p.q)))}</div>
     <div class="actions"><button type="button" class="b" data-act="qtline" data-v="add">+ Add a line</button>
       <button type="button" class="b" data-act="qtfill">↺ Lines from the ${bill ? 'job' : 'booking'}</button></div>
@@ -5652,6 +5665,12 @@ function drawQuotePreview(p){
   if (t) t.textContent = qtTotalWords(quoteView(p.q));
   fitQuotes();
 }
+// the discount box, ₱ | % beside it (67) — the quotation's, the statement's and (69) the report's;
+// f is the editor's input key: 'qf' for a quotation or statement, 'rf' for a report
+const discBox = (o, f) => `<div class="qt-disc"><label>Discount <span class="opt">— optional</span>
+    <span class="peso-in"><i>${o.disc_pct ? '%' : '₱'}</i><input data-${f}="disc" inputmode="decimal" maxlength="14" value="${esc(o.disc || '')}" placeholder="none"></span></label>
+  <div class="segment mini" role="group" aria-label="Discount in pesos or percent">${[['0', '₱'], ['1', '%']].map(([v, l]) =>
+    `<button type="button" class="${!!o.disc_pct === (v === '1') ? 'active' : ''}" data-act="qtdisc" data-v="${v}" aria-pressed="${!!o.disc_pct === (v === '1')}">${l}</button>`).join('')}</div></div>`;
 // the line under the editor's lines: the TOTAL, and with a discount what it came from (67)
 function qtTotalWords(v){
   const s = qtTotal(v.lines);
@@ -7775,9 +7794,9 @@ const ACTIONS = {
     render();
   },
   // 67: the discount in pesos or percent; the number typed stays
-  qtdisc: (id, el) => {
-    const p = topPanel(); if (!p || !p.q) return;
-    p.q.disc_pct = el.dataset.v === '1';
+  qtdisc: (id, el) => {   // 69: the service report's too
+    const p = topPanel(), o = p && (p.q || p.r); if (!o) return;
+    o.disc_pct = el.dataset.v === '1';
     p.dirty = true;
     render();
   },
